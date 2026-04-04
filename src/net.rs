@@ -320,6 +320,96 @@ impl IpNetwork {
             Self::V6(net) => IpAddr::V6(net.last_addr()),
         }
     }
+
+    /// Returns `true` if this IP network and the specified one share at
+    /// least one common address.
+    ///
+    /// Returns `false` for networks of different address families.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::IpNetwork;
+    ///
+    /// let a = IpNetwork::parse("192.168.0.0/16").unwrap();
+    /// let b = IpNetwork::parse("192.168.1.0/24").unwrap();
+    /// assert!(a.intersects(&b));
+    ///
+    /// let c = IpNetwork::parse("10.0.0.0/8").unwrap();
+    /// assert!(!a.intersects(&c));
+    ///
+    /// // Mixed address families are always disjoint.
+    /// let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
+    /// assert!(!a.intersects(&v6));
+    /// ```
+    #[inline]
+    pub const fn intersects(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::V4(a), Self::V4(b)) => a.intersects(b),
+            (Self::V6(a), Self::V6(b)) => a.intersects(b),
+            _ => false,
+        }
+    }
+
+    /// Returns `true` if this IP network and the specified one share no
+    /// common addresses.
+    ///
+    /// Returns `true` for networks of different address families.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::IpNetwork;
+    ///
+    /// let a = IpNetwork::parse("192.168.0.0/16").unwrap();
+    /// let b = IpNetwork::parse("10.0.0.0/8").unwrap();
+    /// assert!(a.is_disjoint(&b));
+    ///
+    /// // Mixed address families are always disjoint.
+    /// let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
+    /// assert!(a.is_disjoint(&v6));
+    /// ```
+    #[inline]
+    pub const fn is_disjoint(&self, other: &Self) -> bool {
+        !self.intersects(other)
+    }
+
+    /// Returns the intersection of this IP network with the specified one,
+    /// or [`None`] if they are disjoint or belong to different address
+    /// families.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::IpNetwork;
+    ///
+    /// let a = IpNetwork::parse("192.168.0.0/16").unwrap();
+    /// let b = IpNetwork::parse("192.168.1.0/24").unwrap();
+    /// assert_eq!(Some(b), a.intersection(&b));
+    ///
+    /// // Disjoint.
+    /// let c = IpNetwork::parse("10.0.0.0/8").unwrap();
+    /// assert_eq!(None, a.intersection(&c));
+    ///
+    /// // Mixed address families.
+    /// let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
+    /// assert_eq!(None, a.intersection(&v6));
+    /// ```
+    #[inline]
+    pub const fn intersection(&self, other: &Self) -> Option<Self> {
+        // NOTE: use `Option::map` when it becomes const.
+        match (self, other) {
+            (Self::V4(a), Self::V4(b)) => match a.intersection(b) {
+                Some(net) => Some(Self::V4(net)),
+                None => None,
+            },
+            (Self::V6(a), Self::V6(b)) => match a.intersection(b) {
+                Some(net) => Some(Self::V6(net)),
+                None => None,
+            },
+            _ => None,
+        }
+    }
 }
 
 impl Display for IpNetwork {
@@ -636,8 +726,8 @@ impl Ipv4Network {
     /// ```
     #[inline]
     pub const fn intersects(&self, other: &Self) -> bool {
-        // NOTE: compiler is smart enough to optimize this to a single
-        // comparison.
+        // NOTE: compiler is smart enough to optimize this without constructing
+        // the actual intersection.
         self.intersection(other).is_some()
     }
 
@@ -710,6 +800,7 @@ impl Ipv4Network {
         let addr = Ipv4Addr::from_bits(addr);
         let mask = Ipv4Addr::from_bits(mask);
 
+        // NOTE: address is already normalized.
         Some(Self(addr, mask))
     }
 
@@ -1452,6 +1543,127 @@ impl Ipv6Network {
         let (a2, m2) = other.to_bits();
 
         (a2 & m1 == a1) && (m2 & m1 == m1)
+    }
+
+    /// Returns `true` if this IPv6 network and the specified one share at
+    /// least one common address.
+    ///
+    /// Works correctly with non-contiguous masks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::Ipv6Network;
+    ///
+    /// // Overlapping contiguous networks.
+    /// let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+    /// let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+    /// assert!(a.intersects(&b));
+    ///
+    /// // Disjoint contiguous networks.
+    /// let c = Ipv6Network::parse("fe80::/10").unwrap();
+    /// assert!(!a.intersects(&c));
+    ///
+    /// // Non-contiguous masks.
+    /// let x = Ipv6Network::new(
+    ///     Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 1),
+    ///     Ipv6Addr::new(0xffff, 0, 0, 0, 0, 0, 0, 0xffff),
+    /// );
+    /// let y = Ipv6Network::new(
+    ///     Ipv6Addr::new(0x2001, 1, 0, 0, 0, 0, 0, 0),
+    ///     Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0),
+    /// );
+    /// assert!(x.intersects(&y));
+    /// ```
+    #[inline]
+    pub const fn intersects(&self, other: &Self) -> bool {
+        // NOTE: compiler is smart enough to optimize this without constructing
+        // the actual intersection.
+        self.intersection(other).is_some()
+    }
+
+    /// Returns `true` if this IPv6 network and the specified one share no
+    /// common addresses.
+    ///
+    /// This is the logical complement of [`intersects`](Self::intersects).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv6Network;
+    ///
+    /// let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+    /// let b = Ipv6Network::parse("fe80::/10").unwrap();
+    /// assert!(a.is_disjoint(&b));
+    ///
+    /// let c = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+    /// assert!(!a.is_disjoint(&c));
+    /// ```
+    #[inline]
+    pub const fn is_disjoint(&self, other: &Ipv6Network) -> bool {
+        !self.intersects(other)
+    }
+
+    /// Returns the intersection of this IPv6 network with the specified one,
+    /// or [`None`] if they are disjoint.
+    ///
+    /// The intersection of two networks is itself always a single network
+    /// (never a collection), because it constrains strictly more bit
+    /// positions.
+    ///
+    /// Works correctly with non-contiguous masks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::Ipv6Network;
+    ///
+    /// // Containment: intersection equals the smaller network.
+    /// let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+    /// let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+    /// assert_eq!(Some(b), a.intersection(&b));
+    ///
+    /// // Non-contiguous masks.
+    /// let a = Ipv6Network::new(
+    ///     Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 1),
+    ///     Ipv6Addr::new(0xffff, 0, 0, 0, 0, 0, 0, 0xffff),
+    /// );
+    /// let b = Ipv6Network::new(
+    ///     Ipv6Addr::new(0x2001, 1, 0, 0, 0, 0, 0, 0),
+    ///     Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0),
+    /// );
+    /// let expected = Ipv6Network::new(
+    ///     Ipv6Addr::new(0x2001, 1, 0, 0, 0, 0, 0, 1),
+    ///     Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0xffff),
+    /// );
+    /// assert_eq!(Some(expected), a.intersection(&b));
+    ///
+    /// // Disjoint networks.
+    /// let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+    /// let b = Ipv6Network::parse("fe80::/10").unwrap();
+    /// assert_eq!(None, a.intersection(&b));
+    /// ```
+    #[inline]
+    pub const fn intersection(&self, other: &Self) -> Option<Self> {
+        let (a1, m1) = self.to_bits();
+        let (a2, m2) = other.to_bits();
+
+        if (a1 & m2) != (a2 & m1) {
+            return None;
+        }
+
+        let addr = a1 | a2;
+        let mask = m1 | m2;
+
+        let addr = Ipv6Addr::from_bits(addr);
+        let mask = Ipv6Addr::from_bits(mask);
+
+        // NOTE: address is already normalized.
+        Some(Self(addr, mask))
     }
 
     /// Checks whether this network is a contiguous, i.e. contains mask with
@@ -3805,8 +4017,164 @@ mod test {
         assert_eq!(Some(expected), a.intersection(&b));
     }
 
+    #[test]
+    fn ipv6_intersects_overlapping_contiguous() {
+        let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        assert!(a.intersects(&b));
+        assert!(b.intersects(&a));
+        assert!(!a.is_disjoint(&b));
+        assert!(!b.is_disjoint(&a));
+    }
+
+    #[test]
+    fn ipv6_intersects_disjoint_contiguous() {
+        let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let b = Ipv6Network::parse("fe80::/10").unwrap();
+        assert!(!a.intersects(&b));
+        assert!(!b.intersects(&a));
+        assert!(a.is_disjoint(&b));
+    }
+
+    #[test]
+    fn ipv6_intersects_self() {
+        let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+        assert!(a.intersects(&a));
+        assert!(!a.is_disjoint(&a));
+    }
+
+    #[test]
+    fn ipv6_intersects_non_contiguous() {
+        let a = Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0xffff, 0, 0, 0, 0, 0, 0, 0xffff),
+        );
+        let b = Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 1, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0),
+        );
+        assert!(a.intersects(&b));
+        assert!(b.intersects(&a));
+    }
+
+    #[test]
+    fn ipv6_intersects_non_contiguous_disjoint() {
+        let a = Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0xffff, 0, 0, 0, 0, 0, 0, 0xffff),
+        );
+        let b = Ipv6Network::new(
+            Ipv6Addr::new(0x2002, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0xffff, 0, 0, 0, 0, 0, 0, 0),
+        );
+        assert!(!a.intersects(&b));
+        assert!(a.is_disjoint(&b));
+    }
+
+    #[test]
+    fn ipv6_intersection_containment() {
+        let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        assert_eq!(Some(b), a.intersection(&b));
+        assert_eq!(Some(b), b.intersection(&a));
+    }
+
+    #[test]
+    fn ipv6_intersection_identical() {
+        let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+        assert_eq!(Some(a), a.intersection(&a));
+    }
+
+    #[test]
+    fn ipv6_intersection_disjoint() {
+        let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let b = Ipv6Network::parse("fe80::/10").unwrap();
+        assert_eq!(None, a.intersection(&b));
+    }
+
+    #[test]
+    fn ipv6_intersection_non_contiguous() {
+        let a = Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0xffff, 0, 0, 0, 0, 0, 0, 0xffff),
+        );
+        let b = Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 1, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0),
+        );
+        let expected = Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 1, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0xffff),
+        );
+        assert_eq!(Some(expected), a.intersection(&b));
+        assert_eq!(Some(expected), b.intersection(&a));
+    }
+
+    #[test]
+    fn ipv6_intersection_both_non_contiguous() {
+        let a = Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0, 0x000a, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0xffff, 0, 0xffff, 0, 0, 0, 0, 0),
+        );
+        let b = Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 5),
+            Ipv6Addr::new(0xffff, 0, 0, 0, 0, 0, 0, 0xffff),
+        );
+        let expected = Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0, 0x000a, 0, 0, 0, 0, 5),
+            Ipv6Addr::new(0xffff, 0, 0xffff, 0, 0, 0, 0, 0xffff),
+        );
+        assert_eq!(Some(expected), a.intersection(&b));
+        assert_eq!(Some(expected), b.intersection(&a));
+    }
+
+    #[test]
+    fn ipv6_intersection_with_unspecified() {
+        let unspecified = Ipv6Network::UNSPECIFIED;
+        let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        assert_eq!(Some(b), unspecified.intersection(&b));
+        assert_eq!(Some(b), b.intersection(&unspecified));
+    }
+
+    #[test]
+    fn ipv6_intersection_hosts_same() {
+        let a = Ipv6Network::parse("::1/128").unwrap();
+        assert_eq!(Some(a), a.intersection(&a));
+    }
+
+    #[test]
+    fn ipv6_intersection_hosts_different() {
+        let a = Ipv6Network::parse("::1/128").unwrap();
+        let b = Ipv6Network::parse("::2/128").unwrap();
+        assert_eq!(None, a.intersection(&b));
+    }
+
+    #[test]
+    fn ipv6_intersection_alternating_masks() {
+        // m1 and m2 have no overlapping bits => always intersect, result is /128.
+        let a = Ipv6Network::new(
+            Ipv6Addr::new(0xaa00, 0, 0xaa00, 0, 0xaa00, 0, 0xaa00, 0),
+            Ipv6Addr::new(0xff00, 0x00ff, 0xff00, 0x00ff, 0xff00, 0x00ff, 0xff00, 0x00ff),
+        );
+        let b = Ipv6Network::new(
+            Ipv6Addr::new(0x00bb, 0, 0x00bb, 0, 0x00bb, 0, 0x00bb, 0),
+            Ipv6Addr::new(0x00ff, 0xff00, 0x00ff, 0xff00, 0x00ff, 0xff00, 0x00ff, 0xff00),
+        );
+        assert!(a.intersects(&b));
+
+        let expected = Ipv6Network::new(
+            Ipv6Addr::new(0xaabb, 0, 0xaabb, 0, 0xaabb, 0, 0xaabb, 0),
+            Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff),
+        );
+        assert_eq!(Some(expected), a.intersection(&b));
+    }
+
     fn arb_ipv4_network() -> impl Strategy<Value = Ipv4Network> {
         (any::<u32>(), any::<u32>()).prop_map(|(a, m)| Ipv4Network::from_bits(a, m))
+    }
+
+    fn arb_ipv6_network() -> impl Strategy<Value = Ipv6Network> {
+        (any::<u128>(), any::<u128>()).prop_map(|(a, m)| Ipv6Network::from_bits(a, m))
     }
 
     proptest! {
@@ -3855,6 +4223,17 @@ mod test {
         }
 
         #[test]
+        fn prop_ipv4_intersection_is_normalized(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            if let Some(c) = a.intersection(&b) {
+                let (addr, mask) = c.to_bits();
+                prop_assert_eq!(addr & mask, addr, "intersection not normalized: a={}, b={}, c={}", a, b, c);
+            }
+        }
+
+        #[test]
         fn prop_ipv4_intersection_membership_brute_force(
             a_addr in 0u32..=255,
             a_mask in 0u32..=255,
@@ -3871,6 +4250,95 @@ mod test {
 
             for x in 0u32..=255 {
                 let xaddr = x << 24;
+                let in_a = (xaddr & a_m) == a_a;
+                let in_b = (xaddr & b_m) == b_a;
+                let in_result = match result {
+                    Some(r) => {
+                        let (r_a, r_m) = r.to_bits();
+                        (xaddr & r_m) == r_a
+                    }
+                    None => false,
+                };
+                prop_assert_eq!(
+                    in_a && in_b,
+                    in_result,
+                    "x={}, a={}, b={}, result={:?}", x, a, b, result
+                );
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_intersects_is_not_disjoint(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            prop_assert_eq!(a.intersects(&b), !a.is_disjoint(&b));
+        }
+
+        #[test]
+        fn prop_ipv6_intersection_commutativity(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            prop_assert_eq!(a.intersection(&b), b.intersection(&a));
+        }
+
+        #[test]
+        fn prop_ipv6_contains_implies_intersection_eq_inner(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            if a.contains(&b) {
+                prop_assert_eq!(a.intersection(&b), Some(b));
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_intersection_subset_of_both(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            if let Some(c) = a.intersection(&b) {
+                prop_assert!(a.contains(&c), "intersection not contained in a: a={a}, b={b}, c={c}");
+                prop_assert!(b.contains(&c), "intersection not contained in b: a={a}, b={b}, c={c}");
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_self_intersection_is_self(
+            a in arb_ipv6_network(),
+        ) {
+            prop_assert_eq!(a.intersection(&a), Some(a));
+        }
+
+        #[test]
+        fn prop_ipv6_intersection_is_normalized(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            if let Some(c) = a.intersection(&b) {
+                let (addr, mask) = c.to_bits();
+                prop_assert_eq!(addr & mask, addr, "intersection not normalized: a={}, b={}, c={}", a, b, c);
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_intersection_membership_brute_force(
+            a_addr in 0u128..=255,
+            a_mask in 0u128..=255,
+            b_addr in 0u128..=255,
+            b_mask in 0u128..=255,
+        ) {
+            // Use 8-bit networks (top byte) to exhaustively verify membership.
+            let a = Ipv6Network::from_bits((a_addr & a_mask) << 120, a_mask << 120);
+            let b = Ipv6Network::from_bits((b_addr & b_mask) << 120, b_mask << 120);
+            let result = a.intersection(&b);
+
+            let (a_a, a_m) = a.to_bits();
+            let (b_a, b_m) = b.to_bits();
+
+            for x in 0u128..=255 {
+                let xaddr = x << 120;
                 let in_a = (xaddr & a_m) == a_a;
                 let in_b = (xaddr & b_m) == b_a;
                 let in_result = match result {
