@@ -604,6 +604,115 @@ impl Ipv4Network {
         (a2 & m1 == a1) && (m2 & m1 == m1)
     }
 
+    /// Returns `true` if this IPv4 network and the specified one share at
+    /// least one common address.
+    ///
+    /// Two networks `(a1, m1)` and `(a2, m2)` intersect when they agree on
+    /// every bit position that both masks constrain:
+    /// `a1 & m2 == a2 & m1`.
+    ///
+    /// Works correctly with non-contiguous masks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv4Addr;
+    ///
+    /// use netip::Ipv4Network;
+    ///
+    /// // Overlapping contiguous networks.
+    /// let a = Ipv4Network::parse("192.168.0.0/16").unwrap();
+    /// let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+    /// assert!(a.intersects(&b));
+    ///
+    /// // Disjoint contiguous networks.
+    /// let c = Ipv4Network::parse("10.0.0.0/8").unwrap();
+    /// assert!(!a.intersects(&c));
+    ///
+    /// // Non-contiguous masks.
+    /// let x = Ipv4Network::new(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(255, 0, 0, 255));
+    /// let y = Ipv4Network::new(Ipv4Addr::new(10, 1, 0, 0), Ipv4Addr::new(255, 255, 0, 0));
+    /// assert!(x.intersects(&y));
+    /// ```
+    #[inline]
+    pub const fn intersects(&self, other: &Self) -> bool {
+        // NOTE: compiler is smart enough to optimize this to a single
+        // comparison.
+        self.intersection(other).is_some()
+    }
+
+    /// Returns `true` if this IPv4 network and the specified one share no
+    /// common addresses.
+    ///
+    /// This is the logical complement of [`intersects`](Self::intersects).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv4Network;
+    ///
+    /// let a = Ipv4Network::parse("192.168.0.0/16").unwrap();
+    /// let b = Ipv4Network::parse("10.0.0.0/8").unwrap();
+    /// assert!(a.is_disjoint(&b));
+    ///
+    /// let c = Ipv4Network::parse("192.168.1.0/24").unwrap();
+    /// assert!(!a.is_disjoint(&c));
+    /// ```
+    #[inline]
+    pub const fn is_disjoint(&self, other: &Ipv4Network) -> bool {
+        !self.intersects(other)
+    }
+
+    /// Returns the intersection of this IPv4 network with the specified one,
+    /// or [`None`] if they are disjoint.
+    ///
+    /// The intersection of two networks is itself always a single network
+    /// (never a collection), because it constrains strictly more bit
+    /// positions.
+    ///
+    /// Works correctly with non-contiguous masks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv4Addr;
+    ///
+    /// use netip::Ipv4Network;
+    ///
+    /// // Containment: intersection equals the smaller network.
+    /// let a = Ipv4Network::parse("192.168.0.0/16").unwrap();
+    /// let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+    /// assert_eq!(Some(b), a.intersection(&b));
+    ///
+    /// // Non-contiguous masks.
+    /// let a = Ipv4Network::new(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(255, 0, 0, 255));
+    /// let b = Ipv4Network::new(Ipv4Addr::new(10, 1, 0, 0), Ipv4Addr::new(255, 255, 0, 0));
+    /// let expected = Ipv4Network::new(Ipv4Addr::new(10, 1, 0, 1), Ipv4Addr::new(255, 255, 0, 255));
+    /// assert_eq!(Some(expected), a.intersection(&b));
+    ///
+    /// // Disjoint networks.
+    /// let a = Ipv4Network::parse("192.168.0.0/16").unwrap();
+    /// let b = Ipv4Network::parse("10.0.0.0/8").unwrap();
+    /// assert_eq!(None, a.intersection(&b));
+    /// ```
+    #[inline]
+    pub const fn intersection(&self, other: &Self) -> Option<Self> {
+        let (a1, m1) = self.to_bits();
+        let (a2, m2) = other.to_bits();
+
+        if (a1 & m2) != (a2 & m1) {
+            return None;
+        }
+
+        let addr = a1 | a2;
+        let mask = m1 | m2;
+
+        let addr = Ipv4Addr::from_bits(addr);
+        let mask = Ipv4Addr::from_bits(mask);
+
+        Some(Self(addr, mask))
+    }
+
     /// Checks whether this network is a contiguous, i.e. contains mask with
     /// only leading bits set to one contiguously.
     ///
@@ -2412,6 +2521,8 @@ impl FromStr for Contiguous<Ipv6Network> {
 
 #[cfg(test)]
 mod test {
+    use proptest::prelude::*;
+
     use super::*;
 
     #[test]
@@ -3575,5 +3686,206 @@ mod test {
             )),
             net.last_addr()
         );
+    }
+
+    #[test]
+    fn ipv4_intersects_overlapping_contiguous() {
+        let a = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        assert!(a.intersects(&b));
+        assert!(b.intersects(&a));
+        assert!(!a.is_disjoint(&b));
+        assert!(!b.is_disjoint(&a));
+    }
+
+    #[test]
+    fn ipv4_intersects_disjoint_contiguous() {
+        let a = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        let b = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        assert!(!a.intersects(&b));
+        assert!(!b.intersects(&a));
+        assert!(a.is_disjoint(&b));
+    }
+
+    #[test]
+    fn ipv4_intersects_self() {
+        let a = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        assert!(a.intersects(&a));
+        assert!(!a.is_disjoint(&a));
+    }
+
+    #[test]
+    fn ipv4_intersects_non_contiguous() {
+        let a = Ipv4Network::new(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(255, 0, 0, 255));
+        let b = Ipv4Network::new(Ipv4Addr::new(10, 1, 0, 0), Ipv4Addr::new(255, 255, 0, 0));
+        assert!(a.intersects(&b));
+        assert!(b.intersects(&a));
+    }
+
+    #[test]
+    fn ipv4_intersects_non_contiguous_disjoint() {
+        let a = Ipv4Network::new(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(255, 0, 0, 255));
+        let b = Ipv4Network::new(Ipv4Addr::new(11, 0, 0, 0), Ipv4Addr::new(255, 0, 0, 0));
+        assert!(!a.intersects(&b));
+        assert!(a.is_disjoint(&b));
+    }
+
+    #[test]
+    fn ipv4_intersection_containment() {
+        let a = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        assert_eq!(Some(b), a.intersection(&b));
+        assert_eq!(Some(b), b.intersection(&a));
+    }
+
+    #[test]
+    fn ipv4_intersection_identical() {
+        let a = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        assert_eq!(Some(a), a.intersection(&a));
+    }
+
+    #[test]
+    fn ipv4_intersection_disjoint() {
+        let a = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        let b = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        assert_eq!(None, a.intersection(&b));
+    }
+
+    #[test]
+    fn ipv4_intersection_non_contiguous() {
+        let a = Ipv4Network::new(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(255, 0, 0, 255));
+        let b = Ipv4Network::new(Ipv4Addr::new(10, 1, 0, 0), Ipv4Addr::new(255, 255, 0, 0));
+        let expected = Ipv4Network::new(Ipv4Addr::new(10, 1, 0, 1), Ipv4Addr::new(255, 255, 0, 255));
+        assert_eq!(Some(expected), a.intersection(&b));
+        assert_eq!(Some(expected), b.intersection(&a));
+    }
+
+    #[test]
+    fn ipv4_intersection_both_non_contiguous() {
+        let a = Ipv4Network::new(Ipv4Addr::new(10, 0, 10, 0), Ipv4Addr::new(255, 0, 255, 0));
+        let b = Ipv4Network::new(Ipv4Addr::new(10, 0, 0, 5), Ipv4Addr::new(255, 0, 0, 255));
+        let expected = Ipv4Network::new(Ipv4Addr::new(10, 0, 10, 5), Ipv4Addr::new(255, 0, 255, 255));
+        assert_eq!(Some(expected), a.intersection(&b));
+        assert_eq!(Some(expected), b.intersection(&a));
+    }
+
+    #[test]
+    fn ipv4_intersection_with_unspecified() {
+        let unspecified = Ipv4Network::UNSPECIFIED;
+        let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        assert_eq!(Some(b), unspecified.intersection(&b));
+        assert_eq!(Some(b), b.intersection(&unspecified));
+    }
+
+    #[test]
+    fn ipv4_intersection_hosts_same() {
+        let a = Ipv4Network::parse("10.0.0.1/32").unwrap();
+        assert_eq!(Some(a), a.intersection(&a));
+    }
+
+    #[test]
+    fn ipv4_intersection_hosts_different() {
+        let a = Ipv4Network::parse("10.0.0.1/32").unwrap();
+        let b = Ipv4Network::parse("10.0.0.2/32").unwrap();
+        assert_eq!(None, a.intersection(&b));
+    }
+
+    #[test]
+    fn ipv4_intersection_alternating_masks() {
+        // m1 = 0xaa55aa55, m2 = 0x55aa55aa => m1 & m2 = 0, always intersect.
+        let a = Ipv4Network::new(Ipv4Addr::new(0xaa, 0, 0xaa, 0), Ipv4Addr::new(0xaa, 0x55, 0xaa, 0x55));
+        let b = Ipv4Network::new(Ipv4Addr::new(0, 0xaa, 0, 0xaa), Ipv4Addr::new(0x55, 0xaa, 0x55, 0xaa));
+        assert!(a.intersects(&b));
+
+        // Result mask = 0xff, result is /32.
+        let expected = Ipv4Network::new(
+            Ipv4Addr::new(0xaa, 0xaa, 0xaa, 0xaa),
+            Ipv4Addr::new(0xff, 0xff, 0xff, 0xff),
+        );
+        assert_eq!(Some(expected), a.intersection(&b));
+    }
+
+    fn arb_ipv4_network() -> impl Strategy<Value = Ipv4Network> {
+        (any::<u32>(), any::<u32>()).prop_map(|(a, m)| Ipv4Network::from_bits(a, m))
+    }
+
+    proptest! {
+        #[test]
+        fn prop_ipv4_intersects_is_not_disjoint(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            prop_assert_eq!(a.intersects(&b), !a.is_disjoint(&b));
+        }
+
+        #[test]
+        fn prop_ipv4_intersection_commutativity(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            prop_assert_eq!(a.intersection(&b), b.intersection(&a));
+        }
+
+        #[test]
+        fn prop_ipv4_contains_implies_intersection_eq_inner(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            if a.contains(&b) {
+                prop_assert_eq!(a.intersection(&b), Some(b));
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_intersection_subset_of_both(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            if let Some(c) = a.intersection(&b) {
+                prop_assert!(a.contains(&c), "intersection not contained in a: a={a}, b={b}, c={c}");
+                prop_assert!(b.contains(&c), "intersection not contained in b: a={a}, b={b}, c={c}");
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_self_intersection_is_self(
+            a in arb_ipv4_network(),
+        ) {
+            prop_assert_eq!(a.intersection(&a), Some(a));
+        }
+
+        #[test]
+        fn prop_ipv4_intersection_membership_brute_force(
+            a_addr in 0u32..=255,
+            a_mask in 0u32..=255,
+            b_addr in 0u32..=255,
+            b_mask in 0u32..=255,
+        ) {
+            // Use 8-bit networks (top byte) to exhaustively verify membership.
+            let a = Ipv4Network::from_bits((a_addr & a_mask) << 24, a_mask << 24);
+            let b = Ipv4Network::from_bits((b_addr & b_mask) << 24, b_mask << 24);
+            let result = a.intersection(&b);
+
+            let (a_a, a_m) = a.to_bits();
+            let (b_a, b_m) = b.to_bits();
+
+            for x in 0u32..=255 {
+                let xaddr = x << 24;
+                let in_a = (xaddr & a_m) == a_a;
+                let in_b = (xaddr & b_m) == b_a;
+                let in_result = match result {
+                    Some(r) => {
+                        let (r_a, r_m) = r.to_bits();
+                        (xaddr & r_m) == r_a
+                    }
+                    None => false,
+                };
+                prop_assert_eq!(
+                    in_a && in_b,
+                    in_result,
+                    "x={}, a={}, b={}, result={:?}", x, a, b, result
+                );
+            }
+        }
     }
 }
