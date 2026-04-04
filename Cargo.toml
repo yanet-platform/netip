@@ -3,6 +3,12 @@ name = "netip"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
+description = "IPv4/IPv6 network types with non-contiguous masks support"
+repository = "https://github.com/yanet-platform/netip"
+documentation = "https://docs.rs/netip"
+readme = "README.md"
+keywords = ["ip", "network", "ipv4", "ipv6"]
+categories = ["network-programming"]
 
 [dependencies]
 
