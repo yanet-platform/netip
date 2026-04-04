@@ -119,6 +119,44 @@ fn bench_intersection(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("Ipv6Network::intersects contiguous", |b| {
+        let n0 = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let n1 = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).intersects(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv6Network::intersection contiguous overlapping", |b| {
+        let n0 = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let n1 = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).intersection(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv6Network::intersection contiguous disjoint", |b| {
+        let n0 = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let n1 = Ipv6Network::parse("fe80::/10").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).intersection(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv6Network::intersection non-contiguous", |b| {
+        let n0 = Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0xffff, 0, 0, 0, 0, 0, 0, 0xffff),
+        );
+        let n1 = Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 1, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0),
+        );
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).intersection(core::hint::black_box(&n1)));
+        });
+    });
+
     group.finish();
 }
 
