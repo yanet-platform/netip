@@ -59,6 +59,10 @@ $$\overline{m} + 1 = 2^{n-k} = \underbrace{0\ldots0}_{k-1}\,1\,\underbrace{0\ldo
 
 $(\Leftarrow)$ Пусть $h = \overline{m}$, $t = \text{trailing\_ones}(h)$.
 
+Для любого целого $h \geq 0$ и любого $s \geq 0$ (теорема о делении с остатком):
+
+$$h = \left\lfloor \frac{h}{2^s} \right\rfloor \cdot 2^s + (h \bmod 2^s)$$
+
 Разложим $h$:
 
 $$h = q \cdot 2^{t+1} + (2^t - 1), \quad q = h \gg (t + 1)$$
