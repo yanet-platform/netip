@@ -13,3 +13,8 @@ CLAUDE.md
 
 # Work-in-progress docs
 /.docs
+
+# mdBook build output and generated assets
+/book/*/book/
+/book/*/mermaid.min.js
+/book/*/mermaid-init.js

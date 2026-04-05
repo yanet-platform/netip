@@ -1,0 +1,14 @@
+[book]
+title = "Математика IP-сетей"
+language = "ru"
+authors = ["Evgeny Safronov"]
+src = "src"
+
+[preprocessor.katex]
+after = ["links"]
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[output.html]
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
