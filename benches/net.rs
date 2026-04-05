@@ -160,5 +160,48 @@ fn bench_intersection(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_net_addrs, bench_net_addrs_count, bench_intersection);
+fn bench_is_contiguous(c: &mut Criterion) {
+    let mut group = c.benchmark_group("netip");
+
+    group.bench_function("Ipv4Network::is_contiguous contiguous", |b| {
+        let net = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&net).is_contiguous());
+        });
+    });
+
+    group.bench_function("Ipv4Network::is_contiguous non-contiguous", |b| {
+        let net = Ipv4Network::new(Ipv4Addr::new(192, 168, 0, 1), Ipv4Addr::new(255, 255, 0, 255));
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&net).is_contiguous());
+        });
+    });
+
+    group.bench_function("Ipv6Network::is_contiguous contiguous", |b| {
+        let net = Ipv6Network::parse("2001:db8::/32").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&net).is_contiguous());
+        });
+    });
+
+    group.bench_function("Ipv6Network::is_contiguous non-contiguous", |b| {
+        let net = Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0xffff, 0, 0, 0, 0, 0, 0, 0xffff),
+        );
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&net).is_contiguous());
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_net_addrs,
+    bench_net_addrs_count,
+    bench_intersection,
+    bench_is_contiguous
+);
 criterion_main!(benches);
