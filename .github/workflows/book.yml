@@ -1,0 +1,55 @@
+name: Book
+
+on:
+  push:
+    branches: [main]
+    paths: ["book/**"]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mdBook and plugins
+        run: |
+          cargo install mdbook --version 0.4.43 --locked
+          cargo install mdbook-katex --version 0.9.1 --locked
+          cargo install mdbook-mermaid --version 0.14.0 --locked
+
+      - name: Build Russian book
+        run: |
+          cd book/ru
+          mdbook-mermaid install .
+          mdbook build
+
+      - name: Prepare pages
+        run: |
+          mkdir -p _site/ru
+          cp -r book/ru/book/* _site/ru/
+          echo '<meta http-equiv="refresh" content="0; url=ru/">' > _site/index.html
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

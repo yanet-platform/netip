@@ -9,6 +9,7 @@ documentation = "https://docs.rs/netip"
 readme = "README.md"
 keywords = ["ip", "network", "ipv4", "ipv6"]
 categories = ["network-programming"]
+exclude = ["book/", ".github/"]
 
 [dependencies]
 
