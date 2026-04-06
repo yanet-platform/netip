@@ -828,8 +828,7 @@ impl Ipv4Network {
     #[inline]
     pub const fn is_contiguous(&self) -> bool {
         let mask = u32::from_be_bytes(self.mask().octets());
-        let hostmask = !mask;
-        hostmask & hostmask.wrapping_add(1) == 0
+        mask | mask.wrapping_sub(1) == u32::MAX
     }
 
     /// Returns the mask prefix, i.e. the number of leading bits set, if this
@@ -1691,8 +1690,7 @@ impl Ipv6Network {
     #[inline]
     pub const fn is_contiguous(&self) -> bool {
         let mask = u128::from_be_bytes(self.mask().octets());
-        let hostmask = !mask;
-        hostmask & hostmask.wrapping_add(1) == 0
+        mask | mask.wrapping_sub(1) == u128::MAX
     }
 
     /// Checks whether this network is an IPv4-mapped IPv6 network.
