@@ -1808,6 +1808,39 @@ impl Ipv6Network {
         Some(Self(addr, mask))
     }
 
+    /// Returns an iterator over networks whose union equals the set difference
+    /// `self \ other`, i.e. all addresses in `self` that are not in `other`.
+    ///
+    /// The result contains at most `popcount(m2 & !m1)` pairwise-disjoint
+    /// networks (at most 128). Works correctly with non-contiguous masks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv6Network;
+    ///
+    /// // Subtracting a /64 from a /48 yields 16 networks.
+    /// let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+    /// let b = Ipv6Network::parse("2001:db8::/64").unwrap();
+    /// let diff: Vec<_> = a.difference(&b).collect();
+    /// assert_eq!(diff.len(), 16);
+    ///
+    /// // Disjoint networks: difference is the original.
+    /// let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+    /// let b = Ipv6Network::parse("fe80::/10").unwrap();
+    /// let diff: Vec<_> = a.difference(&b).collect();
+    /// assert_eq!(diff, vec![a]);
+    ///
+    /// // Subset: difference is empty.
+    /// let a = Ipv6Network::parse("2001:db8::/64").unwrap();
+    /// let b = Ipv6Network::parse("2001:db8::/48").unwrap();
+    /// assert_eq!(a.difference(&b).count(), 0);
+    /// ```
+    #[inline]
+    pub const fn difference(&self, other: &Self) -> Ipv6NetworkDiff {
+        Ipv6NetworkDiff::new(self, other)
+    }
+
     /// Checks whether this network is a contiguous, i.e. contains mask with
     /// only leading bits set to one contiguously.
     ///
@@ -2268,6 +2301,111 @@ const fn pdep_u128(mut src: u128, mut mask: u128) -> u128 {
     }
 
     out
+}
+
+/// Yields between 0 and 128 pairwise-disjoint networks whose union equals
+/// `S(A) \ S(B)`.
+///
+/// Each call to [`next`](Iterator::next) computes one network by peeling the
+/// highest remaining bit from the difference mask.
+#[derive(Debug, Clone, Copy)]
+pub struct Ipv6NetworkDiff {
+    /// Intersection address, or an encoded address for the disjoint shortcut.
+    addr: u128,
+    /// Mask of the source network (possibly with one bit cleared for disjoint).
+    mask: u128,
+    /// Bits of `d` already yielded.
+    processed: u128,
+    /// Bits of `d` not yet yielded.
+    remaining: u128,
+}
+
+impl Ipv6NetworkDiff {
+    /// Computes the set difference `source \ other`.
+    ///
+    /// The iterator yields pairwise-disjoint networks whose union equals
+    /// `S(source) \ S(other)`.
+    #[inline]
+    pub const fn new(source: &Ipv6Network, other: &Ipv6Network) -> Self {
+        let (addr, mask) = source.to_bits();
+
+        match source.intersection(other) {
+            None => {
+                // Disjoint: A \ B = {A}.
+                //
+                // Encode as a single-step peel: borrow one bit `b` from the
+                // source mask and set up state so that peeling it reconstructs
+                // the original network.
+                //
+                // Disjoint implies mask != 0 (the ::/0 intersects everything),
+                // so there is always a bit to borrow.
+                let b = mask & mask.wrapping_neg();
+
+                Self {
+                    addr: addr ^ b,
+                    mask: mask ^ b,
+                    processed: 0,
+                    remaining: b,
+                }
+            }
+            Some(intersected) => {
+                let (inter_addr, inter_mask) = intersected.to_bits();
+
+                // Extra bits: fixed in the intersection but free in A.
+                let d = inter_mask & !mask;
+
+                if d == 0 {
+                    // A ⊆ B: A \ B = ∅.
+                    Self {
+                        addr: 0,
+                        mask: 0,
+                        processed: 0,
+                        remaining: 0,
+                    }
+                } else {
+                    // General case: peel one network per bit of d.
+                    Self {
+                        addr: inter_addr,
+                        mask,
+                        processed: 0,
+                        remaining: d,
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Iterator for Ipv6NetworkDiff {
+    type Item = Ipv6Network;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+
+        let b = 1u128 << (127 - self.remaining.leading_zeros());
+        let mask = self.mask | self.processed | b;
+        let addr = (self.addr ^ b) & mask;
+        self.processed |= b;
+        self.remaining ^= b;
+
+        Some(Ipv6Network::from_bits(addr, mask))
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = self.len();
+        (n, Some(n))
+    }
+}
+
+impl ExactSizeIterator for Ipv6NetworkDiff {
+    #[inline]
+    fn len(&self) -> usize {
+        self.remaining.count_ones() as usize
+    }
 }
 
 impl Display for Ipv6Network {
@@ -3535,6 +3673,118 @@ mod test {
     }
 
     #[test]
+    fn ipv6_difference_disjoint() {
+        let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let b = Ipv6Network::parse("fe80::/10").unwrap();
+        let diff: Vec<_> = a.difference(&b).collect();
+        assert_eq!(diff, vec![a]);
+    }
+
+    #[test]
+    fn ipv6_difference_subset() {
+        let a = Ipv6Network::parse("2001:db8::/64").unwrap();
+        let b = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let diff: Vec<_> = a.difference(&b).collect();
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn ipv6_difference_same_network() {
+        let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let diff: Vec<_> = a.difference(&a).collect();
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn ipv6_difference_superset() {
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let b = Ipv6Network::parse("2001:db8::/64").unwrap();
+        let diff: Vec<_> = a.difference(&b).collect();
+        assert_eq!(diff.len(), 16);
+
+        for r in &diff {
+            assert!(a.contains(r), "part {r} not in A");
+            assert!(r.is_disjoint(&b), "part {r} intersects B");
+        }
+
+        for i in 0..diff.len() {
+            for j in (i + 1)..diff.len() {
+                assert!(diff[i].is_disjoint(&diff[j]), "parts {i} and {j} overlap");
+            }
+        }
+    }
+
+    #[test]
+    fn ipv6_difference_universe_minus_host() {
+        let a = Ipv6Network::parse("::/0").unwrap();
+        let b = Ipv6Network::parse("2001:db8::1/128").unwrap();
+        let diff: Vec<_> = a.difference(&b).collect();
+        assert_eq!(diff.len(), 128);
+
+        for r in &diff {
+            assert!(r.is_contiguous(), "non-contiguous mask in {r}");
+            assert!(a.contains(r), "part {r} not in A");
+            assert!(r.is_disjoint(&b), "part {r} intersects B");
+        }
+    }
+
+    #[test]
+    fn ipv6_difference_host_minus_universe() {
+        let a = Ipv6Network::parse("2001:db8::1/128").unwrap();
+        let b = Ipv6Network::parse("::/0").unwrap();
+        let diff: Vec<_> = a.difference(&b).collect();
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn ipv6_difference_hosts_same() {
+        let a = Ipv6Network::parse("2001:db8::1/128").unwrap();
+        let b = Ipv6Network::parse("2001:db8::1/128").unwrap();
+        let diff: Vec<_> = a.difference(&b).collect();
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn ipv6_difference_hosts_different() {
+        let a = Ipv6Network::parse("2001:db8::1/128").unwrap();
+        let b = Ipv6Network::parse("2001:db8::2/128").unwrap();
+        let diff: Vec<_> = a.difference(&b).collect();
+        assert_eq!(diff, vec![a]);
+    }
+
+    #[test]
+    fn ipv6_difference_non_contiguous() {
+        // A = anything matching mask ffff::/16
+        // B = matching ffff::ff/16 + bottom byte
+        let a = Ipv6Network::from_bits(
+            0x2001_0000_0000_0000_0000_0000_0000_0000,
+            0xffff_0000_0000_0000_0000_0000_0000_0000,
+        );
+        let b = Ipv6Network::from_bits(
+            0x2001_0000_0000_0000_0000_0000_0000_0001,
+            0xffff_0000_0000_0000_0000_0000_0000_00ff,
+        );
+        let diff: Vec<_> = a.difference(&b).collect();
+        // d = inter_mask & !source_mask = (ffff::ff) & !(ffff::) = 0xff
+        assert_eq!(diff.len(), 8);
+
+        for r in &diff {
+            assert!(a.contains(r), "part {r} not in A");
+            assert!(r.is_disjoint(&b), "part {r} intersects B");
+        }
+    }
+
+    #[test]
+    fn ipv6_difference_exact_size() {
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let b = Ipv6Network::parse("2001:db8::/64").unwrap();
+        let mut diff = a.difference(&b);
+        assert_eq!(diff.len(), 16);
+        diff.next();
+        assert_eq!(diff.len(), 15);
+    }
+
+    #[test]
     fn test_ipv4_binary_split_empty() {
         assert!(ipv4_binary_split::<Ipv4Network>(&[]).is_none());
     }
@@ -4718,6 +4968,96 @@ mod test {
             a in arb_ipv4_network(),
         ) {
             prop_assert_eq!(a.difference(&a).len(), 0);
+        }
+
+        /// Σ|part_i| + |A ∩ B| = |A|.
+        ///
+        /// Combined with pairwise-disjoint and parts ⊂ A, this proves
+        /// union(parts) = A \ B.
+        #[test]
+        fn prop_ipv4_difference_completeness(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            let size = |n: &Ipv4Network| -> u64 {
+                let (.., m) = n.to_bits();
+                1u64 << (!m).count_ones()
+            };
+
+            let a_size = size(&a);
+            let inter_size = a.intersection(&b).map_or(0, |c| size(&c));
+            let diff_size: u64 = a.difference(&b).map(|r| size(&r)).sum();
+
+            prop_assert_eq!(
+                diff_size + inter_size,
+                a_size,
+                "a={}, b={}, inter={:?}", a, b, a.intersection(&b)
+            );
+        }
+
+        #[test]
+        fn prop_ipv6_difference_parts_in_source(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            for r in a.difference(&b) {
+                prop_assert!(a.contains(&r), "part {r} not in a={a}");
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_difference_parts_disjoint_from_other(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            for r in a.difference(&b) {
+                prop_assert!(b.is_disjoint(&r), "part {r} intersects b={b}");
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_difference_pairwise_disjoint(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            let parts: Vec<_> = a.difference(&b).collect();
+            for i in 0..parts.len() {
+                for j in (i + 1)..parts.len() {
+                    prop_assert!(
+                        parts[i].is_disjoint(&parts[j]),
+                        "parts {i} and {j} overlap: {} vs {}", parts[i], parts[j]
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_difference_self_is_empty(
+            a in arb_ipv6_network(),
+        ) {
+            prop_assert_eq!(a.difference(&a).len(), 0);
+        }
+
+        /// Σ|part_i| + |A ∩ B| = |A|.
+        #[test]
+        fn prop_ipv6_difference_completeness(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            let size = |n: &Ipv6Network| -> u128 {
+                let (.., m) = n.to_bits();
+                1u128 << (!m).count_ones()
+            };
+
+            let a_size = size(&a);
+            let inter_size = a.intersection(&b).map_or(0, |c| size(&c));
+            let diff_size: u128 = a.difference(&b).map(|r| size(&r)).sum();
+
+            prop_assert_eq!(
+                diff_size + inter_size,
+                a_size,
+                "a={}, b={}, inter={:?}", a, b, a.intersection(&b)
+            );
         }
     }
 }
