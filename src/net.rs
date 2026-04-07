@@ -804,6 +804,39 @@ impl Ipv4Network {
         Some(Self(addr, mask))
     }
 
+    /// Returns an iterator over networks whose union equals the set difference
+    /// `self \ other`, i.e. all addresses in `self` that are not in `other`.
+    ///
+    /// The result contains at most `popcount(m2 & !m1)` pairwise-disjoint
+    /// networks (at most 32). Works correctly with non-contiguous masks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv4Network;
+    ///
+    /// // Subtracting a /24 from a /16 yields 8 networks.
+    /// let a = Ipv4Network::parse("192.168.0.0/16").unwrap();
+    /// let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+    /// let diff: Vec<_> = a.difference(&b).collect();
+    /// assert_eq!(diff.len(), 8);
+    ///
+    /// // Disjoint networks: difference is the original.
+    /// let a = Ipv4Network::parse("10.0.0.0/8").unwrap();
+    /// let b = Ipv4Network::parse("192.168.0.0/16").unwrap();
+    /// let diff: Vec<_> = a.difference(&b).collect();
+    /// assert_eq!(diff, vec![a]);
+    ///
+    /// // Subset: difference is empty.
+    /// let a = Ipv4Network::parse("192.168.1.0/24").unwrap();
+    /// let b = Ipv4Network::parse("192.168.0.0/16").unwrap();
+    /// assert_eq!(a.difference(&b).count(), 0);
+    /// ```
+    #[inline]
+    pub const fn difference(&self, other: &Self) -> Ipv4NetworkDiff {
+        Ipv4NetworkDiff::new(self, other)
+    }
+
     /// Checks whether this network is a contiguous, i.e. contains mask with
     /// only leading bits set to one contiguously.
     ///
@@ -1277,6 +1310,115 @@ impl ExactSizeIterator for Ipv4NetworkAddrs {
         let rem = self.back.wrapping_sub(self.front).wrapping_add(1);
 
         if rem == 0 { 1usize << 32 } else { rem as usize }
+    }
+}
+
+/// Lazy iterator over [`Ipv4Network`] parts of a set difference.
+///
+/// Created by [`Ipv4Network::difference`].
+///
+/// Yields between 0 and 32 pairwise-disjoint networks whose union equals
+/// `S(A) \ S(B)`.
+///
+/// Each call to [`next`](Iterator::next) computes one network by peeling the
+/// lowest remaining bit from the difference mask.
+#[derive(Debug, Clone, Copy)]
+pub struct Ipv4NetworkDiff {
+    /// Intersection address, or an encoded address for the disjoint shortcut.
+    addr: u32,
+    /// Mask of the source network (possibly with one bit cleared for disjoint).
+    mask: u32,
+    /// Bits of `d` already yielded.
+    processed: u32,
+    /// Bits of `d` not yet yielded.
+    remaining: u32,
+}
+
+impl Ipv4NetworkDiff {
+    /// Computes the set difference `source \ other`.
+    ///
+    /// The iterator yields pairwise-disjoint networks whose union equals
+    /// `S(source) \ S(other)`.
+    #[inline]
+    pub const fn new(source: &Ipv4Network, other: &Ipv4Network) -> Self {
+        let (addr, mask) = source.to_bits();
+
+        match source.intersection(other) {
+            None => {
+                // Disjoint: A \ B = {A}.
+                //
+                // Encode as a single-step peel: borrow one bit `b` from the
+                // source mask and set up state so that peeling it reconstructs
+                // the original network.
+                //
+                // Disjoint implies mask != 0 (the 0.0.0.0/0 intersects
+                // everything), so there is always a bit to borrow.
+                let b = mask & mask.wrapping_neg();
+
+                Self {
+                    addr: addr ^ b,
+                    mask: mask ^ b,
+                    processed: 0,
+                    remaining: b,
+                }
+            }
+            Some(intersected) => {
+                let (intersected_addr, intersected_mask) = intersected.to_bits();
+
+                // Extra bits: fixed in the intersection but free in A.
+                let d = intersected_mask & !mask;
+
+                if d == 0 {
+                    // A ⊆ B: A \ B = ∅.
+                    Self {
+                        addr: 0,
+                        mask: 0,
+                        processed: 0,
+                        remaining: 0,
+                    }
+                } else {
+                    // General case: peel one network per bit of d.
+                    Self {
+                        addr: intersected_addr,
+                        mask,
+                        processed: 0,
+                        remaining: d,
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Iterator for Ipv4NetworkDiff {
+    type Item = Ipv4Network;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+
+        let b = 0x8000_0000u32 >> self.remaining.leading_zeros();
+        let mask = self.mask | self.processed | b;
+        let addr = (self.addr ^ b) & mask;
+        self.processed |= b;
+        self.remaining ^= b;
+
+        Some(Ipv4Network::from_bits(addr, mask))
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = self.len();
+        (n, Some(n))
+    }
+}
+
+impl ExactSizeIterator for Ipv4NetworkDiff {
+    #[inline]
+    fn len(&self) -> usize {
+        self.remaining.count_ones() as usize
     }
 }
 
@@ -4018,6 +4160,185 @@ mod test {
     }
 
     #[test]
+    fn ipv4_difference_disjoint() {
+        let a = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        let b = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        let diff: Vec<_> = a.difference(&b).collect();
+        assert_eq!(vec![a], diff);
+    }
+
+    #[test]
+    fn ipv4_difference_subset() {
+        let a = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        let b = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        let diff: Vec<_> = a.difference(&b).collect();
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn ipv4_difference_same_network() {
+        let a = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        let diff: Vec<_> = a.difference(&a).collect();
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn ipv4_difference_superset() {
+        // /16 minus /24 yields 8 networks (one per bit of difference in prefix).
+        let a = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        let diff: Vec<_> = a.difference(&b).collect();
+        assert_eq!(8, diff.len());
+
+        // Every part must be inside A and disjoint from B.
+        for r in &diff {
+            assert!(a.contains(r), "part {r} not in A");
+            assert!(r.is_disjoint(&b), "part {r} intersects B");
+        }
+
+        // Parts must be pairwise disjoint.
+        for i in 0..diff.len() {
+            for j in (i + 1)..diff.len() {
+                assert!(diff[i].is_disjoint(&diff[j]), "parts {i} and {j} overlap");
+            }
+        }
+    }
+
+    #[test]
+    fn ipv4_difference_universe_minus_host() {
+        let a = Ipv4Network::parse("0.0.0.0/0").unwrap();
+        let b = Ipv4Network::parse("1.2.3.4/32").unwrap();
+        let diff: Vec<_> = a.difference(&b).collect();
+        assert_eq!(32, diff.len());
+    }
+
+    #[test]
+    fn ipv4_difference_host_minus_universe() {
+        let a = Ipv4Network::parse("1.2.3.4/32").unwrap();
+        let b = Ipv4Network::parse("0.0.0.0/0").unwrap();
+        let diff: Vec<_> = a.difference(&b).collect();
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn ipv4_difference_hosts_same() {
+        let a = Ipv4Network::parse("1.2.3.4/32").unwrap();
+        let b = Ipv4Network::parse("1.2.3.4/32").unwrap();
+        let diff: Vec<_> = a.difference(&b).collect();
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn ipv4_difference_hosts_different() {
+        let a = Ipv4Network::parse("1.2.3.4/32").unwrap();
+        let b = Ipv4Network::parse("5.6.7.8/32").unwrap();
+        let diff: Vec<_> = a.difference(&b).collect();
+        assert_eq!(vec![a], diff);
+    }
+
+    #[test]
+    fn ipv4_difference_verified_by_hand() {
+        let a = Ipv4Network::UNSPECIFIED;
+        let b = Ipv4Network::new(Ipv4Addr::new(8, 8, 8, 8), Ipv4Addr::new(255, 255, 255, 255));
+        let diff: Vec<_> = a.difference(&b).collect();
+        assert_eq!(32, diff.len());
+
+        // MSB-first iteration must produce contiguous CIDR masks.
+        for r in &diff {
+            assert!(r.is_contiguous(), "non-contiguous mask in {r}");
+            assert!(a.contains(r), "part {r} not in A");
+            assert!(r.is_disjoint(&b), "part {r} intersects B");
+        }
+
+        let expected = vec![
+            Ipv4Network::parse("128.0.0.0/1").unwrap(),
+            Ipv4Network::parse("64.0.0.0/2").unwrap(),
+            Ipv4Network::parse("32.0.0.0/3").unwrap(),
+            Ipv4Network::parse("16.0.0.0/4").unwrap(),
+            Ipv4Network::parse("0.0.0.0/5").unwrap(),
+            Ipv4Network::parse("12.0.0.0/6").unwrap(),
+            Ipv4Network::parse("10.0.0.0/7").unwrap(),
+            Ipv4Network::parse("9.0.0.0/8").unwrap(),
+            Ipv4Network::parse("8.128.0.0/9").unwrap(),
+            Ipv4Network::parse("8.64.0.0/10").unwrap(),
+            Ipv4Network::parse("8.32.0.0/11").unwrap(),
+            Ipv4Network::parse("8.16.0.0/12").unwrap(),
+            Ipv4Network::parse("8.0.0.0/13").unwrap(),
+            Ipv4Network::parse("8.12.0.0/14").unwrap(),
+            Ipv4Network::parse("8.10.0.0/15").unwrap(),
+            Ipv4Network::parse("8.9.0.0/16").unwrap(),
+            Ipv4Network::parse("8.8.128.0/17").unwrap(),
+            Ipv4Network::parse("8.8.64.0/18").unwrap(),
+            Ipv4Network::parse("8.8.32.0/19").unwrap(),
+            Ipv4Network::parse("8.8.16.0/20").unwrap(),
+            Ipv4Network::parse("8.8.0.0/21").unwrap(),
+            Ipv4Network::parse("8.8.12.0/22").unwrap(),
+            Ipv4Network::parse("8.8.10.0/23").unwrap(),
+            Ipv4Network::parse("8.8.9.0/24").unwrap(),
+            Ipv4Network::parse("8.8.8.128/25").unwrap(),
+            Ipv4Network::parse("8.8.8.64/26").unwrap(),
+            Ipv4Network::parse("8.8.8.32/27").unwrap(),
+            Ipv4Network::parse("8.8.8.16/28").unwrap(),
+            Ipv4Network::parse("8.8.8.0/29").unwrap(),
+            Ipv4Network::parse("8.8.8.12/30").unwrap(),
+            Ipv4Network::parse("8.8.8.10/31").unwrap(),
+            Ipv4Network::parse("8.8.8.9/32").unwrap(),
+        ];
+        assert_eq!(expected, diff);
+    }
+
+    #[test]
+    fn ipv4_difference_non_contiguous() {
+        let a = Ipv4Network::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(255, 0, 0, 0));
+        let b = Ipv4Network::new(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(255, 0, 0, 255));
+
+        let diff: Vec<_> = a.difference(&b).collect();
+        assert_eq!(diff.len(), 8);
+
+        for r in &diff {
+            assert!(a.contains(r), "part {r} not in A");
+            assert!(r.is_disjoint(&b), "part {r} intersects B");
+        }
+
+        let expected = vec![
+            Ipv4Network::parse("10.0.0.128/255.0.0.128").unwrap(),
+            Ipv4Network::parse("10.0.0.64/255.0.0.192").unwrap(),
+            Ipv4Network::parse("10.0.0.32/255.0.0.224").unwrap(),
+            Ipv4Network::parse("10.0.0.16/255.0.0.240").unwrap(),
+            Ipv4Network::parse("10.0.0.8/255.0.0.248").unwrap(),
+            Ipv4Network::parse("10.0.0.4/255.0.0.252").unwrap(),
+            Ipv4Network::parse("10.0.0.2/255.0.0.254").unwrap(),
+            Ipv4Network::parse("10.0.0.0/255.0.0.255").unwrap(),
+        ];
+        assert_eq!(expected, diff);
+    }
+
+    #[test]
+    fn ipv4_difference_exact_size() {
+        let a = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        let mut diff = a.difference(&b);
+        assert_eq!(8, diff.len());
+        diff.next();
+        assert_eq!(7, diff.len());
+        diff.next();
+        assert_eq!(6, diff.len());
+        diff.next();
+        assert_eq!(5, diff.len());
+        diff.next();
+        assert_eq!(4, diff.len());
+        diff.next();
+        assert_eq!(3, diff.len());
+        diff.next();
+        assert_eq!(2, diff.len());
+        diff.next();
+        assert_eq!(1, diff.len());
+        diff.next();
+        assert_eq!(0, diff.len());
+        assert_eq!(None, diff.next());
+    }
+
+    #[test]
     fn ipv6_intersects_overlapping_contiguous() {
         let a = Ipv6Network::parse("2001:db8::/32").unwrap();
         let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
@@ -4354,6 +4675,49 @@ mod test {
                     "x={}, a={}, b={}, result={:?}", x, a, b, result
                 );
             }
+        }
+
+        #[test]
+        fn prop_ipv4_difference_parts_in_source(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            for r in a.difference(&b) {
+                prop_assert!(a.contains(&r), "part {r} not in a={a}");
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_difference_parts_disjoint_from_other(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            for r in a.difference(&b) {
+                prop_assert!(b.is_disjoint(&r), "part {r} intersects b={b}");
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_difference_pairwise_disjoint(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            let parts: Vec<_> = a.difference(&b).collect();
+            for i in 0..parts.len() {
+                for j in (i + 1)..parts.len() {
+                    prop_assert!(
+                        parts[i].is_disjoint(&parts[j]),
+                        "parts {i} and {j} overlap: {} vs {}", parts[i], parts[j]
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_difference_self_is_empty(
+            a in arb_ipv4_network(),
+        ) {
+            prop_assert_eq!(a.difference(&a).len(), 0);
         }
     }
 }
