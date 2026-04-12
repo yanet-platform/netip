@@ -160,6 +160,74 @@ fn bench_intersection(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_merge(c: &mut Criterion) {
+    let mut group = c.benchmark_group("netip");
+
+    group.bench_function("Ipv4Network::merge equal-mask adjacent", |b| {
+        let n0 = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        let n1 = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).merge(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv4Network::merge equal-mask non-mergeable", |b| {
+        let n0 = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        let n1 = Ipv4Network::parse("192.168.3.0/24").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).merge(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv4Network::merge containment", |b| {
+        let n0 = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        let n1 = Ipv4Network::parse("10.1.0.0/16").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).merge(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv4Network::merge non-contiguous", |b| {
+        let n0 = Ipv4Network::new(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::from(0xffff00ffu32));
+        let n1 = Ipv4Network::new(Ipv4Addr::new(10, 1, 0, 1), Ipv4Addr::from(0xffff00ffu32));
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).merge(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv6Network::merge equal-mask adjacent", |b| {
+        let n0 = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let n1 = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).merge(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv6Network::merge containment", |b| {
+        let n0 = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let n1 = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).merge(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv6Network::merge non-contiguous", |b| {
+        let n0 = Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0xffff, 0xff00, 0, 0, 0, 0, 0, 0xffff),
+        );
+        let n1 = Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0x0100, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0xffff, 0xff00, 0, 0, 0, 0, 0, 0xffff),
+        );
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).merge(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.finish();
+}
+
 fn bench_is_contiguous(c: &mut Criterion) {
     let mut group = c.benchmark_group("netip");
 
@@ -202,6 +270,7 @@ criterion_group!(
     bench_net_addrs,
     bench_net_addrs_count,
     bench_intersection,
+    bench_merge,
     bench_is_contiguous
 );
 criterion_main!(benches);
