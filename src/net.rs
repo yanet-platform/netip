@@ -410,6 +410,48 @@ impl IpNetwork {
             _ => None,
         }
     }
+
+    /// Merges this IP network with another, returning `Some(N)` iff their
+    /// union is exactly representable as a single network.
+    ///
+    /// Returns `None` for networks of different address families.
+    ///
+    /// See [`Ipv4Network::merge`] and [`Ipv6Network::merge`] for the full
+    /// merging rules.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::IpNetwork;
+    ///
+    /// // Adjacent /24 blocks merge into a /23.
+    /// let a = IpNetwork::parse("192.168.0.0/24").unwrap();
+    /// let b = IpNetwork::parse("192.168.1.0/24").unwrap();
+    /// assert_eq!(
+    ///     Some(IpNetwork::parse("192.168.0.0/23").unwrap()),
+    ///     a.merge(&b)
+    /// );
+    ///
+    /// // Mixed address families cannot be merged.
+    /// let v4 = IpNetwork::parse("10.0.0.0/8").unwrap();
+    /// let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
+    /// assert_eq!(None, v4.merge(&v6));
+    /// ```
+    #[inline]
+    pub const fn merge(&self, other: &Self) -> Option<Self> {
+        // NOTE: use `Option::map` when it becomes const.
+        match (self, other) {
+            (Self::V4(a), Self::V4(b)) => match a.merge(b) {
+                Some(net) => Some(Self::V4(net)),
+                None => None,
+            },
+            (Self::V6(a), Self::V6(b)) => match a.merge(b) {
+                Some(net) => Some(Self::V6(net)),
+                None => None,
+            },
+            _ => None,
+        }
+    }
 }
 
 impl Display for IpNetwork {
@@ -968,6 +1010,73 @@ impl Ipv4Network {
         }
 
         Self::new(addr.into(), mask.into())
+    }
+
+    /// Merges this IPv4 network with another, returning `Some(N)` iff their
+    /// union is exactly representable as a single network.
+    ///
+    /// Two networks can be merged in two ways:
+    ///
+    /// - **Equal masks, adjacent blocks**: the masks are identical and the
+    ///   addresses differ by exactly one bit. The result drops that bit from
+    ///   the mask.
+    /// - **Containment**: one network is a subset of the other. The result is
+    ///   the larger (containing) network.
+    ///
+    /// Works correctly with non-contiguous masks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv4Network;
+    ///
+    /// // Adjacent /24 blocks merge into a /23.
+    /// let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+    /// let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+    /// assert_eq!(
+    ///     Some(Ipv4Network::parse("192.168.0.0/23").unwrap()),
+    ///     a.merge(&b)
+    /// );
+    ///
+    /// // Containment: larger network is returned.
+    /// let a = Ipv4Network::parse("10.0.0.0/8").unwrap();
+    /// let b = Ipv4Network::parse("10.1.0.0/16").unwrap();
+    /// assert_eq!(Some(a), a.merge(&b));
+    ///
+    /// // Non-mergeable networks.
+    /// let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+    /// let b = Ipv4Network::parse("192.168.3.0/24").unwrap();
+    /// assert_eq!(None, a.merge(&b));
+    /// ```
+    #[inline]
+    pub const fn merge(&self, other: &Self) -> Option<Self> {
+        let (a1, m1) = self.to_bits();
+        let (a2, m2) = other.to_bits();
+
+        if m1 == m2 {
+            let d = a1 ^ a2;
+            if d == 0 {
+                // Identical networks.
+                return Some(*self);
+            }
+            // Power-of-two test: exactly one bit set in d. For normalized
+            // addresses with the same mask, d is always within the masked
+            // region, so no extra guard is needed.
+            if d & (d - 1) == 0 {
+                let m = m1 ^ d;
+                let a = a1 & m;
+                return Some(Self(Ipv4Addr::from_bits(a), Ipv4Addr::from_bits(m)));
+            }
+            return None;
+        }
+
+        if self.contains(other) {
+            return Some(*self);
+        }
+        if other.contains(self) {
+            return Some(*other);
+        }
+        None
     }
 
     /// Converts this network to an IPv4-mapped IPv6 network.
@@ -2051,6 +2160,89 @@ impl Ipv6Network {
         }
 
         Self::new(addr.into(), mask.into())
+    }
+
+    /// Merges this IPv6 network with another, returning `Some(N)` iff their
+    /// union is exactly representable as a single network.
+    ///
+    /// Two networks can be merged in two ways:
+    ///
+    /// - **Equal masks, adjacent blocks**: the masks are identical and the
+    ///   addresses differ by exactly one bit. The result drops that bit from
+    ///   the mask.
+    /// - **Containment**: one network is a subset of the other. The result is
+    ///   the larger (containing) network.
+    ///
+    /// Works correctly with non-contiguous masks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv6Network;
+    ///
+    /// // Adjacent /48 blocks merge into a /47.
+    /// let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+    /// let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+    /// assert_eq!(
+    ///     Some(Ipv6Network::parse("2001:db8::/47").unwrap()),
+    ///     a.merge(&b)
+    /// );
+    ///
+    /// // Containment: larger network is returned.
+    /// let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+    /// let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+    /// assert_eq!(Some(a), a.merge(&b));
+    ///
+    /// // Non-mergeable networks (addresses differ by more than one bit).
+    /// let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+    /// let b = Ipv6Network::parse("2001:db8:5::/48").unwrap();
+    /// assert_eq!(None, a.merge(&b));
+    ///
+    /// // Adjacent non-contiguous networks.
+    /// let a = Ipv6Network::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+    /// let b = Ipv6Network::parse("2a02:6b8:c00::1235:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+    /// assert_eq!(
+    ///     Some(Ipv6Network::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ff00:0:ffff:fffe::").unwrap()),
+    ///     a.merge(&b)
+    /// );
+    ///
+    /// // Adjacent non-contiguous networks, but not in the last address bit.
+    /// let a = Ipv6Network::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+    /// let b = Ipv6Network::parse("2a02:6b8:c00::1236:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+    /// assert_eq!(
+    ///     Some(Ipv6Network::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ff00:0:ffff:fffd::").unwrap()),
+    ///     a.merge(&b)
+    /// );
+    /// ```
+    #[inline]
+    pub const fn merge(&self, other: &Self) -> Option<Self> {
+        let (a1, m1) = self.to_bits();
+        let (a2, m2) = other.to_bits();
+
+        if m1 == m2 {
+            let d = a1 ^ a2;
+            if d == 0 {
+                // Identical networks.
+                return Some(*self);
+            }
+            // Power-of-two test: exactly one bit set in d. For normalized
+            // addresses with the same mask, d is always within the masked
+            // region, so no extra guard is needed.
+            if d & (d - 1) == 0 {
+                let m = m1 ^ d;
+                let a = a1 & m;
+                return Some(Self(Ipv6Addr::from_bits(a), Ipv6Addr::from_bits(m)));
+            }
+            return None;
+        }
+
+        if self.contains(other) {
+            return Some(*self);
+        }
+        if other.contains(self) {
+            return Some(*other);
+        }
+        None
     }
 
     /// Returns the last address in this IPv6 network.
@@ -4864,6 +5056,97 @@ mod test {
         }
 
         #[test]
+        fn prop_ipv4_merge_commutativity(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            prop_assert_eq!(a.merge(&b), b.merge(&a));
+        }
+
+        #[test]
+        fn prop_ipv4_merge_self_is_self(
+            a in arb_ipv4_network(),
+        ) {
+            prop_assert_eq!(a.merge(&a), Some(a));
+        }
+
+        #[test]
+        fn prop_ipv4_merge_result_contains_both(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            if let Some(c) = a.merge(&b) {
+                prop_assert!(c.contains(&a), "merge result {c} must contain {a}");
+                prop_assert!(c.contains(&b), "merge result {c} must contain {b}");
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_merge_is_normalized(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            if let Some(c) = a.merge(&b) {
+                let (addr, mask) = c.to_bits();
+                prop_assert_eq!(addr & mask, addr, "merge result not normalized: a={}, b={}, c={}", a, b, c);
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_merge_equals_supernet_when_some(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            if let Some(c) = a.merge(&b) {
+                let supernet = a.supernet_for(&[b]);
+                prop_assert_eq!(c, supernet, "merge must equal supernet_for when Some: a={}, b={}", a, b);
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_merge_membership_brute_force(
+            a_addr in 0u32..=255,
+            a_mask in 0u32..=255,
+            b_addr in 0u32..=255,
+            b_mask in 0u32..=255,
+        ) {
+            let a = Ipv4Network::from_bits((a_addr & a_mask) << 24, a_mask << 24);
+            let b = Ipv4Network::from_bits((b_addr & b_mask) << 24, b_mask << 24);
+            let result = a.merge(&b);
+
+            let (a_a, a_m) = a.to_bits();
+            let (b_a, b_m) = b.to_bits();
+
+            for x in 0u32..=255 {
+                let xaddr = x << 24;
+                let in_a = (xaddr & a_m) == a_a;
+                let in_b = (xaddr & b_m) == b_a;
+                let in_result = match result {
+                    Some(r) => {
+                        let (r_a, r_m) = r.to_bits();
+                        (xaddr & r_m) == r_a
+                    }
+                    None => false,
+                };
+
+                if in_a || in_b {
+                    if let Some(..) = result {
+                        prop_assert!(
+                            in_result,
+                            "x={x} in A∪B but not in merge result: a={a}, b={b}, result={result:?}"
+                        );
+                    }
+                }
+                if in_result {
+                    prop_assert!(
+                        in_a || in_b,
+                        "x={x} in merge result but not in A∪B: a={a}, b={b}, result={result:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
         fn prop_ipv6_intersects_is_not_disjoint(
             a in arb_ipv6_network(),
             b in arb_ipv6_network(),
@@ -5148,5 +5431,194 @@ mod test {
             let supernet = decomposed[0].supernet_for(&decomposed[1..]);
             prop_assert_eq!(supernet, a, "supernet_for(A\\B ∪ A∩B) must equal A");
         }
+
+        #[test]
+        fn prop_ipv6_merge_commutativity(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            prop_assert_eq!(a.merge(&b), b.merge(&a));
+        }
+
+        #[test]
+        fn prop_ipv6_merge_self_is_self(
+            a in arb_ipv6_network(),
+        ) {
+            prop_assert_eq!(a.merge(&a), Some(a));
+        }
+
+        #[test]
+        fn prop_ipv6_merge_result_contains_both(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            if let Some(c) = a.merge(&b) {
+                prop_assert!(c.contains(&a), "merge result {c} must contain {a}");
+                prop_assert!(c.contains(&b), "merge result {c} must contain {b}");
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_merge_is_normalized(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            if let Some(c) = a.merge(&b) {
+                let (addr, mask) = c.to_bits();
+                prop_assert_eq!(addr & mask, addr, "merge result not normalized: a={}, b={}, c={}", a, b, c);
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_merge_equals_supernet_when_some(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            if let Some(c) = a.merge(&b) {
+                let supernet = a.supernet_for(&[b]);
+                prop_assert_eq!(c, supernet, "merge must equal supernet_for when Some: a={}, b={}", a, b);
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_merge_membership_brute_force(
+            a_addr in 0u128..=255,
+            a_mask in 0u128..=255,
+            b_addr in 0u128..=255,
+            b_mask in 0u128..=255,
+        ) {
+            let a = Ipv6Network::from_bits((a_addr & a_mask) << 120, a_mask << 120);
+            let b = Ipv6Network::from_bits((b_addr & b_mask) << 120, b_mask << 120);
+            let result = a.merge(&b);
+
+            let (a_a, a_m) = a.to_bits();
+            let (b_a, b_m) = b.to_bits();
+
+            for x in 0u128..=255 {
+                let xaddr = x << 120;
+                let in_a = (xaddr & a_m) == a_a;
+                let in_b = (xaddr & b_m) == b_a;
+                let in_result = match result {
+                    Some(r) => {
+                        let (r_a, r_m) = r.to_bits();
+                        (xaddr & r_m) == r_a
+                    }
+                    None => false,
+                };
+
+                if in_a || in_b {
+                    if let Some(..) = result {
+                        prop_assert!(
+                            in_result,
+                            "x={x} in A∪B but not in merge result: a={a}, b={b}, result={result:?}"
+                        );
+                    }
+                }
+                if in_result {
+                    prop_assert!(
+                        in_a || in_b,
+                        "x={x} in merge result but not in A∪B: a={a}, b={b}, result={result:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ipv4_merge_identical() {
+        let a = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        assert_eq!(Some(a), a.merge(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_adjacent_contiguous() {
+        // 192.168.0.0/24 + 192.168.1.0/24 = 192.168.0.0/23
+        let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        let expected = Ipv4Network::parse("192.168.0.0/23").unwrap();
+        assert_eq!(Some(expected), a.merge(&b));
+        assert_eq!(Some(expected), b.merge(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_adjacent_non_contiguous() {
+        let a = Ipv4Network::parse("192.168.0.0/255.255.255.0").unwrap();
+        let b = Ipv4Network::parse("192.168.2.0/255.255.255.0").unwrap();
+        let expected = Ipv4Network::parse("192.168.0.0/255.255.253.0").unwrap();
+        assert_eq!(Some(expected), a.merge(&b));
+        assert_eq!(Some(expected), b.merge(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_non_adjacent() {
+        // 192.168.0.0/24 + 192.168.3.0/24: d = 0x300 (bits 8 and 9 set) -> None
+        let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        let b = Ipv4Network::parse("192.168.3.0/24").unwrap();
+        assert_eq!(None, a.merge(&b));
+        assert_eq!(None, b.merge(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_containment() {
+        // 10.0.0.0/8 contains 10.1.0.0/16
+        let a = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        let b = Ipv4Network::parse("10.1.0.0/16").unwrap();
+        assert_eq!(Some(a), a.merge(&b));
+        assert_eq!(Some(a), b.merge(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_different_masks_no_containment() {
+        // Different masks and neither contains the other.
+        let a = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        let b = Ipv4Network::parse("172.16.0.0/16").unwrap();
+        assert_eq!(None, a.merge(&b));
+        assert_eq!(None, b.merge(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_non_contiguous_masks() {
+        let a = Ipv4Network::parse("10.0.0.1/255.255.0.255").unwrap();
+        let b = Ipv4Network::parse("10.1.0.1/255.255.0.255").unwrap();
+        let expected = Ipv4Network::parse("10.0.0.1/255.254.0.255").unwrap();
+        assert_eq!(Some(expected), a.merge(&b));
+        assert_eq!(Some(expected), b.merge(&a));
+    }
+
+    #[test]
+    fn ipv6_merge_adjacent() {
+        // 2001:db8::/48 + 2001:db8:1::/48 = 2001:db8::/47
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        let expected = Ipv6Network::parse("2001:db8::/47").unwrap();
+        assert_eq!(Some(expected), a.merge(&b));
+        assert_eq!(Some(expected), b.merge(&a));
+    }
+
+    #[test]
+    fn ipv6_merge_containment() {
+        // 2001:db8::/32 contains 2001:db8:1::/48
+        let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        assert_eq!(Some(a), a.merge(&b));
+        assert_eq!(Some(a), b.merge(&a));
+    }
+
+    #[test]
+    fn ipv6_merge_non_contiguous() {
+        // Non-contiguous mask: ffff:ff00::ffff, addresses differ by 1 bit in the mask.
+        let a = Ipv6Network::parse("2001::1/ffff:ff00::ffff").unwrap();
+        let b = Ipv6Network::parse("2001:100::1/ffff:ff00::ffff").unwrap();
+        let expected = Ipv6Network::parse("2001::1/ffff:fe00::ffff").unwrap();
+        assert_eq!(Some(expected), a.merge(&b));
+        assert_eq!(Some(expected), b.merge(&a));
+    }
+
+    #[test]
+    fn ipv6_merge_non_contiguous_none() {
+        // Non-contiguous mask, addresses differ by 2 bits -> None.
+        let a = Ipv6Network::parse("2001::1/ffff:ff00::ffff").unwrap();
+        let b = Ipv6Network::parse("2001:300::1/ffff:ff00::ffff").unwrap();
+        assert_eq!(None, a.merge(&b));
     }
 }
