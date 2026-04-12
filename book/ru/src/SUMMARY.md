@@ -7,3 +7,4 @@
   - [Булев гиперкуб и грани](2-structure/hypercube.md)
   - [Алгебра GF(2) и аффинные подпространства](2-structure/algebra.md)
   - [Контигуальные сети как интервалы](2-structure/2.2-intervals.md)
+  - [Z-порядок и линейное упорядочение](2-structure/2.3-z-order.md)
