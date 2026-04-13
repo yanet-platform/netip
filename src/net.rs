@@ -270,6 +270,111 @@ impl IpNetwork {
         Ok(Self::V6(net))
     }
 
+    /// Returns the IP address of this network.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    ///
+    /// use netip::IpNetwork;
+    ///
+    /// assert_eq!(
+    ///     IpAddr::V4(Ipv4Addr::new(192, 168, 0, 0)),
+    ///     IpNetwork::parse("192.168.0.0/24").unwrap().addr()
+    /// );
+    ///
+    /// assert_eq!(
+    ///     IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0)),
+    ///     IpNetwork::parse("2001:db8::/32").unwrap().addr()
+    /// );
+    /// ```
+    #[inline]
+    pub const fn addr(&self) -> IpAddr {
+        match self {
+            Self::V4(net) => IpAddr::V4(*net.addr()),
+            Self::V6(net) => IpAddr::V6(*net.addr()),
+        }
+    }
+
+    /// Returns the IP mask of this network.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    ///
+    /// use netip::IpNetwork;
+    ///
+    /// assert_eq!(
+    ///     IpAddr::V4(Ipv4Addr::new(255, 255, 255, 0)),
+    ///     IpNetwork::parse("192.168.0.0/24").unwrap().mask()
+    /// );
+    ///
+    /// assert_eq!(
+    ///     IpAddr::V6(Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0)),
+    ///     IpNetwork::parse("2001:db8::/32").unwrap().mask()
+    /// );
+    /// ```
+    #[inline]
+    pub const fn mask(&self) -> IpAddr {
+        match self {
+            Self::V4(net) => IpAddr::V4(*net.mask()),
+            Self::V6(net) => IpAddr::V6(*net.mask()),
+        }
+    }
+
+    /// Returns `true` if this IP network fully contains the specified one.
+    ///
+    /// Returns `false` for networks of different address families.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::IpNetwork;
+    ///
+    /// let a = IpNetwork::parse("192.168.0.0/16").unwrap();
+    /// let b = IpNetwork::parse("192.168.1.0/24").unwrap();
+    /// assert!(a.contains(&b));
+    /// assert!(!b.contains(&a));
+    ///
+    /// // Different address families.
+    /// let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
+    /// assert!(!a.contains(&v6));
+    /// ```
+    #[inline]
+    pub const fn contains(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::V4(a), Self::V4(b)) => a.contains(b),
+            (Self::V6(a), Self::V6(b)) => a.contains(b),
+            _ => false,
+        }
+    }
+
+    /// Converts this network to a contiguous network by clearing mask bits
+    /// set to one after the first zero bit.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::IpNetwork;
+    ///
+    /// let net = IpNetwork::parse("192.168.0.1/255.255.0.255").unwrap();
+    /// let expected = IpNetwork::parse("192.168.0.0/16").unwrap();
+    /// assert_eq!(expected, net.to_contiguous());
+    ///
+    /// let net = IpNetwork::parse("2001:db8::1/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+    /// let expected = IpNetwork::parse("2001:db8::/40").unwrap();
+    /// assert_eq!(expected, net.to_contiguous());
+    /// ```
+    #[inline]
+    pub fn to_contiguous(&self) -> Self {
+        match self {
+            Self::V4(net) => Self::V4(net.to_contiguous()),
+            Self::V6(net) => Self::V6(net.to_contiguous()),
+        }
+    }
+
     /// Checks whether this network is a contiguous, i.e. contains mask with
     /// only leading bits set to one contiguously.
     #[inline]
@@ -5615,6 +5720,111 @@ mod test {
         );
     }
 
+    #[test]
+    fn ipnetwork_addr_v4() {
+        let net = IpNetwork::parse("192.168.1.0/24").unwrap();
+        assert_eq!(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 0)), net.addr());
+    }
+
+    #[test]
+    fn ipnetwork_addr_v6() {
+        let net = IpNetwork::parse("2001:db8::/32").unwrap();
+        assert_eq!(IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0)), net.addr());
+    }
+
+    #[test]
+    fn ipnetwork_mask_v4() {
+        let net = IpNetwork::parse("10.0.0.0/8").unwrap();
+        assert_eq!(IpAddr::V4(Ipv4Addr::new(255, 0, 0, 0)), net.mask());
+    }
+
+    #[test]
+    fn ipnetwork_mask_v6() {
+        let net = IpNetwork::parse("2001:db8::/32").unwrap();
+        assert_eq!(IpAddr::V6(Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0)), net.mask());
+    }
+
+    #[test]
+    fn ipnetwork_mask_non_contiguous_v4() {
+        let net = IpNetwork::parse("192.168.0.1/255.255.0.255").unwrap();
+        assert_eq!(IpAddr::V4(Ipv4Addr::new(255, 255, 0, 255)), net.mask());
+    }
+
+    #[test]
+    fn ipnetwork_mask_non_contiguous_v6() {
+        let net = IpNetwork::parse("2001:db8::1/ffff:ffff::ffff:ffff:0:0").unwrap();
+        assert_eq!(
+            IpAddr::V6(Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0xffff, 0xffff, 0, 0)),
+            net.mask()
+        );
+    }
+
+    #[test]
+    fn ipnetwork_contains_v4() {
+        let a = IpNetwork::parse("192.168.0.0/16").unwrap();
+        let b = IpNetwork::parse("192.168.1.0/24").unwrap();
+        assert!(a.contains(&b));
+        assert!(!b.contains(&a));
+    }
+
+    #[test]
+    fn ipnetwork_contains_v6() {
+        let a = IpNetwork::parse("2001:db8::/32").unwrap();
+        let b = IpNetwork::parse("2001:db8:1::/48").unwrap();
+        assert!(a.contains(&b));
+        assert!(!b.contains(&a));
+    }
+
+    #[test]
+    fn ipnetwork_contains_different_families() {
+        let v4 = IpNetwork::parse("10.0.0.0/8").unwrap();
+        let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
+        assert!(!v4.contains(&v6));
+        assert!(!v6.contains(&v4));
+    }
+
+    #[test]
+    fn ipnetwork_contains_non_contiguous_v4() {
+        let a = IpNetwork::parse("10.0.0.0/255.0.0.0").unwrap();
+        let b = IpNetwork::parse("10.0.0.1/255.0.0.255").unwrap();
+        assert!(a.contains(&b));
+        assert!(!b.contains(&a));
+    }
+
+    #[test]
+    fn ipnetwork_contains_non_contiguous_v6() {
+        let a = IpNetwork::parse("2001:db8::/ffff:ffff::").unwrap();
+        let b = IpNetwork::parse("2001:db8::1/ffff:ffff::ffff").unwrap();
+        assert!(a.contains(&b));
+        assert!(!b.contains(&a));
+    }
+
+    #[test]
+    fn ipnetwork_to_contiguous_v4() {
+        let net = IpNetwork::parse("192.168.0.1/255.255.0.255").unwrap();
+        let expected = IpNetwork::parse("192.168.0.0/16").unwrap();
+        assert_eq!(expected, net.to_contiguous());
+    }
+
+    #[test]
+    fn ipnetwork_to_contiguous_v6() {
+        let net = IpNetwork::parse("2001:db8::1/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        let expected = IpNetwork::parse("2001:db8::/40").unwrap();
+        assert_eq!(expected, net.to_contiguous());
+    }
+
+    #[test]
+    fn ipnetwork_to_contiguous_already_contiguous_v4() {
+        let net = IpNetwork::parse("10.0.0.0/8").unwrap();
+        assert_eq!(net, net.to_contiguous());
+    }
+
+    #[test]
+    fn ipnetwork_to_contiguous_already_contiguous_v6() {
+        let net = IpNetwork::parse("2001:db8::/32").unwrap();
+        assert_eq!(net, net.to_contiguous());
+    }
+
     fn arb_ipv4_network() -> impl Strategy<Value = Ipv4Network> {
         (any::<u32>(), any::<u32>()).prop_map(|(a, m)| Ipv4Network::from_bits(a, m))
     }
@@ -6359,6 +6569,47 @@ mod test {
             after_addrs.dedup();
 
             prop_assert_eq!(before_addrs, after_addrs);
+        }
+
+        #[test]
+        fn ipnetwork_addr_mask_roundtrip_v4(net in arb_ipv4_network()) {
+            let ip_net = IpNetwork::V4(net);
+            prop_assert_eq!(IpAddr::V4(*net.addr()), ip_net.addr());
+            prop_assert_eq!(IpAddr::V4(*net.mask()), ip_net.mask());
+        }
+
+        #[test]
+        fn ipnetwork_contains_self_v4(net in arb_ipv4_network()) {
+            let ip_net = IpNetwork::V4(net);
+            prop_assert!(ip_net.contains(&ip_net));
+        }
+
+        #[test]
+        fn ipnetwork_contains_self_v6(net in arb_ipv6_network()) {
+            let ip_net = IpNetwork::V6(net);
+            prop_assert!(ip_net.contains(&ip_net));
+        }
+
+        #[test]
+        fn ipnetwork_to_contiguous_is_contiguous_v4(net in arb_ipv4_network()) {
+            prop_assert!(IpNetwork::V4(net).to_contiguous().is_contiguous());
+        }
+
+        #[test]
+        fn ipnetwork_to_contiguous_is_contiguous_v6(net in arb_ipv6_network()) {
+            prop_assert!(IpNetwork::V6(net).to_contiguous().is_contiguous());
+        }
+
+        #[test]
+        fn ipnetwork_to_contiguous_contains_original_v4(net in arb_ipv4_network()) {
+            let ip_net = IpNetwork::V4(net);
+            prop_assert!(ip_net.to_contiguous().contains(&ip_net));
+        }
+
+        #[test]
+        fn ipnetwork_to_contiguous_contains_original_v6(net in arb_ipv6_network()) {
+            let ip_net = IpNetwork::V6(net);
+            prop_assert!(ip_net.to_contiguous().contains(&ip_net));
         }
     }
 }
