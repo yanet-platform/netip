@@ -1360,6 +1360,11 @@ impl Iterator for Ipv4NetworkAddrs {
     }
 
     #[inline]
+    fn count(self) -> usize {
+        self.len()
+    }
+
+    #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         if self.front > self.back {
             return (0, Some(0));
@@ -2402,6 +2407,12 @@ impl Iterator for Ipv6NetworkAddrs {
         Some(Ipv6Addr::from_bits(ipv6_bits_from_host_index(
             self.base, self.mask, index,
         )))
+    }
+
+    #[inline]
+    fn count(self) -> usize {
+        let (n, ..) = self.size_hint();
+        n
     }
 
     #[inline]
