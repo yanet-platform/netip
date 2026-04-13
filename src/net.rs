@@ -3133,7 +3133,8 @@ fn ip_aggregate<T: Aggregate>(nets: &mut [T]) -> usize {
                 let mut changed = true;
 
                 while core::mem::replace(&mut changed, false) {
-                    for j in 0..=w {
+                    let mut j = 0;
+                    while j <= w {
                         if j != k
                             && let Some(m) = nets[k].merge(&nets[j])
                         {
@@ -3148,6 +3149,7 @@ fn ip_aggregate<T: Aggregate>(nets: &mut [T]) -> usize {
                             changed = true;
                             break;
                         }
+                        j += 1;
                     }
                 }
             }
