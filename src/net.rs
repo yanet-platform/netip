@@ -3012,6 +3012,156 @@ impl BinarySplit for Ipv6Network {
     }
 }
 
+/// Aggregates IPv4 networks in place: removes duplicates, eliminates networks
+/// contained in others, and merges adjacent siblings.
+///
+/// Returns the aggregated subslice. The union of addresses in the result
+/// equals the union of addresses in the input — no addresses are added or
+/// removed.
+///
+/// Works correctly with both contiguous (CIDR) and non-contiguous masks.
+/// Zero allocations — the algorithm operates entirely within the input slice.
+///
+/// # Examples
+///
+/// ```
+/// use netip::{Ipv4Network, ipv4_aggregate};
+///
+/// let mut nets = [
+///     Ipv4Network::parse("192.168.0.0/24").unwrap(),
+///     Ipv4Network::parse("192.168.1.0/24").unwrap(),
+///     Ipv4Network::parse("10.0.0.0/8").unwrap(),
+///     Ipv4Network::parse("10.1.0.0/16").unwrap(),
+/// ];
+///
+/// let result = ipv4_aggregate(&mut nets);
+/// assert_eq!(result.len(), 2);
+/// assert_eq!(result[0], Ipv4Network::parse("10.0.0.0/8").unwrap());
+/// assert_eq!(result[1], Ipv4Network::parse("192.168.0.0/23").unwrap());
+/// ```
+pub fn ipv4_aggregate(nets: &mut [Ipv4Network]) -> &mut [Ipv4Network] {
+    let len = ip_aggregate(nets);
+    &mut nets[..len]
+}
+
+/// Aggregates IPv6 networks in place: removes duplicates, eliminates networks
+/// contained in others, and merges adjacent siblings.
+///
+/// Returns the aggregated subslice. The union of addresses in the result
+/// equals the union of addresses in the input — no addresses are added or
+/// removed.
+///
+/// Works correctly with both contiguous (CIDR) and non-contiguous masks.
+/// Zero allocations — the algorithm operates entirely within the input slice.
+///
+/// # Examples
+///
+/// ```
+/// use netip::{Ipv6Network, ipv6_aggregate};
+///
+/// let mut nets = [
+///     Ipv6Network::parse("2001:db8::/48").unwrap(),
+///     Ipv6Network::parse("2001:db8:1::/48").unwrap(),
+///     Ipv6Network::parse("fe80::/10").unwrap(),
+///     Ipv6Network::parse("fe80::/64").unwrap(),
+/// ];
+///
+/// let result = ipv6_aggregate(&mut nets);
+/// assert_eq!(result.len(), 2);
+/// assert_eq!(result[0], Ipv6Network::parse("2001:db8::/47").unwrap());
+/// assert_eq!(result[1], Ipv6Network::parse("fe80::/10").unwrap());
+/// ```
+pub fn ipv6_aggregate(nets: &mut [Ipv6Network]) -> &mut [Ipv6Network] {
+    let len = ip_aggregate(nets);
+    &mut nets[..len]
+}
+
+trait Aggregate: Ord + Copy {
+    fn merge(&self, other: &Self) -> Option<Self>;
+}
+
+impl Aggregate for Ipv4Network {
+    #[inline]
+    fn merge(&self, other: &Self) -> Option<Self> {
+        self.merge(other)
+    }
+}
+
+impl Aggregate for Ipv6Network {
+    #[inline]
+    fn merge(&self, other: &Self) -> Option<Self> {
+        self.merge(other)
+    }
+}
+
+fn ip_aggregate<T: Aggregate>(nets: &mut [T]) -> usize {
+    if nets.len() <= 1 {
+        return nets.len();
+    }
+
+    nets.sort_unstable();
+
+    // Single-pass merge with full stack scan and collapse.
+    //
+    // For each candidate we scan the entire stack for a merge partner.
+    // Merge covers identical networks, containment in either direction,
+    // and same-mask one-bit-diff siblings.
+    //
+    // After a successful merge at position k the result may unlock new
+    // merge opportunities with other stack entries (e.g. two /24 sibling
+    // merges produce two /23s that are themselves siblings).
+    //
+    // We handle this by *collapsing*: repeatedly scanning the stack for
+    // anything that merges with nets[k] until no more matches are found.
+    let mut w = 0usize;
+    for r in 1..nets.len() {
+        let mut merged_at = None;
+
+        for k in (0..=w).rev() {
+            if let Some(m) = nets[k].merge(&nets[r]) {
+                // Skip collapse when the stack entry absorbed the candidate
+                // without changing (containment / dedup) — no new merge
+                // opportunities can arise.
+                merged_at = Some((k, nets[k] != m));
+                nets[k] = m;
+                break;
+            }
+        }
+
+        match merged_at {
+            Some((mut k, true)) => {
+                let mut changed = true;
+
+                while core::mem::replace(&mut changed, false) {
+                    for j in 0..=w {
+                        if j != k
+                            && let Some(m) = nets[k].merge(&nets[j])
+                        {
+                            nets[k] = m;
+                            for s in j..w {
+                                nets[s] = nets[s + 1];
+                            }
+                            w -= 1;
+                            if j < k {
+                                k -= 1;
+                            }
+                            changed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            Some(..) => {}
+            None => {
+                w += 1;
+                nets[w] = nets[r];
+            }
+        }
+    }
+
+    w + 1
+}
+
 /// An error that occurs when parsing a contiguous IP network.
 #[derive(Debug, PartialEq)]
 pub enum ContiguousIpNetParseError {
@@ -4957,6 +5107,292 @@ mod test {
         assert_eq!(Some(expected), a.intersection(&b));
     }
 
+    #[test]
+    fn ipv4_merge_identical() {
+        let a = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        assert_eq!(Some(a), a.merge(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_adjacent_contiguous() {
+        // 192.168.0.0/24 + 192.168.1.0/24 = 192.168.0.0/23
+        let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        let expected = Ipv4Network::parse("192.168.0.0/23").unwrap();
+        assert_eq!(Some(expected), a.merge(&b));
+        assert_eq!(Some(expected), b.merge(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_adjacent_non_contiguous() {
+        let a = Ipv4Network::parse("192.168.0.0/255.255.255.0").unwrap();
+        let b = Ipv4Network::parse("192.168.2.0/255.255.255.0").unwrap();
+        let expected = Ipv4Network::parse("192.168.0.0/255.255.253.0").unwrap();
+        assert_eq!(Some(expected), a.merge(&b));
+        assert_eq!(Some(expected), b.merge(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_non_adjacent() {
+        // 192.168.0.0/24 + 192.168.3.0/24: d = 0x300 (bits 8 and 9 set) -> None
+        let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        let b = Ipv4Network::parse("192.168.3.0/24").unwrap();
+        assert_eq!(None, a.merge(&b));
+        assert_eq!(None, b.merge(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_containment() {
+        // 10.0.0.0/8 contains 10.1.0.0/16
+        let a = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        let b = Ipv4Network::parse("10.1.0.0/16").unwrap();
+        assert_eq!(Some(a), a.merge(&b));
+        assert_eq!(Some(a), b.merge(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_different_masks_no_containment() {
+        // Different masks and neither contains the other.
+        let a = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        let b = Ipv4Network::parse("172.16.0.0/16").unwrap();
+        assert_eq!(None, a.merge(&b));
+        assert_eq!(None, b.merge(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_non_contiguous_masks() {
+        let a = Ipv4Network::parse("10.0.0.1/255.255.0.255").unwrap();
+        let b = Ipv4Network::parse("10.1.0.1/255.255.0.255").unwrap();
+        let expected = Ipv4Network::parse("10.0.0.1/255.254.0.255").unwrap();
+        assert_eq!(Some(expected), a.merge(&b));
+        assert_eq!(Some(expected), b.merge(&a));
+    }
+
+    #[test]
+    fn ipv6_merge_adjacent() {
+        // 2001:db8::/48 + 2001:db8:1::/48 = 2001:db8::/47
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        let expected = Ipv6Network::parse("2001:db8::/47").unwrap();
+        assert_eq!(Some(expected), a.merge(&b));
+        assert_eq!(Some(expected), b.merge(&a));
+    }
+
+    #[test]
+    fn ipv6_merge_containment() {
+        // 2001:db8::/32 contains 2001:db8:1::/48
+        let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        assert_eq!(Some(a), a.merge(&b));
+        assert_eq!(Some(a), b.merge(&a));
+    }
+
+    #[test]
+    fn ipv6_merge_non_contiguous() {
+        // Non-contiguous mask: ffff:ff00::ffff, addresses differ by 1 bit in the mask.
+        let a = Ipv6Network::parse("2001::1/ffff:ff00::ffff").unwrap();
+        let b = Ipv6Network::parse("2001:100::1/ffff:ff00::ffff").unwrap();
+        let expected = Ipv6Network::parse("2001::1/ffff:fe00::ffff").unwrap();
+        assert_eq!(Some(expected), a.merge(&b));
+        assert_eq!(Some(expected), b.merge(&a));
+    }
+
+    #[test]
+    fn ipv6_merge_non_contiguous_none() {
+        // Non-contiguous mask, addresses differ by 2 bits -> None.
+        let a = Ipv6Network::parse("2001::1/ffff:ff00::ffff").unwrap();
+        let b = Ipv6Network::parse("2001:300::1/ffff:ff00::ffff").unwrap();
+        assert_eq!(None, a.merge(&b));
+    }
+
+    #[test]
+    fn ipv4_aggregate_empty() {
+        let result = ipv4_aggregate(&mut []);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn ipv4_aggregate_single() {
+        let net = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        let mut nets = [net];
+        let result = ipv4_aggregate(&mut nets);
+        assert_eq!(result, &[net]);
+    }
+
+    #[test]
+    fn ipv4_aggregate_duplicates() {
+        let net = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        let mut nets = [net, net, net];
+        let result = ipv4_aggregate(&mut nets);
+        assert_eq!(result, &[net]);
+    }
+
+    #[test]
+    fn ipv4_aggregate_containment() {
+        let mut nets = [
+            Ipv4Network::parse("10.0.0.0/8").unwrap(),
+            Ipv4Network::parse("10.1.0.0/16").unwrap(),
+            Ipv4Network::parse("10.1.1.0/24").unwrap(),
+        ];
+        let result = ipv4_aggregate(&mut nets);
+        assert_eq!(result, &[Ipv4Network::parse("10.0.0.0/8").unwrap()]);
+    }
+
+    #[test]
+    fn ipv4_aggregate_simple_merge() {
+        let mut nets = [
+            Ipv4Network::parse("192.168.0.0/24").unwrap(),
+            Ipv4Network::parse("192.168.1.0/24").unwrap(),
+        ];
+        let result = ipv4_aggregate(&mut nets);
+        assert_eq!(result, &[Ipv4Network::parse("192.168.0.0/23").unwrap()]);
+    }
+
+    #[test]
+    fn ipv4_aggregate_multi_level_merge() {
+        let mut nets = [
+            Ipv4Network::parse("192.168.0.0/24").unwrap(),
+            Ipv4Network::parse("192.168.1.0/24").unwrap(),
+            Ipv4Network::parse("192.168.2.0/24").unwrap(),
+            Ipv4Network::parse("192.168.3.0/24").unwrap(),
+        ];
+        let result = ipv4_aggregate(&mut nets);
+        assert_eq!(result, &[Ipv4Network::parse("192.168.0.0/22").unwrap()]);
+    }
+
+    #[test]
+    fn ipv4_aggregate_non_adjacent() {
+        let mut nets = [
+            Ipv4Network::parse("192.168.0.0/24").unwrap(),
+            Ipv4Network::parse("192.168.3.0/24").unwrap(),
+        ];
+        let result = ipv4_aggregate(&mut nets);
+        assert_eq!(
+            result,
+            &[
+                Ipv4Network::parse("192.168.0.0/24").unwrap(),
+                Ipv4Network::parse("192.168.3.0/24").unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ipv4_aggregate_mixed_containment_and_merge() {
+        let mut nets = [
+            Ipv4Network::parse("10.0.0.0/8").unwrap(),
+            Ipv4Network::parse("10.1.0.0/16").unwrap(),
+            Ipv4Network::parse("192.168.0.0/24").unwrap(),
+            Ipv4Network::parse("192.168.1.0/24").unwrap(),
+        ];
+        let result = ipv4_aggregate(&mut nets);
+        assert_eq!(
+            result,
+            &[
+                Ipv4Network::parse("10.0.0.0/8").unwrap(),
+                Ipv4Network::parse("192.168.0.0/23").unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ipv4_aggregate_already_minimal() {
+        let mut nets = [
+            Ipv4Network::parse("10.0.0.0/8").unwrap(),
+            Ipv4Network::parse("172.16.0.0/12").unwrap(),
+            Ipv4Network::parse("192.168.0.0/16").unwrap(),
+        ];
+        let result = ipv4_aggregate(&mut nets);
+        assert_eq!(
+            result,
+            &[
+                Ipv4Network::parse("10.0.0.0/8").unwrap(),
+                Ipv4Network::parse("172.16.0.0/12").unwrap(),
+                Ipv4Network::parse("192.168.0.0/16").unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ipv4_aggregate_non_contiguous_containment() {
+        // Non-contiguous mask containment: K' contains N but K (between them
+        // in sort order) does not.
+        let mut nets = [
+            Ipv4Network::parse("10.0.0.1/255.0.0.255").unwrap(),   // K'
+            Ipv4Network::parse("10.1.0.0/255.255.0.0").unwrap(),   // K
+            Ipv4Network::parse("10.2.0.1/255.255.0.255").unwrap(), // N (contained in K')
+        ];
+        let result = ipv4_aggregate(&mut nets);
+        assert_eq!(
+            result,
+            &[
+                Ipv4Network::parse("10.0.0.1/255.0.0.255").unwrap(),
+                Ipv4Network::parse("10.1.0.0/255.255.0.0").unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ipv4_aggregate_non_contiguous_merge_breaks_sort_order() {
+        // After merging B+C the result (0, 0x80000000) sorts before A (0, 0x80000001)
+        // and contains A.  Without re-sort the containment phase misses this.
+        let mut nets = [
+            Ipv4Network::from_bits(0, 0x80000001), // A
+            Ipv4Network::from_bits(0, 0x80000002), // B
+            Ipv4Network::from_bits(2, 0x80000002), // C
+        ];
+        let result = ipv4_aggregate(&mut nets);
+        assert_eq!(result, &[Ipv4Network::from_bits(0, 0x80000000)]);
+    }
+
+    #[test]
+    fn ipv4_aggregate_non_contiguous_merge() {
+        // Non-contiguous mask merge: same mask, addresses differ by one bit.
+        let mut nets = [
+            Ipv4Network::parse("10.0.0.1/255.0.0.255").unwrap(),
+            Ipv4Network::parse("10.0.0.0/255.0.0.255").unwrap(),
+        ];
+        let result = ipv4_aggregate(&mut nets);
+        assert_eq!(result, &[Ipv4Network::parse("10.0.0.0/255.0.0.254").unwrap()]);
+    }
+
+    #[test]
+    fn ipv4_aggregate_full_octet() {
+        // 256 /24s covering 10.0.0.0/16.
+        let mut nets: Vec<_> = (0..=255u32)
+            .map(|i| Ipv4Network::from_bits((10 << 24) | (0 << 16) | (i << 8), 0xFFFFFF00))
+            .collect();
+        let result = ipv4_aggregate(&mut nets);
+        assert_eq!(result, &[Ipv4Network::parse("10.0.0.0/16").unwrap()]);
+    }
+
+    #[test]
+    fn ipv6_aggregate_simple_merge() {
+        let mut nets = [
+            Ipv6Network::parse("2001:db8::/48").unwrap(),
+            Ipv6Network::parse("2001:db8:1::/48").unwrap(),
+        ];
+        let result = ipv6_aggregate(&mut nets);
+        assert_eq!(result, &[Ipv6Network::parse("2001:db8::/47").unwrap()]);
+    }
+
+    #[test]
+    fn ipv6_aggregate_containment_and_merge() {
+        let mut nets = [
+            Ipv6Network::parse("fe80::/10").unwrap(),
+            Ipv6Network::parse("fe80::/64").unwrap(),
+            Ipv6Network::parse("2001:db8::/48").unwrap(),
+            Ipv6Network::parse("2001:db8:1::/48").unwrap(),
+        ];
+        let result = ipv6_aggregate(&mut nets);
+        assert_eq!(
+            result,
+            &[
+                Ipv6Network::parse("2001:db8::/47").unwrap(),
+                Ipv6Network::parse("fe80::/10").unwrap(),
+            ]
+        );
+    }
+
     fn arb_ipv4_network() -> impl Strategy<Value = Ipv4Network> {
         (any::<u32>(), any::<u32>()).prop_map(|(a, m)| Ipv4Network::from_bits(a, m))
     }
@@ -5522,103 +5958,125 @@ mod test {
                 }
             }
         }
-    }
 
-    #[test]
-    fn ipv4_merge_identical() {
-        let a = Ipv4Network::parse("192.168.1.0/24").unwrap();
-        assert_eq!(Some(a), a.merge(&a));
-    }
+        #[test]
+        fn ipv4_aggregate_preserves_addresses(
+            raw_nets in prop::collection::vec(
+                (0u32..=255, 24u8..=28),
+                1..=32,
+            )
+        ) {
+            let mut nets: Vec<Ipv4Network> = raw_nets
+                .iter()
+                .map(|&(third_octet, prefix)| {
+                    let mask = if prefix == 0 { 0 } else { !0u32 << (32 - prefix) };
+                    let addr = (192 << 24) | (168 << 16) | (third_octet << 8);
+                    Ipv4Network::from_bits(addr, mask)
+                })
+                .collect();
 
-    #[test]
-    fn ipv4_merge_adjacent_contiguous() {
-        // 192.168.0.0/24 + 192.168.1.0/24 = 192.168.0.0/23
-        let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
-        let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
-        let expected = Ipv4Network::parse("192.168.0.0/23").unwrap();
-        assert_eq!(Some(expected), a.merge(&b));
-        assert_eq!(Some(expected), b.merge(&a));
-    }
+            let mut before_addrs: Vec<u32> = Vec::new();
+            for net in &nets {
+                for addr in (*net).addrs() {
+                    before_addrs.push(u32::from_be_bytes(addr.octets()));
+                }
+            }
+            before_addrs.sort_unstable();
+            before_addrs.dedup();
 
-    #[test]
-    fn ipv4_merge_adjacent_non_contiguous() {
-        let a = Ipv4Network::parse("192.168.0.0/255.255.255.0").unwrap();
-        let b = Ipv4Network::parse("192.168.2.0/255.255.255.0").unwrap();
-        let expected = Ipv4Network::parse("192.168.0.0/255.255.253.0").unwrap();
-        assert_eq!(Some(expected), a.merge(&b));
-        assert_eq!(Some(expected), b.merge(&a));
-    }
+            let result = ipv4_aggregate(&mut nets);
 
-    #[test]
-    fn ipv4_merge_non_adjacent() {
-        // 192.168.0.0/24 + 192.168.3.0/24: d = 0x300 (bits 8 and 9 set) -> None
-        let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
-        let b = Ipv4Network::parse("192.168.3.0/24").unwrap();
-        assert_eq!(None, a.merge(&b));
-        assert_eq!(None, b.merge(&a));
-    }
+            let mut after_addrs: Vec<u32> = Vec::new();
+            for net in result.iter() {
+                for addr in (*net).addrs() {
+                    after_addrs.push(u32::from_be_bytes(addr.octets()));
+                }
+            }
+            after_addrs.sort_unstable();
+            after_addrs.dedup();
 
-    #[test]
-    fn ipv4_merge_containment() {
-        // 10.0.0.0/8 contains 10.1.0.0/16
-        let a = Ipv4Network::parse("10.0.0.0/8").unwrap();
-        let b = Ipv4Network::parse("10.1.0.0/16").unwrap();
-        assert_eq!(Some(a), a.merge(&b));
-        assert_eq!(Some(a), b.merge(&a));
-    }
+            prop_assert_eq!(before_addrs, after_addrs);
+        }
 
-    #[test]
-    fn ipv4_merge_different_masks_no_containment() {
-        // Different masks and neither contains the other.
-        let a = Ipv4Network::parse("10.0.0.0/8").unwrap();
-        let b = Ipv4Network::parse("172.16.0.0/16").unwrap();
-        assert_eq!(None, a.merge(&b));
-        assert_eq!(None, b.merge(&a));
-    }
+        #[test]
+        fn ipv4_aggregate_result_is_minimal(
+            raw_nets in prop::collection::vec(
+                (0u32..=255, 24u8..=28),
+                1..=32,
+            )
+        ) {
+            let mut nets: Vec<Ipv4Network> = raw_nets
+                .iter()
+                .map(|&(third_octet, prefix)| {
+                    let mask = if prefix == 0 { 0 } else { !0u32 << (32 - prefix) };
+                    let addr = (192 << 24) | (168 << 16) | (third_octet << 8);
+                    Ipv4Network::from_bits(addr, mask)
+                })
+                .collect();
 
-    #[test]
-    fn ipv4_merge_non_contiguous_masks() {
-        let a = Ipv4Network::parse("10.0.0.1/255.255.0.255").unwrap();
-        let b = Ipv4Network::parse("10.1.0.1/255.255.0.255").unwrap();
-        let expected = Ipv4Network::parse("10.0.0.1/255.254.0.255").unwrap();
-        assert_eq!(Some(expected), a.merge(&b));
-        assert_eq!(Some(expected), b.merge(&a));
-    }
+            let result = ipv4_aggregate(&mut nets);
 
-    #[test]
-    fn ipv6_merge_adjacent() {
-        // 2001:db8::/48 + 2001:db8:1::/48 = 2001:db8::/47
-        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
-        let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
-        let expected = Ipv6Network::parse("2001:db8::/47").unwrap();
-        assert_eq!(Some(expected), a.merge(&b));
-        assert_eq!(Some(expected), b.merge(&a));
-    }
+            // No duplicates.
+            for i in 0..result.len() {
+                for j in (i + 1)..result.len() {
+                    prop_assert_ne!(result[i], result[j]);
+                }
+            }
 
-    #[test]
-    fn ipv6_merge_containment() {
-        // 2001:db8::/32 contains 2001:db8:1::/48
-        let a = Ipv6Network::parse("2001:db8::/32").unwrap();
-        let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
-        assert_eq!(Some(a), a.merge(&b));
-        assert_eq!(Some(a), b.merge(&a));
-    }
+            // No containment.
+            for i in 0..result.len() {
+                for j in 0..result.len() {
+                    if i != j {
+                        prop_assert!(!result[i].contains(&result[j]));
+                    }
+                }
+            }
 
-    #[test]
-    fn ipv6_merge_non_contiguous() {
-        // Non-contiguous mask: ffff:ff00::ffff, addresses differ by 1 bit in the mask.
-        let a = Ipv6Network::parse("2001::1/ffff:ff00::ffff").unwrap();
-        let b = Ipv6Network::parse("2001:100::1/ffff:ff00::ffff").unwrap();
-        let expected = Ipv6Network::parse("2001::1/ffff:fe00::ffff").unwrap();
-        assert_eq!(Some(expected), a.merge(&b));
-        assert_eq!(Some(expected), b.merge(&a));
-    }
+            // No mergeable pairs.
+            for i in 0..result.len() {
+                for j in (i + 1)..result.len() {
+                    prop_assert!(result[i].merge(&result[j]).is_none());
+                }
+            }
+        }
 
-    #[test]
-    fn ipv6_merge_non_contiguous_none() {
-        // Non-contiguous mask, addresses differ by 2 bits -> None.
-        let a = Ipv6Network::parse("2001::1/ffff:ff00::ffff").unwrap();
-        let b = Ipv6Network::parse("2001:300::1/ffff:ff00::ffff").unwrap();
-        assert_eq!(None, a.merge(&b));
+        #[test]
+        fn ipv4_aggregate_non_contiguous_preserves_addresses(
+            raw_nets in prop::collection::vec(
+                (0u32..=0xFF, 0u32..=0xFF),
+                1..=8,
+            )
+        ) {
+            let mut nets: Vec<Ipv4Network> = raw_nets
+                .iter()
+                .map(|&(addr_low, mask_low)| {
+                    let addr = (10 << 24) | addr_low;
+                    let mask = 0xFFFFFF00 | mask_low;
+                    Ipv4Network::from_bits(addr, mask)
+                })
+                .collect();
+
+            let mut before_addrs: Vec<u32> = Vec::new();
+            for net in &nets {
+                for addr in (*net).addrs() {
+                    before_addrs.push(u32::from_be_bytes(addr.octets()));
+                }
+            }
+            before_addrs.sort_unstable();
+            before_addrs.dedup();
+
+            let result = ipv4_aggregate(&mut nets);
+
+            let mut after_addrs: Vec<u32> = Vec::new();
+            for net in result.iter() {
+                for addr in (*net).addrs() {
+                    after_addrs.push(u32::from_be_bytes(addr.octets()));
+                }
+            }
+            after_addrs.sort_unstable();
+            after_addrs.dedup();
+
+            prop_assert_eq!(before_addrs, after_addrs);
+        }
     }
 }

@@ -265,12 +265,72 @@ fn bench_is_contiguous(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_aggregate(c: &mut Criterion) {
+    use netip::{ipv4_aggregate, ipv6_aggregate};
+
+    let mut group = c.benchmark_group("netip");
+
+    group.throughput(Throughput::Elements(256));
+    group.bench_function("ipv4_aggregate 256x /24 -> /16", |b| {
+        let template: Vec<Ipv4Network> = (0..=255u32)
+            .map(|i| Ipv4Network::from_bits((192 << 24) | (168 << 16) | (i << 8), 0xFFFFFF00))
+            .collect();
+        b.iter_batched(
+            || template.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv4_aggregate(&mut nets));
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
+    group.throughput(Throughput::Elements(1024));
+    group.bench_function("ipv4_aggregate 1024 random /20../28", |b| {
+        let template: Vec<Ipv4Network> = (0..1024u32)
+            .map(|i| {
+                let prefix = 20 + (i % 9);
+                let mask = !0u32 << (32 - prefix);
+                let addr = ((10u32 << 24) | (i.wrapping_mul(97) % (1 << 24))) & mask;
+                Ipv4Network::from_bits(addr, mask)
+            })
+            .collect();
+        b.iter_batched(
+            || template.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv4_aggregate(&mut nets));
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
+    group.throughput(Throughput::Elements(256));
+    group.bench_function("ipv6_aggregate 256x /48 -> /40", |b| {
+        let template: Vec<Ipv6Network> = (0..=255u128)
+            .map(|i| {
+                let addr = (0x2001_0db8u128 << 96) | (i << 80);
+                let mask = !0u128 << 80;
+                Ipv6Network::from_bits(addr, mask)
+            })
+            .collect();
+        b.iter_batched(
+            || template.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv6_aggregate(&mut nets));
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_net_addrs,
     bench_net_addrs_count,
     bench_intersection,
     bench_merge,
-    bench_is_contiguous
+    bench_is_contiguous,
+    bench_aggregate
 );
 criterion_main!(benches);
