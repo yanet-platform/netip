@@ -17,6 +17,9 @@ exclude = ["book/", ".github/"]
 criterion = { version = "0.8" }
 proptest = "1"
 
+[lib]
+bench = false
+
 [profile.bench]
 opt-level = 3
 lto = true
