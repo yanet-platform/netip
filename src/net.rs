@@ -614,7 +614,7 @@ impl Ipv4Network {
     /// ```
     #[inline]
     pub const fn new(addr: Ipv4Addr, mask: Ipv4Addr) -> Self {
-        let addr = u32::from_be_bytes(addr.octets()) & u32::from_be_bytes(mask.octets());
+        let addr = addr.to_bits() & mask.to_bits();
 
         Self(Ipv4Addr::from_bits(addr), mask)
     }
@@ -723,7 +723,7 @@ impl Ipv4Network {
     #[inline]
     pub const fn to_bits(&self) -> (u32, u32) {
         match self {
-            Self(addr, mask) => (u32::from_be_bytes(addr.octets()), u32::from_be_bytes(mask.octets())),
+            Self(addr, mask) => (addr.to_bits(), mask.to_bits()),
         }
     }
 
@@ -902,7 +902,7 @@ impl Ipv4Network {
     /// ```
     #[inline]
     pub const fn is_contiguous(&self) -> bool {
-        let mask = u32::from_be_bytes(self.mask().octets());
+        let mask = self.mask().to_bits();
         mask | mask.wrapping_sub(1) == u32::MAX
     }
 
@@ -940,7 +940,7 @@ impl Ipv4Network {
     /// ```
     #[inline]
     pub const fn prefix(&self) -> Option<u8> {
-        let mask = u32::from_be_bytes(self.mask().octets());
+        let mask = self.mask().to_bits();
         let ones = mask.leading_ones();
 
         if mask.count_ones() == ones {
@@ -1611,7 +1611,7 @@ impl Ipv6Network {
     /// During construction, the address is normalized using mask.
     #[inline]
     pub const fn new(addr: Ipv6Addr, mask: Ipv6Addr) -> Self {
-        let addr = u128::from_be_bytes(addr.octets()) & u128::from_be_bytes(mask.octets());
+        let addr = addr.to_bits() & mask.to_bits();
 
         Self(Ipv6Addr::from_bits(addr), mask)
     }
@@ -1772,7 +1772,7 @@ impl Ipv6Network {
     #[inline]
     pub const fn to_bits(&self) -> (u128, u128) {
         match self {
-            Self(addr, mask) => (u128::from_be_bytes(addr.octets()), u128::from_be_bytes(mask.octets())),
+            Self(addr, mask) => (addr.to_bits(), mask.to_bits()),
         }
     }
 
@@ -1962,7 +1962,7 @@ impl Ipv6Network {
     /// ```
     #[inline]
     pub const fn is_contiguous(&self) -> bool {
-        let mask = u128::from_be_bytes(self.mask().octets());
+        let mask = self.mask().to_bits();
         mask | mask.wrapping_sub(1) == u128::MAX
     }
 
@@ -2103,7 +2103,7 @@ impl Ipv6Network {
     /// ```
     #[inline]
     pub const fn prefix(&self) -> Option<u8> {
-        let mask = u128::from_be_bytes(self.mask().octets());
+        let mask = self.mask().to_bits();
         let ones = mask.leading_ones();
 
         if mask.count_ones() == ones {
@@ -3255,7 +3255,7 @@ impl Contiguous<Ipv4Network> {
     pub const fn prefix(&self) -> u8 {
         match self {
             Self(net) => {
-                let mask = u32::from_be_bytes(net.mask().octets());
+                let mask = net.mask().to_bits();
                 let ones = mask.leading_ones();
                 ones as u8
             }
@@ -3289,7 +3289,7 @@ impl Contiguous<Ipv6Network> {
     pub const fn prefix(&self) -> u8 {
         match self {
             Self(net) => {
-                let mask = u128::from_be_bytes(net.mask().octets());
+                let mask = net.mask().to_bits();
                 let ones = mask.leading_ones();
                 ones as u8
             }
@@ -5980,7 +5980,7 @@ mod test {
             let mut before_addrs: Vec<u32> = Vec::new();
             for net in &nets {
                 for addr in (*net).addrs() {
-                    before_addrs.push(u32::from_be_bytes(addr.octets()));
+                    before_addrs.push(addr.to_bits());
                 }
             }
             before_addrs.sort_unstable();
@@ -5991,7 +5991,7 @@ mod test {
             let mut after_addrs: Vec<u32> = Vec::new();
             for net in result.iter() {
                 for addr in (*net).addrs() {
-                    after_addrs.push(u32::from_be_bytes(addr.octets()));
+                    after_addrs.push(addr.to_bits());
                 }
             }
             after_addrs.sort_unstable();
@@ -6061,7 +6061,7 @@ mod test {
             let mut before_addrs: Vec<u32> = Vec::new();
             for net in &nets {
                 for addr in (*net).addrs() {
-                    before_addrs.push(u32::from_be_bytes(addr.octets()));
+                    before_addrs.push(addr.to_bits());
                 }
             }
             before_addrs.sort_unstable();
@@ -6072,7 +6072,7 @@ mod test {
             let mut after_addrs: Vec<u32> = Vec::new();
             for net in result.iter() {
                 for addr in (*net).addrs() {
-                    after_addrs.push(u32::from_be_bytes(addr.octets()));
+                    after_addrs.push(addr.to_bits());
                 }
             }
             after_addrs.sort_unstable();
