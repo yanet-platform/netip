@@ -119,6 +119,28 @@ pub fn ipv6_mask_from_cidr(cidr: u8) -> Result<Ipv6Addr, CidrOverflowError> {
     }
 }
 
+/// Returns the single differing bit if two same-mask IPv4 networks are
+/// adjacent (addresses differ by exactly one masked bit), `None` otherwise.
+#[inline]
+const fn ipv4_adjacent_bit(a1: u32, m1: u32, a2: u32, m2: u32) -> Option<u32> {
+    if m1 != m2 {
+        return None;
+    }
+    let d = a1 ^ a2;
+    if d != 0 && d & (d - 1) == 0 { Some(d) } else { None }
+}
+
+/// Returns the single differing bit if two same-mask IPv6 networks are
+/// adjacent (addresses differ by exactly one masked bit), `None` otherwise.
+#[inline]
+const fn ipv6_adjacent_bit(a1: u128, m1: u128, a2: u128, m2: u128) -> Option<u128> {
+    if m1 != m2 {
+        return None;
+    }
+    let d = a1 ^ a2;
+    if d != 0 && d & (d - 1) == 0 { Some(d) } else { None }
+}
+
 /// An IP network, either IPv4 or IPv6.
 ///
 /// This enum can contain either an [`Ipv4Network`] or an [`Ipv6Network`], see
@@ -408,6 +430,38 @@ impl IpNetwork {
                 None => None,
             },
             _ => None,
+        }
+    }
+
+    /// Returns `true` if this network is adjacent to `other`.
+    ///
+    /// Two networks are adjacent when they share the same mask and their
+    /// addresses differ by exactly one masked bit, meaning they can be merged
+    /// into a single network by dropping that bit from the mask.
+    ///
+    /// Returns `false` for networks of different address families.
+    ///
+    /// See [`Ipv4Network::is_adjacent`] and [`Ipv6Network::is_adjacent`] for
+    /// details.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::IpNetwork;
+    ///
+    /// let a = IpNetwork::parse("192.168.0.0/24").unwrap();
+    /// let b = IpNetwork::parse("192.168.1.0/24").unwrap();
+    /// assert!(a.is_adjacent(&b));
+    ///
+    /// let c = IpNetwork::parse("192.168.3.0/24").unwrap();
+    /// assert!(!a.is_adjacent(&c));
+    /// ```
+    #[inline]
+    pub const fn is_adjacent(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::V4(a), Self::V4(b)) => a.is_adjacent(b),
+            (Self::V6(a), Self::V6(b)) => a.is_adjacent(b),
+            _ => false,
         }
     }
 
@@ -1012,6 +1066,45 @@ impl Ipv4Network {
         Self::new(addr.into(), mask.into())
     }
 
+    /// Returns `true` if this network is adjacent to `other`.
+    ///
+    /// Two networks are adjacent when they share the same mask and their
+    /// addresses differ by exactly one masked bit, meaning they can be
+    /// [`merge`](Self::merge)d into a single network by dropping that bit
+    /// from the mask.
+    ///
+    /// Identical networks are **not** adjacent. Works correctly with
+    /// non-contiguous masks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv4Network;
+    ///
+    /// // Adjacent contiguous /24 blocks.
+    /// let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+    /// let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+    /// assert!(a.is_adjacent(&b));
+    ///
+    /// // Non-adjacent: addresses differ by more than one bit.
+    /// let c = Ipv4Network::parse("192.168.3.0/24").unwrap();
+    /// assert!(!a.is_adjacent(&c));
+    ///
+    /// // Identical networks are not adjacent.
+    /// assert!(!a.is_adjacent(&a));
+    ///
+    /// // Adjacent non-contiguous networks.
+    /// let x = Ipv4Network::parse("10.0.0.1/255.255.0.255").unwrap();
+    /// let y = Ipv4Network::parse("10.1.0.1/255.255.0.255").unwrap();
+    /// assert!(x.is_adjacent(&y));
+    /// ```
+    #[inline]
+    pub const fn is_adjacent(&self, other: &Self) -> bool {
+        let (a1, m1) = self.to_bits();
+        let (a2, m2) = other.to_bits();
+        ipv4_adjacent_bit(a1, m1, a2, m2).is_some()
+    }
+
     /// Merges this IPv4 network with another, returning `Some(N)` iff their
     /// union is exactly representable as a single network.
     ///
@@ -1054,15 +1147,10 @@ impl Ipv4Network {
         let (a2, m2) = other.to_bits();
 
         if m1 == m2 {
-            let d = a1 ^ a2;
-            if d == 0 {
-                // Identical networks.
+            if a1 == a2 {
                 return Some(*self);
             }
-            // Power-of-two test: exactly one bit set in d. For normalized
-            // addresses with the same mask, d is always within the masked
-            // region, so no extra guard is needed.
-            if d & (d - 1) == 0 {
+            if let Some(d) = ipv4_adjacent_bit(a1, m1, a2, m2) {
                 let m = m1 ^ d;
                 let a = a1 & m;
                 return Some(Self(Ipv4Addr::from_bits(a), Ipv4Addr::from_bits(m)));
@@ -2167,6 +2255,53 @@ impl Ipv6Network {
         Self::new(addr.into(), mask.into())
     }
 
+    /// Returns `true` if this network is adjacent to `other`.
+    ///
+    /// Two networks are adjacent when they share the same mask and their
+    /// addresses differ by exactly one masked bit, meaning they can be
+    /// [`merge`](Self::merge)d into a single network by dropping that bit
+    /// from the mask.
+    ///
+    /// Identical networks are **not** adjacent. Works correctly with
+    /// non-contiguous masks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::Ipv6Network;
+    ///
+    /// // Adjacent contiguous /48 blocks.
+    /// let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+    /// let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+    /// assert!(a.is_adjacent(&b));
+    ///
+    /// // Non-adjacent: addresses differ by more than one bit.
+    /// let c = Ipv6Network::parse("2001:db8:5::/48").unwrap();
+    /// assert!(!a.is_adjacent(&c));
+    ///
+    /// // Identical networks are not adjacent.
+    /// assert!(!a.is_adjacent(&a));
+    ///
+    /// // Adjacent non-contiguous networks.
+    /// let x = Ipv6Network::new(
+    ///     Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 1),
+    ///     Ipv6Addr::new(0xffff, 0xff00, 0, 0, 0, 0, 0, 0xffff),
+    /// );
+    /// let y = Ipv6Network::new(
+    ///     Ipv6Addr::new(0x2001, 0x0100, 0, 0, 0, 0, 0, 1),
+    ///     Ipv6Addr::new(0xffff, 0xff00, 0, 0, 0, 0, 0, 0xffff),
+    /// );
+    /// assert!(x.is_adjacent(&y));
+    /// ```
+    #[inline]
+    pub const fn is_adjacent(&self, other: &Self) -> bool {
+        let (a1, m1) = self.to_bits();
+        let (a2, m2) = other.to_bits();
+        ipv6_adjacent_bit(a1, m1, a2, m2).is_some()
+    }
+
     /// Merges this IPv6 network with another, returning `Some(N)` iff their
     /// union is exactly representable as a single network.
     ///
@@ -2225,15 +2360,10 @@ impl Ipv6Network {
         let (a2, m2) = other.to_bits();
 
         if m1 == m2 {
-            let d = a1 ^ a2;
-            if d == 0 {
-                // Identical networks.
+            if a1 == a2 {
                 return Some(*self);
             }
-            // Power-of-two test: exactly one bit set in d. For normalized
-            // addresses with the same mask, d is always within the masked
-            // region, so no extra guard is needed.
-            if d & (d - 1) == 0 {
+            if let Some(d) = ipv6_adjacent_bit(a1, m1, a2, m2) {
                 let m = m1 ^ d;
                 let a = a1 & m;
                 return Some(Self(Ipv6Addr::from_bits(a), Ipv6Addr::from_bits(m)));
@@ -5219,6 +5349,85 @@ mod test {
     }
 
     #[test]
+    fn ipv4_is_adjacent_contiguous() {
+        let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        assert!(a.is_adjacent(&b));
+        assert!(b.is_adjacent(&a));
+    }
+
+    #[test]
+    fn ipv4_is_adjacent_non_contiguous() {
+        let a = Ipv4Network::parse("10.0.0.1/255.255.0.255").unwrap();
+        let b = Ipv4Network::parse("10.1.0.1/255.255.0.255").unwrap();
+        assert!(a.is_adjacent(&b));
+        assert!(b.is_adjacent(&a));
+    }
+
+    #[test]
+    fn ipv4_is_adjacent_identical() {
+        let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        assert!(!a.is_adjacent(&a));
+    }
+
+    #[test]
+    fn ipv4_is_adjacent_different_masks() {
+        let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        let b = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        assert!(!a.is_adjacent(&b));
+    }
+
+    #[test]
+    fn ipv4_is_adjacent_non_adjacent_same_mask() {
+        let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        let b = Ipv4Network::parse("192.168.3.0/24").unwrap();
+        assert!(!a.is_adjacent(&b));
+    }
+
+    #[test]
+    fn ipv6_is_adjacent_contiguous() {
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        assert!(a.is_adjacent(&b));
+        assert!(b.is_adjacent(&a));
+    }
+
+    #[test]
+    fn ipv6_is_adjacent_non_contiguous() {
+        let a = Ipv6Network::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        let b = Ipv6Network::parse("2a02:6b8:c00::1235:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        assert!(a.is_adjacent(&b));
+        assert!(b.is_adjacent(&a));
+    }
+
+    #[test]
+    fn ipv6_is_adjacent_identical() {
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        assert!(!a.is_adjacent(&a));
+    }
+
+    #[test]
+    fn ipv6_is_adjacent_different_masks() {
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let b = Ipv6Network::parse("2001:db8::/32").unwrap();
+        assert!(!a.is_adjacent(&b));
+    }
+
+    #[test]
+    fn ipv6_is_adjacent_non_adjacent_same_mask() {
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let b = Ipv6Network::parse("2001:db8:5::/48").unwrap();
+        assert!(!a.is_adjacent(&b));
+    }
+
+    #[test]
+    fn ip_is_adjacent_mixed_families() {
+        let v4 = IpNetwork::parse("10.0.0.0/8").unwrap();
+        let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
+        assert!(!v4.is_adjacent(&v6));
+    }
+
+    #[test]
     fn ipv4_aggregate_empty() {
         let result = ipv4_aggregate(&mut []);
         assert!(result.is_empty());
@@ -5596,6 +5805,36 @@ mod test {
         }
 
         #[test]
+        fn prop_ipv4_is_adjacent_commutativity(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            prop_assert_eq!(a.is_adjacent(&b), b.is_adjacent(&a));
+        }
+
+        #[test]
+        fn prop_ipv4_adjacent_implies_merge_some(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            if a.is_adjacent(&b) {
+                prop_assert!(a.merge(&b).is_some(), "adjacent but merge returned None: a={a}, b={b}");
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_same_mask_not_adjacent_not_identical_implies_merge_none(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            let (_, m1) = a.to_bits();
+            let (_, m2) = b.to_bits();
+            if m1 == m2 && !a.is_adjacent(&b) && a != b {
+                prop_assert_eq!(a.merge(&b), None, "same mask, not adjacent, not identical, but merge returned Some: a={}, b={}", a, b);
+            }
+        }
+
+        #[test]
         fn prop_ipv6_intersects_is_not_disjoint(
             a in arb_ipv6_network(),
             b in arb_ipv6_network(),
@@ -5969,6 +6208,36 @@ mod test {
                         "x={x} in merge result but not in A∪B: a={a}, b={b}, result={result:?}"
                     );
                 }
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_is_adjacent_commutativity(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            prop_assert_eq!(a.is_adjacent(&b), b.is_adjacent(&a));
+        }
+
+        #[test]
+        fn prop_ipv6_adjacent_implies_merge_some(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            if a.is_adjacent(&b) {
+                prop_assert!(a.merge(&b).is_some(), "adjacent but merge returned None: a={a}, b={b}");
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_same_mask_not_adjacent_not_identical_implies_merge_none(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            let (_, m1) = a.to_bits();
+            let (_, m2) = b.to_bits();
+            if m1 == m2 && !a.is_adjacent(&b) && a != b {
+                prop_assert_eq!(a.merge(&b), None, "same mask, not adjacent, not identical, but merge returned Some: a={}, b={}", a, b);
             }
         }
 
