@@ -290,6 +290,7 @@ impl IpNetwork {
     /// );
     /// ```
     #[inline]
+    #[must_use]
     pub const fn addr(&self) -> IpAddr {
         match self {
             Self::V4(net) => IpAddr::V4(*net.addr()),
@@ -317,6 +318,7 @@ impl IpNetwork {
     /// );
     /// ```
     #[inline]
+    #[must_use]
     pub const fn mask(&self) -> IpAddr {
         match self {
             Self::V4(net) => IpAddr::V4(*net.mask()),
@@ -343,6 +345,7 @@ impl IpNetwork {
     /// assert!(!a.contains(&v6));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn contains(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::V4(a), Self::V4(b)) => a.contains(b),
@@ -368,6 +371,7 @@ impl IpNetwork {
     /// assert_eq!(expected, net.to_contiguous());
     /// ```
     #[inline]
+    #[must_use]
     pub fn to_contiguous(&self) -> Self {
         match self {
             Self::V4(net) => Self::V4(net.to_contiguous()),
@@ -378,6 +382,7 @@ impl IpNetwork {
     /// Checks whether this network is a contiguous, i.e. contains mask with
     /// only leading bits set to one contiguously.
     #[inline]
+    #[must_use]
     pub const fn is_contiguous(&self) -> bool {
         match self {
             Self::V4(net) => net.is_contiguous(),
@@ -405,6 +410,7 @@ impl IpNetwork {
     /// assert_eq!(Some(128), IpNetwork::parse("2a02:6b8::1").unwrap().prefix());
     /// ```
     #[inline]
+    #[must_use]
     pub const fn prefix(&self) -> Option<u8> {
         match self {
             Self::V4(net) => net.prefix(),
@@ -441,6 +447,7 @@ impl IpNetwork {
     /// );
     /// ```
     #[inline]
+    #[must_use]
     pub fn last_addr(&self) -> IpAddr {
         match self {
             Self::V4(net) => IpAddr::V4(net.last_addr()),
@@ -470,6 +477,7 @@ impl IpNetwork {
     /// assert!(!a.intersects(&v6));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn intersects(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::V4(a), Self::V4(b)) => a.intersects(b),
@@ -497,6 +505,7 @@ impl IpNetwork {
     /// assert!(a.is_disjoint(&v6));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn is_disjoint(&self, other: &Self) -> bool {
         !self.intersects(other)
     }
@@ -523,6 +532,7 @@ impl IpNetwork {
     /// assert_eq!(None, a.intersection(&v6));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn intersection(&self, other: &Self) -> Option<Self> {
         // NOTE: use `Option::map` when it becomes const.
         match (self, other) {
@@ -562,6 +572,7 @@ impl IpNetwork {
     /// assert!(!a.is_adjacent(&c));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn is_adjacent(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::V4(a), Self::V4(b)) => a.is_adjacent(b),
@@ -597,6 +608,7 @@ impl IpNetwork {
     /// assert_eq!(None, v4.merge(&v6));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn merge(&self, other: &Self) -> Option<Self> {
         // NOTE: use `Option::map` when it becomes const.
         match (self, other) {
@@ -772,6 +784,7 @@ impl Ipv4Network {
     /// assert_eq!(Ipv4Addr::new(255, 255, 255, 0), *net.mask());
     /// ```
     #[inline]
+    #[must_use]
     pub const fn new(addr: Ipv4Addr, mask: Ipv4Addr) -> Self {
         let addr = addr.to_bits() & mask.to_bits();
 
@@ -823,6 +836,7 @@ impl Ipv4Network {
 
     /// Returns the IP address of this IPv4 network.
     #[inline]
+    #[must_use]
     pub const fn addr(&self) -> &Ipv4Addr {
         match self {
             Self(addr, ..) => addr,
@@ -831,6 +845,7 @@ impl Ipv4Network {
 
     /// Returns the IP mask of this IPv4 network.
     #[inline]
+    #[must_use]
     pub const fn mask(&self) -> &Ipv4Addr {
         match self {
             Self(.., mask) => mask,
@@ -859,6 +874,7 @@ impl Ipv4Network {
     /// assert_eq!(expected, Ipv4Network::from_bits(3232235776, 4294967040));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn from_bits(addr: u32, mask: u32) -> Self {
         Self::new(Ipv4Addr::from_bits(addr), Ipv4Addr::from_bits(mask))
     }
@@ -880,6 +896,7 @@ impl Ipv4Network {
     /// assert_eq!((3232235776, 4294967040), net.to_bits());
     /// ```
     #[inline]
+    #[must_use]
     pub const fn to_bits(&self) -> (u32, u32) {
         match self {
             Self(addr, mask) => (addr.to_bits(), mask.to_bits()),
@@ -888,6 +905,7 @@ impl Ipv4Network {
 
     /// Returns `true` if this IPv4 network fully contains the specified one.
     #[inline]
+    #[must_use]
     pub const fn contains(&self, other: &Ipv4Network) -> bool {
         let (a1, m1) = self.to_bits();
         let (a2, m2) = other.to_bits();
@@ -926,6 +944,7 @@ impl Ipv4Network {
     /// assert!(x.intersects(&y));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn intersects(&self, other: &Self) -> bool {
         // NOTE: compiler is smart enough to optimize this without constructing
         // the actual intersection.
@@ -950,6 +969,7 @@ impl Ipv4Network {
     /// assert!(!a.is_disjoint(&c));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn is_disjoint(&self, other: &Ipv4Network) -> bool {
         !self.intersects(other)
     }
@@ -987,6 +1007,7 @@ impl Ipv4Network {
     /// assert_eq!(None, a.intersection(&b));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn intersection(&self, other: &Self) -> Option<Self> {
         let (a1, m1) = self.to_bits();
         let (a2, m2) = other.to_bits();
@@ -1034,6 +1055,7 @@ impl Ipv4Network {
     /// assert_eq!(a.difference(&b).count(), 0);
     /// ```
     #[inline]
+    #[must_use]
     pub const fn difference(&self, other: &Self) -> Ipv4NetworkDiff {
         Ipv4NetworkDiff::new(self, other)
     }
@@ -1060,6 +1082,7 @@ impl Ipv4Network {
     /// );
     /// ```
     #[inline]
+    #[must_use]
     pub const fn is_contiguous(&self) -> bool {
         let mask = self.mask().to_bits();
         mask | mask.wrapping_sub(1) == u32::MAX
@@ -1098,6 +1121,7 @@ impl Ipv4Network {
     /// );
     /// ```
     #[inline]
+    #[must_use]
     pub const fn prefix(&self) -> Option<u8> {
         let mask = self.mask().to_bits();
         let ones = mask.leading_ones();
@@ -1127,6 +1151,7 @@ impl Ipv4Network {
     ///
     /// assert_eq!(expected, net.to_contiguous());
     /// ```
+    #[must_use]
     pub fn to_contiguous(&self) -> Self {
         let (addr, mask) = self.to_bits();
 
@@ -1160,6 +1185,7 @@ impl Ipv4Network {
     ///     net0.supernet_for(&[net1])
     /// );
     /// ```
+    #[must_use]
     pub fn supernet_for(&self, nets: &[Ipv4Network]) -> Ipv4Network {
         let (addr, mut mask) = self.to_bits();
 
@@ -1204,6 +1230,7 @@ impl Ipv4Network {
     /// assert!(x.is_adjacent(&y));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn is_adjacent(&self, other: &Self) -> bool {
         let (a1, m1) = self.to_bits();
         let (a2, m2) = other.to_bits();
@@ -1247,6 +1274,7 @@ impl Ipv4Network {
     /// assert_eq!(None, a.merge(&b));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn merge(&self, other: &Self) -> Option<Self> {
         let (a1, m1) = self.to_bits();
         let (a2, m2) = other.to_bits();
@@ -1290,6 +1318,7 @@ impl Ipv4Network {
     /// assert_eq!(expected, net.to_ipv6_mapped());
     /// ```
     #[inline]
+    #[must_use]
     pub const fn to_ipv6_mapped(&self) -> Ipv6Network {
         match self {
             Ipv4Network(addr, mask) => {
@@ -1400,6 +1429,7 @@ impl Ipv4Network {
     /// The algorithm `addr | !mask` correctly computes the maximum address in
     /// any IPv4 network, including those with non-contiguous masks.
     #[inline]
+    #[must_use]
     pub const fn last_addr(&self) -> Ipv4Addr {
         let (addr, mask) = self.to_bits();
         Ipv4Addr::from_bits(addr | !mask)
@@ -1447,6 +1477,7 @@ impl Ipv4Network {
     /// assert_eq!(Some(Ipv4Addr::new(192, 168, 1, 3)), addrs.next());
     /// ```
     #[inline]
+    #[must_use]
     pub fn addrs(self) -> Ipv4NetworkAddrs {
         let (addr, mask) = self.to_bits();
         let host_bits = (!mask).count_ones();
@@ -1636,6 +1667,7 @@ impl Ipv4NetworkDiff {
     /// The iterator yields pairwise-disjoint networks whose union equals
     /// `S(source) \ S(other)`.
     #[inline]
+    #[must_use]
     pub const fn new(source: &Ipv4Network, other: &Ipv4Network) -> Self {
         let (addr, mask) = source.to_bits();
 
@@ -1808,6 +1840,7 @@ impl Ipv6Network {
     ///
     /// During construction, the address is normalized using mask.
     #[inline]
+    #[must_use]
     pub const fn new(addr: Ipv6Addr, mask: Ipv6Addr) -> Self {
         let addr = addr.to_bits() & mask.to_bits();
 
@@ -1894,6 +1927,7 @@ impl Ipv6Network {
 
     /// Returns the IP address of this IPv6 network.
     #[inline]
+    #[must_use]
     pub const fn addr(&self) -> &Ipv6Addr {
         match self {
             Ipv6Network(addr, ..) => addr,
@@ -1902,6 +1936,7 @@ impl Ipv6Network {
 
     /// Returns the IP mask of this IPv6 network.
     #[inline]
+    #[must_use]
     pub const fn mask(&self) -> &Ipv6Addr {
         match self {
             Ipv6Network(.., mask) => mask,
@@ -1937,6 +1972,7 @@ impl Ipv6Network {
     /// assert_eq!(expected, Ipv6Network::from_bits(addr, mask));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn from_bits(addr: u128, mask: u128) -> Self {
         Self::new(Ipv6Addr::from_bits(addr), Ipv6Addr::from_bits(mask))
     }
@@ -1968,6 +2004,7 @@ impl Ipv6Network {
     /// );
     /// ```
     #[inline]
+    #[must_use]
     pub const fn to_bits(&self) -> (u128, u128) {
         match self {
             Self(addr, mask) => (addr.to_bits(), mask.to_bits()),
@@ -1976,6 +2013,7 @@ impl Ipv6Network {
 
     /// Returns `true` if this IPv6 network fully contains the specified one.
     #[inline]
+    #[must_use]
     pub const fn contains(&self, other: &Ipv6Network) -> bool {
         let (a1, m1) = self.to_bits();
         let (a2, m2) = other.to_bits();
@@ -2016,6 +2054,7 @@ impl Ipv6Network {
     /// assert!(x.intersects(&y));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn intersects(&self, other: &Self) -> bool {
         // NOTE: compiler is smart enough to optimize this without constructing
         // the actual intersection.
@@ -2040,6 +2079,7 @@ impl Ipv6Network {
     /// assert!(!a.is_disjoint(&c));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn is_disjoint(&self, other: &Ipv6Network) -> bool {
         !self.intersects(other)
     }
@@ -2086,6 +2126,7 @@ impl Ipv6Network {
     /// assert_eq!(None, a.intersection(&b));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn intersection(&self, other: &Self) -> Option<Self> {
         let (a1, m1) = self.to_bits();
         let (a2, m2) = other.to_bits();
@@ -2133,6 +2174,7 @@ impl Ipv6Network {
     /// assert_eq!(a.difference(&b).count(), 0);
     /// ```
     #[inline]
+    #[must_use]
     pub const fn difference(&self, other: &Self) -> Ipv6NetworkDiff {
         Ipv6NetworkDiff::new(self, other)
     }
@@ -2159,6 +2201,7 @@ impl Ipv6Network {
     /// );
     /// ```
     #[inline]
+    #[must_use]
     pub const fn is_contiguous(&self) -> bool {
         let mask = self.mask().to_bits();
         mask | mask.wrapping_sub(1) == u128::MAX
@@ -2185,6 +2228,7 @@ impl Ipv6Network {
     /// );
     /// ```
     #[inline]
+    #[must_use]
     pub const fn is_ipv4_mapped_ipv6(&self) -> bool {
         let (addr, mask) = self.to_bits();
 
@@ -2215,6 +2259,7 @@ impl Ipv6Network {
     ///
     /// assert_eq!(expected, net.to_contiguous());
     /// ```
+    #[must_use]
     pub fn to_contiguous(&self) -> Self {
         let (addr, mask) = self.to_bits();
 
@@ -2261,6 +2306,7 @@ impl Ipv6Network {
     /// assert_eq!(None, net.to_ipv4_mapped());
     /// ```
     #[inline]
+    #[must_use]
     pub const fn to_ipv4_mapped(&self) -> Option<Ipv4Network> {
         if self.is_ipv4_mapped_ipv6() {
             let (addr, mask) = self.to_bits();
@@ -2300,6 +2346,7 @@ impl Ipv6Network {
     /// );
     /// ```
     #[inline]
+    #[must_use]
     pub const fn prefix(&self) -> Option<u8> {
         let mask = self.mask().to_bits();
         let ones = mask.leading_ones();
@@ -2349,6 +2396,7 @@ impl Ipv6Network {
     /// );
     /// assert_eq!(expected, net0.supernet_for(&[net1]));
     /// ```
+    #[must_use]
     pub fn supernet_for(&self, nets: &[Ipv6Network]) -> Ipv6Network {
         let (addr, mut mask) = self.to_bits();
 
@@ -2401,6 +2449,7 @@ impl Ipv6Network {
     /// assert!(x.is_adjacent(&y));
     /// ```
     #[inline]
+    #[must_use]
     pub const fn is_adjacent(&self, other: &Self) -> bool {
         let (a1, m1) = self.to_bits();
         let (a2, m2) = other.to_bits();
@@ -2460,6 +2509,7 @@ impl Ipv6Network {
     /// );
     /// ```
     #[inline]
+    #[must_use]
     pub const fn merge(&self, other: &Self) -> Option<Self> {
         let (a1, m1) = self.to_bits();
         let (a2, m2) = other.to_bits();
@@ -2537,6 +2587,7 @@ impl Ipv6Network {
     /// The algorithm follows the same logic as [`Ipv4Network::last_addr`].
     /// See [`Ipv4Network::last_addr`] for the formal proof.
     #[inline]
+    #[must_use]
     pub const fn last_addr(&self) -> Ipv6Addr {
         let (addr, mask) = self.to_bits();
         Ipv6Addr::from_bits(addr | !mask)
@@ -2590,6 +2641,7 @@ impl Ipv6Network {
     /// );
     /// ```
     #[inline]
+    #[must_use]
     pub fn addrs(self) -> Ipv6NetworkAddrs {
         let (addr, mask) = self.to_bits();
         let host_bits = (!mask).count_ones();
@@ -2742,6 +2794,7 @@ impl Ipv6NetworkDiff {
     /// The iterator yields pairwise-disjoint networks whose union equals
     /// `S(source) \ S(other)`.
     #[inline]
+    #[must_use]
     pub const fn new(source: &Ipv6Network, other: &Ipv6Network) -> Self {
         let (addr, mask) = source.to_bits();
 
@@ -3010,6 +3063,7 @@ impl AsRef<Ipv6Network> for Ipv6Network {
 ///     assert_eq!(range.contains(&idx), supernet.contains(net));
 /// }
 /// ```
+#[must_use]
 pub fn ipv4_binary_split<T>(nets: &[T]) -> Option<(Ipv4Network, Range<usize>)>
 where
     T: AsRef<Ipv4Network>,
@@ -3148,6 +3202,7 @@ where
 ///     assert_eq!(range.contains(&idx), supernet.contains(net));
 /// }
 /// ```
+#[must_use]
 pub fn ipv6_binary_split<T>(nets: &[T]) -> Option<(Ipv6Network, Range<usize>)>
 where
     T: AsRef<Ipv6Network>,
@@ -3467,6 +3522,7 @@ impl Contiguous<IpNetwork> {
     /// assert_eq!(24, net.prefix());
     /// ```
     #[inline]
+    #[must_use]
     pub const fn prefix(&self) -> u8 {
         match self {
             Self(IpNetwork::V4(net)) => Contiguous(*net).prefix(),
@@ -3498,6 +3554,7 @@ impl Contiguous<Ipv4Network> {
     /// assert_eq!(12, net.prefix());
     /// ```
     #[inline]
+    #[must_use]
     pub const fn prefix(&self) -> u8 {
         match self {
             Self(net) => {
@@ -3532,6 +3589,7 @@ impl Contiguous<Ipv6Network> {
     /// assert_eq!(40, net.prefix());
     /// ```
     #[inline]
+    #[must_use]
     pub const fn prefix(&self) -> u8 {
         match self {
             Self(net) => {
