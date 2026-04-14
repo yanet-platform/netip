@@ -589,6 +589,12 @@ impl IpNetwork {
     /// See [`Ipv4Network::merge`] and [`Ipv6Network::merge`] for the full
     /// merging rules.
     ///
+    /// # Note
+    ///
+    /// The result may have a non-contiguous mask even when both inputs are
+    /// contiguous (CIDR). This happens when addresses differ in a bit that
+    /// is not at the boundary of the mask.
+    ///
     /// # Examples
     ///
     /// ```
@@ -1167,6 +1173,10 @@ impl Ipv4Network {
     /// This function works fine for both contiguous and non-contiguous
     /// networks.
     ///
+    /// The result may have a non-contiguous mask even when all inputs are
+    /// contiguous (CIDR). This happens when the addresses differ in bits
+    /// that are not at the boundary of their masks.
+    ///
     /// Use [`Ipv4Network::to_contiguous`] method if you need to convert the
     /// output network.
     ///
@@ -1183,6 +1193,15 @@ impl Ipv4Network {
     /// assert_eq!(
     ///     Ipv4Network::try_from((Ipv4Addr::new(192, 0, 2, 0), 24)).unwrap(),
     ///     net0.supernet_for(&[net1])
+    /// );
+    ///
+    /// // Contiguous inputs, non-contiguous result: addresses differ in
+    /// // bit 16, which is not at the mask boundary of /24.
+    /// let a = Ipv4Network::parse("10.0.0.0/24").unwrap();
+    /// let b = Ipv4Network::parse("10.1.0.0/24").unwrap();
+    /// assert_eq!(
+    ///     Ipv4Network::parse("10.0.0.0/255.254.255.0").unwrap(),
+    ///     a.supernet_for(&[b])
     /// );
     /// ```
     #[must_use]
@@ -1250,6 +1269,12 @@ impl Ipv4Network {
     ///
     /// Works correctly with non-contiguous masks.
     ///
+    /// # Note
+    ///
+    /// The result may have a non-contiguous mask even when both inputs are
+    /// contiguous (CIDR). This happens when addresses differ in a bit that
+    /// is not at the boundary of the mask.
+    ///
     /// # Examples
     ///
     /// ```
@@ -1272,6 +1297,15 @@ impl Ipv4Network {
     /// let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
     /// let b = Ipv4Network::parse("192.168.3.0/24").unwrap();
     /// assert_eq!(None, a.merge(&b));
+    ///
+    /// // Contiguous inputs, non-contiguous result: addresses differ in
+    /// // bit 16, which is not at the mask boundary of /24.
+    /// let a = Ipv4Network::parse("10.0.0.0/24").unwrap();
+    /// let b = Ipv4Network::parse("10.1.0.0/24").unwrap();
+    /// assert_eq!(
+    ///     Some(Ipv4Network::parse("10.0.0.0/255.254.255.0").unwrap()),
+    ///     a.merge(&b)
+    /// );
     /// ```
     #[inline]
     #[must_use]
@@ -2367,6 +2401,10 @@ impl Ipv6Network {
     /// This function works fine for both contiguous and non-contiguous
     /// networks.
     ///
+    /// The result may have a non-contiguous mask even when all inputs are
+    /// contiguous (CIDR). This happens when the addresses differ in bits
+    /// that are not at the boundary of their masks.
+    ///
     /// Use [`Ipv6Network::to_contiguous`] method if you need to convert the
     /// output network.
     ///
@@ -2395,6 +2433,15 @@ impl Ipv6Network {
     ///     Ipv6Addr::new(0xffff, 0xffff, 0xfffc, 0, 0, 0, 0, 0),
     /// );
     /// assert_eq!(expected, net0.supernet_for(&[net1]));
+    ///
+    /// // Contiguous inputs, non-contiguous result: addresses differ in
+    /// // bit 88, which is not at the mask boundary of /48.
+    /// let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+    /// let b = Ipv6Network::parse("2001:db8:100::/48").unwrap();
+    /// assert_eq!(
+    ///     Ipv6Network::parse("2001:db8::/ffff:ffff:feff::").unwrap(),
+    ///     a.supernet_for(&[b])
+    /// );
     /// ```
     #[must_use]
     pub fn supernet_for(&self, nets: &[Ipv6Network]) -> Ipv6Network {
@@ -2469,6 +2516,12 @@ impl Ipv6Network {
     ///
     /// Works correctly with non-contiguous masks.
     ///
+    /// # Note
+    ///
+    /// The result may have a non-contiguous mask even when both inputs are
+    /// contiguous (CIDR). This happens when addresses differ in a bit that
+    /// is not at the boundary of the mask.
+    ///
     /// # Examples
     ///
     /// ```
@@ -2505,6 +2558,15 @@ impl Ipv6Network {
     /// let b = Ipv6Network::parse("2a02:6b8:c00::1236:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
     /// assert_eq!(
     ///     Some(Ipv6Network::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ff00:0:ffff:fffd::").unwrap()),
+    ///     a.merge(&b)
+    /// );
+    ///
+    /// // Contiguous inputs, non-contiguous result: addresses differ in
+    /// // bit 88, which is not at the mask boundary of /48.
+    /// let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+    /// let b = Ipv6Network::parse("2001:db8:100::/48").unwrap();
+    /// assert_eq!(
+    ///     Some(Ipv6Network::parse("2001:db8::/ffff:ffff:feff::").unwrap()),
     ///     a.merge(&b)
     /// );
     /// ```
