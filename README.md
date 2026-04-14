@@ -29,7 +29,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-netip = "0.2"
+netip = "0.3"
 ```
 
 ### Parsing and basic operations
@@ -136,9 +136,9 @@ assert_eq!(mac.to_string(), "aa:bb:cc:dd:ee:ff");
 
 ## Roadmap
 
-`netip` is on the path to a stable 1.0. Current version: **0.2.0**.
+`netip` is on the path to a stable 1.0. Current version: **0.3.0**.
 
-- **v0.3** — API cleanup: `#[must_use]`, `#[deny(missing_docs)]`
+- ~~**v0.3** — API cleanup: `#[must_use]`, `#[deny(missing_docs)]`~~ ✓
 - **v0.4** — Complete set algebra: `complement`, `Contiguous<T>` merge/adjacent
 - **v0.5** — Testing hardening: fuzz targets, exhaustive non-contiguous edge cases
 - **v0.6+** — Documentation polish, API review, CHANGELOG
