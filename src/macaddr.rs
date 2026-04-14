@@ -71,6 +71,7 @@ impl MacAddr {
     /// Each parameter represents one byte of the MAC address in the standard
     /// format `xx:xx:xx:xx:xx:xx`.
     #[inline]
+    #[must_use]
     pub const fn new(a: u8, b: u8, c: u8, d: u8, e: u8, f: u8) -> MacAddr {
         Self(u64::from_be_bytes([0, 0, a, b, c, d, e, f]))
     }
@@ -109,6 +110,7 @@ impl MacAddr {
     /// assert_eq!(1, MacAddr::new(0, 0, 0, 0, 0, 1).as_u64());
     /// ```
     #[inline]
+    #[must_use]
     pub const fn as_u64(&self) -> u64 {
         match self {
             Self(addr) => *addr,
@@ -126,6 +128,7 @@ impl MacAddr {
     /// assert_eq!([0x3a, 0xac, 0x26, 0x9b, 0x5b, 0xf9], mac.octets());
     /// ```
     #[inline]
+    #[must_use]
     pub const fn octets(&self) -> [u8; 6] {
         let [.., a, b, c, d, e, f] = self.as_u64().to_be_bytes();
         [a, b, c, d, e, f]
@@ -133,6 +136,7 @@ impl MacAddr {
 
     /// Returns `true` if all octets are zero (`00:00:00:00:00:00`).
     #[inline]
+    #[must_use]
     pub const fn is_zero(&self) -> bool {
         self.as_u64() == 0
     }
@@ -141,6 +145,7 @@ impl MacAddr {
     ///
     /// Broadcast frames are delivered to every station on the local segment.
     #[inline]
+    #[must_use]
     pub const fn is_broadcast(&self) -> bool {
         self.as_u64() == 0xffff_ffff_ffff
     }
@@ -159,6 +164,7 @@ impl MacAddr {
     /// assert!(!MacAddr::new(0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e).is_multicast());
     /// ```
     #[inline]
+    #[must_use]
     pub const fn is_multicast(&self) -> bool {
         (self.as_u64() >> 40) & 0x01 != 0
     }
@@ -177,6 +183,7 @@ impl MacAddr {
     /// assert!(!MacAddr::BROADCAST.is_unicast());
     /// ```
     #[inline]
+    #[must_use]
     pub const fn is_unicast(&self) -> bool {
         !self.is_multicast()
     }
@@ -199,6 +206,7 @@ impl MacAddr {
     /// assert!(!MacAddr::new(0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e).is_locally_administered());
     /// ```
     #[inline]
+    #[must_use]
     pub const fn is_locally_administered(&self) -> bool {
         (self.as_u64() >> 40) & 0x02 != 0
     }
@@ -208,6 +216,7 @@ impl MacAddr {
     /// The complement of
     /// [`is_locally_administered`](MacAddr::is_locally_administered).
     #[inline]
+    #[must_use]
     pub const fn is_universally_administered(&self) -> bool {
         !self.is_locally_administered()
     }

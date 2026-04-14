@@ -6,6 +6,8 @@
 //! Unlike most open-source libraries, this library is designed to support
 //! non-contiguous masks.
 
+#![deny(missing_docs)]
+
 mod macaddr;
 mod net;
 
