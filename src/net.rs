@@ -1814,6 +1814,97 @@ const fn pdep_u32(mut src: u32, mut mask: u32) -> u32 {
     out
 }
 
+/// An iterator over the minimum set of contiguous IPv4 networks (CIDR blocks)
+/// whose union equals the closed address interval `[first, last]`.
+///
+/// Use [`ipv4_range_to_networks`] to construct one.
+///
+/// The iterator is lazy and allocation-free. For each step it picks the largest
+/// CIDR block that (a) is aligned at the current `first` and (b) does not
+/// exceed `last`. This yields the **minimum cardinality** covering — no other
+/// CIDR decomposition of the same range uses fewer blocks. The upper bound on
+/// the total number of blocks is `2 * 32 - 2 = 62`.
+///
+/// If `first > last` the iterator is empty.
+#[derive(Debug, Clone, Copy)]
+#[must_use]
+pub struct Ipv4RangeNetworks {
+    first: u32,
+    last: u32,
+    done: bool,
+}
+
+/// Returns an iterator over the minimum set of contiguous IPv4 networks
+/// covering the closed address interval `[first, last]`.
+///
+/// See [`Ipv4RangeNetworks`] for details. If `first > last` the iterator is
+/// empty.
+///
+/// # Examples
+///
+/// ```
+/// use core::net::Ipv4Addr;
+///
+/// use netip::{Contiguous, Ipv4Network, ipv4_range_to_networks};
+///
+/// let nets: Vec<_> =
+///     ipv4_range_to_networks(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255)).collect();
+/// assert_eq!(nets.len(), 1);
+/// assert_eq!(
+///     Contiguous::<Ipv4Network>::parse("10.0.0.0/24").unwrap(),
+///     nets[0]
+/// );
+/// ```
+#[inline]
+pub const fn ipv4_range_to_networks(first: Ipv4Addr, last: Ipv4Addr) -> Ipv4RangeNetworks {
+    let first = first.to_bits();
+    let last = last.to_bits();
+
+    Ipv4RangeNetworks { first, last, done: first > last }
+}
+
+impl Iterator for Ipv4RangeNetworks {
+    type Item = Contiguous<Ipv4Network>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+
+        let first = self.first;
+        let last = self.last;
+
+        // `size` is the interval length modulo 2^32. The only input that wraps
+        // to zero is the full range (first=0, last=MAX), and we encode that
+        // case as `size_log = 32`.
+        let size = last.wrapping_sub(first).wrapping_add(1);
+        let size_log: u32 = if size == 0 { 32 } else { 31 - size.leading_zeros() };
+        let align: u32 = if first == 0 { 32 } else { first.trailing_zeros() };
+        let n = if size_log < align { size_log } else { align };
+
+        let block_max: u32 = if n == 32 { u32::MAX } else { (1u32 << n) - 1 };
+        let end = first.wrapping_add(block_max);
+        let mask = !block_max;
+        let net = Contiguous(Ipv4Network::from_bits(first, mask));
+
+        if end == last {
+            self.done = true;
+        } else {
+            self.first = end + 1;
+        }
+
+        Some(net)
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if self.done { (0, Some(0)) } else { (1, Some(2 * 32 - 2)) }
+    }
+}
+
+impl core::iter::FusedIterator for Ipv4RangeNetworks {}
+
 /// Represents the network range in which IP addresses are IPv6.
 ///
 /// IPv6 networks are defined as pair of two [`Ipv6Addr`]. One for IP address
@@ -2938,6 +3029,99 @@ impl ExactSizeIterator for Ipv6NetworkDiff {
         self.remaining.count_ones() as usize
     }
 }
+
+/// An iterator over the minimum set of contiguous IPv6 networks (CIDR blocks)
+/// whose union equals the closed address interval `[first, last]`.
+///
+/// Use [`ipv6_range_to_networks`] to construct one.
+///
+/// The iterator is lazy and allocation-free. For each step it picks the largest
+/// CIDR block that (a) is aligned at the current `first` and (b) does not
+/// exceed `last`. This yields the **minimum cardinality** covering — no other
+/// CIDR decomposition of the same range uses fewer blocks. The upper bound on
+/// the total number of blocks is `2 * 128 - 2 = 254`.
+///
+/// If `first > last` the iterator is empty.
+#[derive(Debug, Clone, Copy)]
+#[must_use]
+pub struct Ipv6RangeNetworks {
+    first: u128,
+    last: u128,
+    done: bool,
+}
+
+/// Returns an iterator over the minimum set of contiguous IPv6 networks
+/// covering the closed address interval `[first, last]`.
+///
+/// See [`Ipv6RangeNetworks`] for details. If `first > last` the iterator is
+/// empty.
+///
+/// # Examples
+///
+/// ```
+/// use core::net::Ipv6Addr;
+///
+/// use netip::{Contiguous, Ipv6Network, ipv6_range_to_networks};
+///
+/// let first: Ipv6Addr = "2001:db8::".parse().unwrap();
+/// let last: Ipv6Addr = "2001:db8::ffff:ffff:ffff:ffff".parse().unwrap();
+/// let nets: Vec<_> = ipv6_range_to_networks(first, last).collect();
+/// assert_eq!(nets.len(), 1);
+/// assert_eq!(
+///     Contiguous::<Ipv6Network>::parse("2001:db8::/64").unwrap(),
+///     nets[0]
+/// );
+/// ```
+#[inline]
+pub const fn ipv6_range_to_networks(first: Ipv6Addr, last: Ipv6Addr) -> Ipv6RangeNetworks {
+    let first = first.to_bits();
+    let last = last.to_bits();
+
+    Ipv6RangeNetworks { first, last, done: first > last }
+}
+
+impl Iterator for Ipv6RangeNetworks {
+    type Item = Contiguous<Ipv6Network>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+
+        let first = self.first;
+        let last = self.last;
+
+        let size = last.wrapping_sub(first).wrapping_add(1);
+        let size_log: u32 = if size == 0 { 128 } else { 127 - size.leading_zeros() };
+        let align: u32 = if first == 0 { 128 } else { first.trailing_zeros() };
+        let n = if size_log < align { size_log } else { align };
+
+        let block_max: u128 = if n == 128 { u128::MAX } else { (1u128 << n) - 1 };
+        let end = first.wrapping_add(block_max);
+        let mask = !block_max;
+        let net = Contiguous(Ipv6Network::from_bits(first, mask));
+
+        if end == last {
+            self.done = true;
+        } else {
+            self.first = end + 1;
+        }
+
+        Some(net)
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if self.done {
+            (0, Some(0))
+        } else {
+            (1, Some(2 * 128 - 2))
+        }
+    }
+}
+
+impl core::iter::FusedIterator for Ipv6RangeNetworks {}
 
 impl Display for Ipv6Network {
     /// Formats this IPv6 network using the given formatter.
@@ -6730,6 +6914,194 @@ mod test {
         fn ipnetwork_to_contiguous_contains_original_v6(net in arb_ipv6_network()) {
             let ip_net = IpNetwork::V6(net);
             prop_assert!(ip_net.to_contiguous().contains(&ip_net));
+        }
+    }
+
+    #[test]
+    fn ipv4_range_to_networks_single_cidr() {
+        let nets: Vec<_> = ipv4_range_to_networks(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255)).collect();
+        assert_eq!(nets.len(), 1);
+        assert_eq!(Contiguous::<Ipv4Network>::parse("10.0.0.0/24").unwrap(), nets[0]);
+    }
+
+    #[test]
+    fn ipv4_range_to_networks_classic_misaligned() {
+        // The textbook example: 1..=254 decomposes into 14 blocks.
+        let nets: Vec<_> = ipv4_range_to_networks(Ipv4Addr::new(0, 0, 0, 1), Ipv4Addr::new(0, 0, 0, 254)).collect();
+        let expected = [
+            "0.0.0.1/32",
+            "0.0.0.2/31",
+            "0.0.0.4/30",
+            "0.0.0.8/29",
+            "0.0.0.16/28",
+            "0.0.0.32/27",
+            "0.0.0.64/26",
+            "0.0.0.128/26",
+            "0.0.0.192/27",
+            "0.0.0.224/28",
+            "0.0.0.240/29",
+            "0.0.0.248/30",
+            "0.0.0.252/31",
+            "0.0.0.254/32",
+        ];
+        assert_eq!(nets.len(), expected.len());
+        for (got, want) in nets.iter().zip(expected.iter()) {
+            assert_eq!(*got, Contiguous::<Ipv4Network>::parse(want).unwrap());
+        }
+    }
+
+    #[test]
+    fn ipv4_range_to_networks_full_range() {
+        let nets: Vec<_> = ipv4_range_to_networks(Ipv4Addr::new(0, 0, 0, 0), IPV4_ALL_BITS).collect();
+        assert_eq!(nets.len(), 1);
+        assert_eq!(Contiguous::<Ipv4Network>::parse("0.0.0.0/0").unwrap(), nets[0]);
+    }
+
+    #[test]
+    fn ipv4_range_to_networks_single_host_at_max() {
+        let nets: Vec<_> = ipv4_range_to_networks(IPV4_ALL_BITS, IPV4_ALL_BITS).collect();
+        assert_eq!(nets.len(), 1);
+        assert_eq!(Contiguous::<Ipv4Network>::parse("255.255.255.255/32").unwrap(), nets[0]);
+    }
+
+    #[test]
+    fn ipv4_range_to_networks_single_host() {
+        let nets: Vec<_> = ipv4_range_to_networks(Ipv4Addr::new(10, 0, 0, 5), Ipv4Addr::new(10, 0, 0, 5)).collect();
+        assert_eq!(nets.len(), 1);
+        assert_eq!(Contiguous::<Ipv4Network>::parse("10.0.0.5/32").unwrap(), nets[0]);
+    }
+
+    #[test]
+    fn ipv4_range_to_networks_invalid_order_is_empty() {
+        let nets: Vec<_> = ipv4_range_to_networks(Ipv4Addr::new(10, 0, 0, 10), Ipv4Addr::new(10, 0, 0, 5)).collect();
+        assert!(nets.is_empty());
+    }
+
+    #[test]
+    fn ipv4_range_to_networks_ends_at_max() {
+        // first != 0, last = MAX: tests the no-overflow exit path.
+        let first = Ipv4Addr::new(255, 255, 255, 254);
+        let nets: Vec<_> = ipv4_range_to_networks(first, IPV4_ALL_BITS).collect();
+        assert_eq!(nets.len(), 1);
+        assert_eq!(Contiguous::<Ipv4Network>::parse("255.255.255.254/31").unwrap(), nets[0]);
+    }
+
+    #[test]
+    fn ipv6_range_to_networks_single_cidr() {
+        let first: Ipv6Addr = "2001:db8::".parse().unwrap();
+        let last: Ipv6Addr = "2001:db8::ffff:ffff:ffff:ffff".parse().unwrap();
+        let nets: Vec<_> = ipv6_range_to_networks(first, last).collect();
+        assert_eq!(nets.len(), 1);
+        assert_eq!(Contiguous::<Ipv6Network>::parse("2001:db8::/64").unwrap(), nets[0]);
+    }
+
+    #[test]
+    fn ipv6_range_to_networks_full_range() {
+        let nets: Vec<_> = ipv6_range_to_networks(Ipv6Addr::UNSPECIFIED, IPV6_ALL_BITS).collect();
+        assert_eq!(nets.len(), 1);
+        assert_eq!(Contiguous::<Ipv6Network>::parse("::/0").unwrap(), nets[0]);
+    }
+
+    #[test]
+    fn ipv6_range_to_networks_ends_at_max() {
+        let first: Ipv6Addr = "ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe".parse().unwrap();
+        let nets: Vec<_> = ipv6_range_to_networks(first, IPV6_ALL_BITS).collect();
+        assert_eq!(nets.len(), 1);
+        assert_eq!(
+            Contiguous::<Ipv6Network>::parse("ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe/127").unwrap(),
+            nets[0]
+        );
+    }
+
+    #[test]
+    fn ipv6_range_to_networks_invalid_order_is_empty() {
+        let first: Ipv6Addr = "2001:db8::10".parse().unwrap();
+        let last: Ipv6Addr = "2001:db8::5".parse().unwrap();
+        let nets: Vec<_> = ipv6_range_to_networks(first, last).collect();
+        assert!(nets.is_empty());
+    }
+
+    proptest! {
+        #[test]
+        fn prop_ipv4_range_to_networks_covers_exactly(a in any::<u32>(), b in any::<u32>()) {
+            let (first_bits, last_bits) = if a <= b { (a, b) } else { (b, a) };
+            let first = Ipv4Addr::from_bits(first_bits);
+            let last = Ipv4Addr::from_bits(last_bits);
+
+            let nets: Vec<_> = ipv4_range_to_networks(first, last).collect();
+            prop_assert!(!nets.is_empty());
+
+            // Coverage is contiguous and abuts exactly [first, last].
+            let mut cursor = first_bits;
+            let mut covered_last: u32 = first_bits;
+            for (i, net) in nets.iter().enumerate() {
+                let (addr, mask) = net.to_bits();
+                // Address aligned to mask.
+                prop_assert_eq!(addr & mask, addr);
+                // Mask is contiguous (CIDR), guaranteed by the type but assert anyway.
+                let host = !mask;
+                prop_assert_eq!(host & host.wrapping_add(1), 0);
+                // Block start equals cursor.
+                prop_assert_eq!(addr, cursor);
+                let end = addr | host;
+                prop_assert!(end >= addr);
+                covered_last = end;
+                if i + 1 < nets.len() {
+                    prop_assert!(end < u32::MAX);
+                    cursor = end + 1;
+                }
+            }
+            prop_assert_eq!(covered_last, last_bits);
+
+            // Minimality: aggregate cannot reduce the count.
+            let mut raw: Vec<Ipv4Network> = nets.iter().map(|c| **c).collect();
+            let agg_len = ipv4_aggregate(&mut raw).len();
+            prop_assert_eq!(agg_len, nets.len());
+
+            // Bound from theory: at most 2N - 2 blocks.
+            prop_assert!(nets.len() <= 2 * 32 - 2);
+        }
+
+        #[test]
+        fn prop_ipv4_range_to_networks_empty_when_reversed(a in any::<u32>(), b in any::<u32>()) {
+            if a > b {
+                let nets: Vec<_> =
+                    ipv4_range_to_networks(Ipv4Addr::from_bits(a), Ipv4Addr::from_bits(b)).collect();
+                prop_assert!(nets.is_empty());
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_range_to_networks_covers_exactly(a in any::<u128>(), b in any::<u128>()) {
+            let (first_bits, last_bits) = if a <= b { (a, b) } else { (b, a) };
+            let first = Ipv6Addr::from_bits(first_bits);
+            let last = Ipv6Addr::from_bits(last_bits);
+
+            let nets: Vec<_> = ipv6_range_to_networks(first, last).collect();
+            prop_assert!(!nets.is_empty());
+
+            let mut cursor = first_bits;
+            let mut covered_last: u128 = first_bits;
+            for (i, net) in nets.iter().enumerate() {
+                let (addr, mask) = net.to_bits();
+                prop_assert_eq!(addr & mask, addr);
+                let host = !mask;
+                prop_assert_eq!(host & host.wrapping_add(1), 0);
+                prop_assert_eq!(addr, cursor);
+                let end = addr | host;
+                covered_last = end;
+                if i + 1 < nets.len() {
+                    prop_assert!(end < u128::MAX);
+                    cursor = end + 1;
+                }
+            }
+            prop_assert_eq!(covered_last, last_bits);
+
+            let mut raw: Vec<Ipv6Network> = nets.iter().map(|c| **c).collect();
+            let agg_len = ipv6_aggregate(&mut raw).len();
+            prop_assert_eq!(agg_len, nets.len());
+
+            prop_assert!(nets.len() <= 2 * 128 - 2);
         }
     }
 }
