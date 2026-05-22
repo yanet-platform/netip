@@ -3847,6 +3847,22 @@ impl Contiguous<Ipv6Network> {
     }
 }
 
+impl From<Contiguous<Ipv4Network>> for Contiguous<IpNetwork> {
+    #[inline]
+    fn from(net: Contiguous<Ipv4Network>) -> Self {
+        let Contiguous(net) = net;
+        Self(IpNetwork::from(net))
+    }
+}
+
+impl From<Contiguous<Ipv6Network>> for Contiguous<IpNetwork> {
+    #[inline]
+    fn from(net: Contiguous<Ipv6Network>) -> Self {
+        let Contiguous(net) = net;
+        Self(IpNetwork::from(net))
+    }
+}
+
 impl<T> Deref for Contiguous<T> {
     type Target = T;
 
@@ -6129,6 +6145,20 @@ mod test {
         assert_eq!(net, net.to_contiguous());
     }
 
+    #[test]
+    fn contiguous_from_v4() {
+        let v4: Contiguous<Ipv4Network> = Contiguous::<Ipv4Network>::parse("10.0.0.0/24").unwrap();
+        let ip: Contiguous<IpNetwork> = Contiguous::<IpNetwork>::from(v4);
+        assert_eq!("10.0.0.0/24", ip.to_string());
+    }
+
+    #[test]
+    fn contiguous_from_v6() {
+        let v6: Contiguous<Ipv6Network> = Contiguous::<Ipv6Network>::parse("2001:db8::/64").unwrap();
+        let ip: Contiguous<IpNetwork> = Contiguous::<IpNetwork>::from(v6);
+        assert_eq!("2001:db8::/64", ip.to_string());
+    }
+
     fn arb_ipv4_network() -> impl Strategy<Value = Ipv4Network> {
         (any::<u32>(), any::<u32>()).prop_map(|(a, m)| Ipv4Network::from_bits(a, m))
     }
@@ -7019,6 +7049,26 @@ mod test {
         let last: Ipv6Addr = "2001:db8::5".parse().unwrap();
         let nets: Vec<_> = ipv6_range_to_networks(first, last).collect();
         assert!(nets.is_empty());
+    }
+
+    #[test]
+    fn contiguous_range_collects_as_unified() {
+        let nets: Vec<Contiguous<IpNetwork>> =
+            ipv4_range_to_networks(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 5))
+                .map(Contiguous::<IpNetwork>::from)
+                .collect();
+        assert_eq!(2, nets.len());
+        assert_eq!("10.0.0.0/30", nets[0].to_string());
+        assert_eq!("10.0.0.4/31", nets[1].to_string());
+
+        let nets: Vec<Contiguous<IpNetwork>> = ipv6_range_to_networks(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
+        )
+        .map(Contiguous::<IpNetwork>::from)
+        .collect();
+        assert_eq!(1, nets.len());
+        assert_eq!("2001:db8::/127", nets[0].to_string());
     }
 
     proptest! {
