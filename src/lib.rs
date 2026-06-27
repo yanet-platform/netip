@@ -8,6 +8,7 @@
 
 #![deny(missing_docs)]
 
+pub mod fmt;
 mod macaddr;
 mod net;
 
