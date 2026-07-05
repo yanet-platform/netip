@@ -1347,22 +1347,23 @@ impl Ipv4Network {
         let (a2, m2) = other.to_bits();
 
         if m1 == m2 {
-            if a1 == a2 {
-                return Some(*self);
-            }
-            if let Some(d) = ipv4_adjacent_bit(a1, m1, a2, m2) {
-                let m = m1 ^ d;
-                let a = a1 & m;
-                return Some(Self(Ipv4Addr::from_bits(a), Ipv4Addr::from_bits(m)));
+            let diff = a1 ^ a2;
+            if diff & diff.wrapping_sub(1) == 0 {
+                // diff == 0 (duplicate) or a single bit (mergeable siblings).
+                let mask = m1 ^ diff;
+                return Some(Self(Ipv4Addr::from_bits(a1 & mask), Ipv4Addr::from_bits(mask)));
             }
             return None;
         }
 
-        if self.contains(other) {
-            return Some(*self);
+        let mask_common = m1 & m2;
+        if mask_common == m2 {
+            // Only `other` can contain `self`.
+            return if a1 & m2 == a2 { Some(*other) } else { None };
         }
-        if other.contains(self) {
-            return Some(*other);
+        if mask_common == m1 {
+            // Only `self` can contain `other`.
+            return if a2 & m1 == a1 { Some(*self) } else { None };
         }
         None
     }
@@ -2758,22 +2759,23 @@ impl Ipv6Network {
         let (a2, m2) = other.to_bits();
 
         if m1 == m2 {
-            if a1 == a2 {
-                return Some(*self);
-            }
-            if let Some(d) = ipv6_adjacent_bit(a1, m1, a2, m2) {
-                let m = m1 ^ d;
-                let a = a1 & m;
-                return Some(Self(Ipv6Addr::from_bits(a), Ipv6Addr::from_bits(m)));
+            let diff = a1 ^ a2;
+            if diff & diff.wrapping_sub(1) == 0 {
+                // diff == 0 (duplicate) or a single bit (mergeable siblings).
+                let mask = m1 ^ diff;
+                return Some(Self(Ipv6Addr::from_bits(a1 & mask), Ipv6Addr::from_bits(mask)));
             }
             return None;
         }
 
-        if self.contains(other) {
-            return Some(*self);
+        let mask_common = m1 & m2;
+        if mask_common == m2 {
+            // Only `other` can contain `self`.
+            return if a1 & m2 == a2 { Some(*other) } else { None };
         }
-        if other.contains(self) {
-            return Some(*other);
+        if mask_common == m1 {
+            // Only `self` can contain `other`.
+            return if a2 & m1 == a1 { Some(*self) } else { None };
         }
         None
     }
@@ -5607,6 +5609,60 @@ mod test {
         }
     }
 
+    // Pre-rewrite `Ipv4Network::merge` body, kept verbatim to validate the
+    // cheaper-reject-path rewrite against known-correct behavior.
+    fn ipv4_merge_reference(a: &Ipv4Network, b: &Ipv4Network) -> Option<Ipv4Network> {
+        let (a1, m1) = a.to_bits();
+        let (a2, m2) = b.to_bits();
+
+        if m1 == m2 {
+            if a1 == a2 {
+                return Some(*a);
+            }
+            if let Some(d) = ipv4_adjacent_bit(a1, m1, a2, m2) {
+                let m = m1 ^ d;
+                let addr = a1 & m;
+                return Some(Ipv4Network(Ipv4Addr::from_bits(addr), Ipv4Addr::from_bits(m)));
+            }
+            return None;
+        }
+
+        if a.contains(b) {
+            return Some(*a);
+        }
+        if b.contains(a) {
+            return Some(*b);
+        }
+        None
+    }
+
+    // Pre-rewrite `Ipv6Network::merge` body, kept verbatim to validate the
+    // cheaper-reject-path rewrite against known-correct behavior.
+    fn ipv6_merge_reference(a: &Ipv6Network, b: &Ipv6Network) -> Option<Ipv6Network> {
+        let (a1, m1) = a.to_bits();
+        let (a2, m2) = b.to_bits();
+
+        if m1 == m2 {
+            if a1 == a2 {
+                return Some(*a);
+            }
+            if let Some(d) = ipv6_adjacent_bit(a1, m1, a2, m2) {
+                let m = m1 ^ d;
+                let addr = a1 & m;
+                return Some(Ipv6Network(Ipv6Addr::from_bits(addr), Ipv6Addr::from_bits(m)));
+            }
+            return None;
+        }
+
+        if a.contains(b) {
+            return Some(*a);
+        }
+        if b.contains(a) {
+            return Some(*b);
+        }
+        None
+    }
+
     // Compares the two implementations directly, bypassing `ip_binary_split`'s
     // size-based router entirely, so both are exercised across the full n
     // range regardless of `Word::SPLIT_THRESHOLD`.
@@ -6630,6 +6686,99 @@ mod test {
         let a = Ipv6Network::parse("2001::1/ffff:ff00::ffff").unwrap();
         let b = Ipv6Network::parse("2001:300::1/ffff:ff00::ffff").unwrap();
         assert_eq!(None, a.merge(&b));
+    }
+
+    #[test]
+    fn ipv4_merge_matches_reference_fixed_cases() {
+        let cases = [
+            // Exact duplicate: the more expensive path in the rewrite.
+            ("192.168.1.0/24", "192.168.1.0/24"),
+            // Same mask, adjacent (contiguous siblings).
+            ("192.168.0.0/24", "192.168.1.0/24"),
+            // Same mask, adjacent (non-contiguous siblings).
+            ("192.168.0.0/255.255.255.0", "192.168.2.0/255.255.255.0"),
+            // Same mask, not adjacent, not identical -> reject.
+            ("192.168.0.0/24", "192.168.3.0/24"),
+            // Comparable masks: self's mask is a subset of other's, address matches.
+            ("10.0.0.0/8", "10.1.0.0/16"),
+            // Comparable masks: other's mask is a subset of self's, address matches.
+            ("10.1.0.0/16", "10.0.0.0/8"),
+            // Comparable masks: self's mask is a subset of other's, address mismatch -> reject.
+            ("10.0.0.0/8", "172.16.0.0/16"),
+            // Comparable masks: other's mask is a subset of self's, address mismatch -> reject.
+            ("172.16.0.0/16", "10.0.0.0/8"),
+            // Incomparable non-contiguous masks -> reject regardless of address.
+            ("10.0.0.1/255.255.0.255", "10.0.0.1/255.0.255.255"),
+        ];
+
+        for (a, b) in cases {
+            let a = Ipv4Network::parse(a).unwrap();
+            let b = Ipv4Network::parse(b).unwrap();
+            assert_eq!(ipv4_merge_reference(&a, &b), a.merge(&b), "mismatch: a={a}, b={b}");
+        }
+    }
+
+    #[test]
+    fn ipv4_merge_matches_reference_random() {
+        let mut rng = Xorshift64::new(0x4D45_5247_4531_3234);
+        let mut cases = 0usize;
+
+        for _ in 0..4000 {
+            let a = random_ipv4_network(&mut rng);
+            let b = random_ipv4_network(&mut rng);
+            cases += 1;
+            assert_eq!(ipv4_merge_reference(&a, &b), a.merge(&b), "mismatch: a={a}, b={b}");
+        }
+
+        assert!(cases >= 2000, "expected at least 2000 cases, got {cases}");
+    }
+
+    #[test]
+    fn ipv6_merge_matches_reference_fixed_cases() {
+        let cases = [
+            // Exact duplicate: the more expensive path in the rewrite.
+            ("2001:db8::/48", "2001:db8::/48"),
+            // Same mask, adjacent (contiguous siblings).
+            ("2001:db8::/48", "2001:db8:1::/48"),
+            // Same mask, adjacent (non-contiguous siblings).
+            (
+                "2a02:6b8:c00::1234:0:0/ffff:ffff:ff00::ffff:ffff:0:0",
+                "2a02:6b8:c00::1235:0:0/ffff:ffff:ff00::ffff:ffff:0:0",
+            ),
+            // Same mask, not adjacent, not identical -> reject.
+            ("2001:db8::/48", "2001:db8:5::/48"),
+            // Comparable masks: self's mask is a subset of other's, address matches.
+            ("2001:db8::/32", "2001:db8:1::/48"),
+            // Comparable masks: other's mask is a subset of self's, address matches.
+            ("2001:db8:1::/48", "2001:db8::/32"),
+            // Comparable masks: self's mask is a subset of other's, address mismatch -> reject.
+            ("2001:db8::/32", "2001:beef:1::/48"),
+            // Comparable masks: other's mask is a subset of self's, address mismatch -> reject.
+            ("2001:beef:1::/48", "2001:db8::/32"),
+            // Incomparable non-contiguous masks -> reject regardless of address.
+            ("2001:db8::1/ffff:0:ffff::", "2001:db8::1/0:ffff:ffff::"),
+        ];
+
+        for (a, b) in cases {
+            let a = Ipv6Network::parse(a).unwrap();
+            let b = Ipv6Network::parse(b).unwrap();
+            assert_eq!(ipv6_merge_reference(&a, &b), a.merge(&b), "mismatch: a={a}, b={b}");
+        }
+    }
+
+    #[test]
+    fn ipv6_merge_matches_reference_random() {
+        let mut rng = Xorshift64::new(0x4956_3648_4E45_5457);
+        let mut cases = 0usize;
+
+        for _ in 0..4000 {
+            let a = random_ipv6_network(&mut rng);
+            let b = random_ipv6_network(&mut rng);
+            cases += 1;
+            assert_eq!(ipv6_merge_reference(&a, &b), a.merge(&b), "mismatch: a={a}, b={b}");
+        }
+
+        assert!(cases >= 2000, "expected at least 2000 cases, got {cases}");
     }
 
     #[test]
