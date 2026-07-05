@@ -1061,8 +1061,12 @@ impl Ipv4Network {
     /// Returns an iterator over networks whose union equals the set difference
     /// `self \ other`, i.e. all addresses in `self` that are not in `other`.
     ///
-    /// The result contains at most `popcount(m2 & !m1)` pairwise-disjoint
-    /// networks (at most 32). Works correctly with non-contiguous masks.
+    /// The result contains exactly `popcount(m2 & !m1)` pairwise-disjoint
+    /// networks when `self` and `other` overlap (0 if `self` is a subset of
+    /// `other`, at most 32 otherwise), or exactly 1 if they are disjoint —
+    /// never merely an upper bound, and provably the minimum number of
+    /// networks (including non-contiguous ones) that can represent the
+    /// difference. Works correctly with non-contiguous masks.
     ///
     /// # Examples
     ///
@@ -1745,7 +1749,7 @@ impl ExactSizeIterator for Ipv4NetworkAddrs {
 /// `S(A) \ S(B)`.
 ///
 /// Each call to [`next`](Iterator::next) computes one network by peeling the
-/// lowest remaining bit from the difference mask.
+/// highest remaining bit from the difference mask.
 #[derive(Debug, Clone, Copy)]
 pub struct Ipv4NetworkDiff {
     /// Intersection address, or an encoded address for the disjoint shortcut.
@@ -2355,8 +2359,12 @@ impl Ipv6Network {
     /// Returns an iterator over networks whose union equals the set difference
     /// `self \ other`, i.e. all addresses in `self` that are not in `other`.
     ///
-    /// The result contains at most `popcount(m2 & !m1)` pairwise-disjoint
-    /// networks (at most 128). Works correctly with non-contiguous masks.
+    /// The result contains exactly `popcount(m2 & !m1)` pairwise-disjoint
+    /// networks when `self` and `other` overlap (0 if `self` is a subset of
+    /// `other`, at most 128 otherwise), or exactly 1 if they are disjoint —
+    /// never merely an upper bound, and provably the minimum number of
+    /// networks (including non-contiguous ones) that can represent the
+    /// difference. Works correctly with non-contiguous masks.
     ///
     /// # Examples
     ///
