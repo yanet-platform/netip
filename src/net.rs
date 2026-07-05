@@ -7,6 +7,7 @@
 //! non-contiguous masks.
 
 use core::{
+    cmp::Ordering,
     convert::TryFrom,
     error::Error,
     fmt::{Debug, Display, Formatter},
@@ -747,7 +748,7 @@ impl FromStr for IpNetwork {
 /// non-contiguous bits set to one, like `77.152.0.55/255.255.0.255`.
 ///
 /// [IETF RFC 4632]: https://tools.ietf.org/html/rfc4632
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Ipv4Network(Ipv4Addr, Ipv4Addr);
 
 impl Ipv4Network {
@@ -1518,6 +1519,34 @@ impl Ipv4Network {
         let back = u32::MAX.checked_shr(32 - host_bits).unwrap_or(0);
 
         Ipv4NetworkAddrs { base: addr, mask, front: 0, back }
+    }
+}
+
+// Total order on the address and mask packed into a single `u64` key, in
+// place of the derived lexicographic comparison of the two `Ipv4Addr` fields.
+//
+// Concatenating the big-endian `addr` and `mask` bit patterns into one `u64`
+// (`addr` in the high 32 bits, `mask` in the low 32 bits) preserves their
+// lexicographic order exactly, since comparing two fixed-width integers
+// numerically already agrees with comparing their big-endian byte sequences,
+// and that holds independently for each field of the concatenation.
+impl Ord for Ipv4Network {
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        let (self_addr, self_mask) = self.to_bits();
+        let (other_addr, other_mask) = other.to_bits();
+        let self_key = (self_addr as u64) << 32 | self_mask as u64;
+        let other_key = (other_addr as u64) << 32 | other_mask as u64;
+
+        self_key.cmp(&other_key)
+    }
+}
+
+// Delegates to `Ord::cmp`, which defines `Ipv4Network`'s total order.
+impl PartialOrd for Ipv4Network {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
