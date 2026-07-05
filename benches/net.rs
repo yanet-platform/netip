@@ -893,6 +893,64 @@ fn bench_difference_count(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_difference_rev(c: &mut Criterion) {
+    let mut group = c.benchmark_group("netip");
+
+    group.throughput(Throughput::Elements(32));
+    group.bench_function("Ipv4Network::difference rev universe minus host", |b| {
+        let source = Ipv4Network::parse("0.0.0.0/0").unwrap();
+        let other = Ipv4Network::parse("1.2.3.4/32").unwrap();
+        b.iter(|| {
+            for net in core::hint::black_box(&source)
+                .difference(core::hint::black_box(&other))
+                .rev()
+            {
+                core::hint::black_box(net);
+            }
+        });
+    });
+
+    group.throughput(Throughput::Elements(128));
+    group.bench_function("Ipv6Network::difference rev universe minus host", |b| {
+        let source = Ipv6Network::parse("::/0").unwrap();
+        let other = Ipv6Network::parse("2001:db8::1/128").unwrap();
+        b.iter(|| {
+            for net in core::hint::black_box(&source)
+                .difference(core::hint::black_box(&other))
+                .rev()
+            {
+                core::hint::black_box(net);
+            }
+        });
+    });
+
+    group.finish();
+}
+
+fn bench_difference_last(c: &mut Criterion) {
+    let mut group = c.benchmark_group("netip");
+
+    group.bench_function("Ipv4Network::difference last", |b| {
+        let source = Ipv4Network::parse("0.0.0.0/0").unwrap();
+        let other = Ipv4Network::parse("1.2.3.4/32").unwrap();
+        b.iter(|| {
+            let diff = core::hint::black_box(&source).difference(core::hint::black_box(&other));
+            core::hint::black_box(diff.last());
+        });
+    });
+
+    group.bench_function("Ipv6Network::difference last", |b| {
+        let source = Ipv6Network::parse("::/0").unwrap();
+        let other = Ipv6Network::parse("2001:db8::1/128").unwrap();
+        b.iter(|| {
+            let diff = core::hint::black_box(&source).difference(core::hint::black_box(&other));
+            core::hint::black_box(diff.last());
+        });
+    });
+
+    group.finish();
+}
+
 fn bench_range_to_networks(c: &mut Criterion) {
     use netip::{ipv4_range_to_networks, ipv6_range_to_networks};
 
@@ -1174,6 +1232,8 @@ criterion_group!(
     bench_supernet_for,
     bench_difference,
     bench_difference_count,
+    bench_difference_rev,
+    bench_difference_last,
     bench_range_to_networks,
     bench_to_ipv4_mapped,
     bench_to_contiguous,
