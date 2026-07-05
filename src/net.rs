@@ -1754,10 +1754,9 @@ impl ExactSizeIterator for Ipv4NetworkAddrs {
 pub struct Ipv4NetworkDiff {
     /// Intersection address, or an encoded address for the disjoint shortcut.
     addr: u32,
-    /// Mask of the source network (possibly with one bit cleared for disjoint).
+    /// Mask of the source network, gaining one bit of `d` per `next()` call
+    /// (or with one bit cleared for the disjoint shortcut).
     mask: u32,
-    /// Bits of `d` already yielded.
-    processed: u32,
     /// Bits of `d` not yet yielded.
     remaining: u32,
 }
@@ -1787,7 +1786,6 @@ impl Ipv4NetworkDiff {
                 Self {
                     addr: addr ^ b,
                     mask: mask ^ b,
-                    processed: 0,
                     remaining: b,
                 }
             }
@@ -1799,18 +1797,12 @@ impl Ipv4NetworkDiff {
 
                 if d == 0 {
                     // A ⊆ B: A \ B = ∅.
-                    Self {
-                        addr: 0,
-                        mask: 0,
-                        processed: 0,
-                        remaining: 0,
-                    }
+                    Self { addr: 0, mask: 0, remaining: 0 }
                 } else {
                     // General case: peel one network per bit of d.
                     Self {
                         addr: intersected_addr,
                         mask,
-                        processed: 0,
                         remaining: d,
                     }
                 }
@@ -1829,13 +1821,12 @@ impl Iterator for Ipv4NetworkDiff {
         }
 
         let b = 0x8000_0000u32 >> self.remaining.leading_zeros();
-        let mask = self.mask | self.processed | b;
-        let addr = (self.addr ^ b) & mask;
-        self.processed |= b;
+        self.mask |= b;
+        let addr = (self.addr ^ b) & self.mask;
         self.remaining ^= b;
 
         // NOTE: address is already normalized by the `& mask` above.
-        Some(Ipv4Network(Ipv4Addr::from_bits(addr), Ipv4Addr::from_bits(mask)))
+        Some(Ipv4Network(Ipv4Addr::from_bits(addr), Ipv4Addr::from_bits(self.mask)))
     }
 
     #[inline]
@@ -3058,10 +3049,9 @@ const fn pdep_u128(mut src: u128, mut mask: u128) -> u128 {
 pub struct Ipv6NetworkDiff {
     /// Intersection address, or an encoded address for the disjoint shortcut.
     addr: u128,
-    /// Mask of the source network (possibly with one bit cleared for disjoint).
+    /// Mask of the source network, gaining one bit of `d` per `next()` call
+    /// (or with one bit cleared for the disjoint shortcut).
     mask: u128,
-    /// Bits of `d` already yielded.
-    processed: u128,
     /// Bits of `d` not yet yielded.
     remaining: u128,
 }
@@ -3091,7 +3081,6 @@ impl Ipv6NetworkDiff {
                 Self {
                     addr: addr ^ b,
                     mask: mask ^ b,
-                    processed: 0,
                     remaining: b,
                 }
             }
@@ -3103,20 +3092,10 @@ impl Ipv6NetworkDiff {
 
                 if d == 0 {
                     // A ⊆ B: A \ B = ∅.
-                    Self {
-                        addr: 0,
-                        mask: 0,
-                        processed: 0,
-                        remaining: 0,
-                    }
+                    Self { addr: 0, mask: 0, remaining: 0 }
                 } else {
                     // General case: peel one network per bit of d.
-                    Self {
-                        addr: inter_addr,
-                        mask,
-                        processed: 0,
-                        remaining: d,
-                    }
+                    Self { addr: inter_addr, mask, remaining: d }
                 }
             }
         }
@@ -3133,13 +3112,12 @@ impl Iterator for Ipv6NetworkDiff {
         }
 
         let b = 1u128 << (127 - self.remaining.leading_zeros());
-        let mask = self.mask | self.processed | b;
-        let addr = (self.addr ^ b) & mask;
-        self.processed |= b;
+        self.mask |= b;
+        let addr = (self.addr ^ b) & self.mask;
         self.remaining ^= b;
 
         // NOTE: address is already normalized by the `& mask` above.
-        Some(Ipv6Network(Ipv6Addr::from_bits(addr), Ipv6Addr::from_bits(mask)))
+        Some(Ipv6Network(Ipv6Addr::from_bits(addr), Ipv6Addr::from_bits(self.mask)))
     }
 
     #[inline]
@@ -8082,6 +8060,82 @@ mod test {
 
             prop_assert_eq!(diff.count(), len, "a={}, b={}", a, b);
             prop_assert_eq!(manual, len, "a={}, b={}", a, b);
+        }
+
+        // Pins `Ipv4NetworkDiff::next`'s peel order exactly, independent of the
+        // folded `mask`/`processed` representation: `d` (bits fixed in
+        // `A ∩ B` but free in `A`) is recomputed here from the original `a`,
+        // `b`, so each yielded mask's extra bits over `a`'s mask must be a
+        // strictly growing subset of `d`, gaining exactly its next-highest
+        // unset bit per step, until all of `d` is covered.
+        #[test]
+        fn prop_ipv4_difference_masks_match_peel_order(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+            let (.., source_mask) = a.to_bits();
+
+            let d = match a.intersection(&b) {
+                None => {
+                    let items: Vec<_> = a.difference(&b).collect();
+                    prop_assert_eq!(items, vec![a], "a={}, b={}", a, b);
+                    return Ok(());
+                }
+                Some(inter) => {
+                    let (.., inter_mask) = inter.to_bits();
+                    inter_mask & !source_mask
+                }
+            };
+
+            let mut extra_so_far = 0u32;
+            for net in a.difference(&b) {
+                let (.., mask) = net.to_bits();
+                let extra = mask & !source_mask;
+                let new_bit = extra & !extra_so_far;
+                let not_yet_peeled = d & !extra_so_far;
+                let expected_new_bit = 1u32 << (31 - not_yet_peeled.leading_zeros());
+
+                prop_assert_eq!(extra & !d, 0, "a={}, b={}, net={}", a, b, net);
+                prop_assert_eq!(extra & extra_so_far, extra_so_far, "a={}, b={}, net={}", a, b, net);
+                prop_assert_eq!(new_bit.count_ones(), 1, "a={}, b={}, net={}", a, b, net);
+                prop_assert_eq!(new_bit, expected_new_bit, "a={}, b={}, net={}", a, b, net);
+
+                extra_so_far = extra;
+            }
+
+            prop_assert_eq!(extra_so_far, d, "a={}, b={}", a, b);
+        }
+
+        #[test]
+        fn prop_ipv6_difference_masks_match_peel_order(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+            let (.., source_mask) = a.to_bits();
+
+            let d = match a.intersection(&b) {
+                None => {
+                    let items: Vec<_> = a.difference(&b).collect();
+                    prop_assert_eq!(items, vec![a], "a={}, b={}", a, b);
+                    return Ok(());
+                }
+                Some(inter) => {
+                    let (.., inter_mask) = inter.to_bits();
+                    inter_mask & !source_mask
+                }
+            };
+
+            let mut extra_so_far = 0u128;
+            for net in a.difference(&b) {
+                let (.., mask) = net.to_bits();
+                let extra = mask & !source_mask;
+                let new_bit = extra & !extra_so_far;
+                let not_yet_peeled = d & !extra_so_far;
+                let expected_new_bit = 1u128 << (127 - not_yet_peeled.leading_zeros());
+
+                prop_assert_eq!(extra & !d, 0, "a={}, b={}, net={}", a, b, net);
+                prop_assert_eq!(extra & extra_so_far, extra_so_far, "a={}, b={}, net={}", a, b, net);
+                prop_assert_eq!(new_bit.count_ones(), 1, "a={}, b={}, net={}", a, b, net);
+                prop_assert_eq!(new_bit, expected_new_bit, "a={}, b={}, net={}", a, b, net);
+
+                extra_so_far = extra;
+            }
+
+            prop_assert_eq!(extra_so_far, d, "a={}, b={}", a, b);
         }
 
         // `Ipv6Network::to_ipv4_mapped` truncates an already-normalized
