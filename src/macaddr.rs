@@ -473,4 +473,91 @@ mod test {
         assert!(a < b);
         assert!(b < c);
     }
+
+    #[test]
+    fn parse_mixed_separator_colon_then_hyphen() {
+        assert!("aa:bb-cc:dd-ee:ff".parse::<MacAddr>().is_err());
+    }
+
+    #[test]
+    fn parse_mixed_separator_hyphen_then_colon() {
+        assert!("aa-bb:cc-dd:ee-ff".parse::<MacAddr>().is_err());
+    }
+
+    #[test]
+    fn parse_separator_position_space() {
+        assert!("3a ac:26:9b:5b:f9".parse::<MacAddr>().is_err());
+    }
+
+    #[test]
+    fn parse_separator_position_period() {
+        assert!("3a.ac:26:9b:5b:f9".parse::<MacAddr>().is_err());
+    }
+
+    #[test]
+    fn parse_separator_position_hex_digit() {
+        assert!("3a1ac:26:9b:5b:f9".parse::<MacAddr>().is_err());
+    }
+
+    #[test]
+    fn parse_inconsistent_separator_at_5() {
+        assert!("3a:acx26:9b:5b:f9".parse::<MacAddr>().is_err());
+    }
+
+    #[test]
+    fn parse_inconsistent_separator_at_8() {
+        assert!("3a:ac:26x9b:5b:f9".parse::<MacAddr>().is_err());
+    }
+
+    #[test]
+    fn parse_inconsistent_separator_at_11() {
+        assert!("3a:ac:26:9bx5b:f9".parse::<MacAddr>().is_err());
+    }
+
+    #[test]
+    fn parse_inconsistent_separator_at_14() {
+        assert!("3a:ac:26:9b:5bxf9".parse::<MacAddr>().is_err());
+    }
+
+    // Small deterministic xorshift64 PRNG used only to build randomized
+    // property-test fixtures; this crate stays zero-dependency, so no
+    // proptest/rand strategies are used for these cases.
+    struct Xorshift64(u64);
+
+    impl Xorshift64 {
+        fn new(seed: u64) -> Self {
+            Self(if seed == 0 { 0x9E37_79B9_7F4A_7C15 } else { seed })
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+    }
+
+    #[test]
+    fn parse_display_roundtrip_property() {
+        let mut rng = Xorshift64::new(0xC0FF_EE12_3456_789A);
+
+        for _ in 0..1000 {
+            let random_bits = rng.next_u64() & 0xffff_ffff_ffff;
+            let mac = MacAddr::from(random_bits);
+            let formatted = mac.to_string();
+
+            assert_eq!(
+                Ok(mac),
+                MacAddr::parse_ascii(formatted.as_bytes()),
+                "roundtrip for {formatted}"
+            );
+            assert_eq!(
+                formatted.parse::<MacAddr>(),
+                MacAddr::parse_ascii(formatted.as_bytes()),
+                "FromStr/parse_ascii mismatch for {formatted}"
+            );
+        }
+    }
 }
