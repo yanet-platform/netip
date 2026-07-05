@@ -543,6 +543,34 @@ fn bench_binary_split(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_difference(c: &mut Criterion) {
+    let mut group = c.benchmark_group("netip");
+
+    group.throughput(Throughput::Elements(32));
+    group.bench_function("Ipv4Network::difference universe minus host", |b| {
+        let source = Ipv4Network::parse("0.0.0.0/0").unwrap();
+        let other = Ipv4Network::parse("1.2.3.4/32").unwrap();
+        b.iter(|| {
+            for net in core::hint::black_box(&source).difference(core::hint::black_box(&other)) {
+                core::hint::black_box(net);
+            }
+        });
+    });
+
+    group.throughput(Throughput::Elements(128));
+    group.bench_function("Ipv6Network::difference universe minus host", |b| {
+        let source = Ipv6Network::parse("::/0").unwrap();
+        let other = Ipv6Network::parse("2001:db8::1/128").unwrap();
+        b.iter(|| {
+            for net in core::hint::black_box(&source).difference(core::hint::black_box(&other)) {
+                core::hint::black_box(net);
+            }
+        });
+    });
+
+    group.finish();
+}
+
 fn bench_ord(c: &mut Criterion) {
     let mut group = c.benchmark_group("netip");
 
@@ -621,6 +649,7 @@ criterion_group!(
     bench_is_contiguous,
     bench_aggregate,
     bench_binary_split,
+    bench_difference,
     bench_ord
 );
 criterion_main!(benches);
