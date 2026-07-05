@@ -18,7 +18,7 @@
 
 use core::{
     fmt::{self, Display, Formatter},
-    str::FromStr,
+    str::{self, FromStr},
 };
 
 /// A 48-bit MAC (EUI-48) address.
@@ -266,8 +266,42 @@ impl Display for MacAddr {
     fn fmt(&self, fmt: &mut Formatter) -> Result<(), fmt::Error> {
         let [a, b, c, d, e, f] = self.octets();
 
-        write!(fmt, "{a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{f:02x}")
+        // Build the canonical `xx:xx:xx:xx:xx:xx` representation on the
+        // stack, then emit it through a single write_str instead of 11
+        // fragment writes (6 hex fields + 5 colons) into the Formatter.
+        let mut buf = [0u8; 17];
+        buf[0..2].copy_from_slice(&hex_octet(a));
+        buf[2] = b':';
+        buf[3..5].copy_from_slice(&hex_octet(b));
+        buf[5] = b':';
+        buf[6..8].copy_from_slice(&hex_octet(c));
+        buf[8] = b':';
+        buf[9..11].copy_from_slice(&hex_octet(d));
+        buf[11] = b':';
+        buf[12..14].copy_from_slice(&hex_octet(e));
+        buf[14] = b':';
+        buf[15..17].copy_from_slice(&hex_octet(f));
+
+        // SAFETY: every byte written above is an ASCII hex digit or `b':'`.
+        fmt.write_str(unsafe { str::from_utf8_unchecked(&buf) })
     }
+}
+
+/// Encodes a 4-bit nibble (must be `< 16`) as its lowercase ASCII hex digit.
+///
+/// Branchless: digits `0..=9` map to `'0'..='9'`; digits `10..=15` need an
+/// extra `'a' - '0' - 10` offset to land in the lowercase letter range, added
+/// via a 0/1 multiplier instead of a conditional.
+#[inline]
+const fn hex_nibble(nibble: u8) -> u8 {
+    let is_letter = (nibble > 9) as u8;
+    nibble + b'0' + is_letter * (b'a' - b'0' - 10)
+}
+
+/// Encodes a byte as its two-digit lowercase ASCII hex representation.
+#[inline]
+const fn hex_octet(byte: u8) -> [u8; 2] {
+    [hex_nibble(byte >> 4), hex_nibble(byte & 0x0f)]
 }
 
 impl FromStr for MacAddr {
@@ -374,6 +408,43 @@ mod test {
     #[test]
     fn display_canonical() {
         assert_eq!("3a:ac:26:9b:5b:f9", MAC.to_string());
+    }
+
+    #[test]
+    fn display_zero() {
+        assert_eq!("00:00:00:00:00:00", MacAddr::ZERO.to_string());
+    }
+
+    #[test]
+    fn display_broadcast() {
+        assert_eq!("ff:ff:ff:ff:ff:ff", MacAddr::BROADCAST.to_string());
+    }
+
+    #[test]
+    fn hex_nibble_all_values() {
+        let expected = b"0123456789abcdef";
+        for (nibble, &digit) in expected.iter().enumerate() {
+            assert_eq!(digit, hex_nibble(nibble as u8), "nibble {nibble}");
+        }
+    }
+
+    #[test]
+    fn hex_octet_boundaries() {
+        assert_eq!(*b"00", hex_octet(0x00));
+        assert_eq!(*b"ff", hex_octet(0xff));
+        assert_eq!(*b"0a", hex_octet(0x0a));
+        assert_eq!(*b"a0", hex_octet(0xa0));
+    }
+
+    #[test]
+    fn hex_octet_matches_format_spec_for_all_bytes() {
+        // The previous Display impl delegated to `{:02x}` per octet; every
+        // byte value must still encode identically under the new stack-buffer
+        // path.
+        for byte in 0..=u8::MAX {
+            let expected = format!("{byte:02x}");
+            assert_eq!(expected.as_bytes(), hex_octet(byte), "byte {byte:#04x}");
+        }
     }
 
     #[test]
