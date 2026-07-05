@@ -92,7 +92,8 @@ impl MacAddr {
     /// ```
     pub fn parse_ascii(b: &[u8]) -> Result<Self, MacAddrParseError> {
         match b.len() {
-            17 => parse_separated(b),
+            // The length check above guarantees this conversion never fails.
+            17 => parse_separated(b.try_into().unwrap()),
             _ => Err(MacAddrParseError),
         }
     }
@@ -301,12 +302,16 @@ const fn decode_hex_pair(hi: u8, lo: u8) -> Result<u8, MacAddrParseError> {
     Ok(hi << 4 | lo)
 }
 
-/// Parses `xx:xx:xx:xx:xx:xx` or `xx-xx-xx-xx-xx-xx` from a 17-byte slice.
+/// Parses `xx:xx:xx:xx:xx:xx` or `xx-xx-xx-xx-xx-xx` from a 17-byte array.
 ///
 /// The separator character is determined from byte 2 and must be consistent
 /// across all positions. Mixed separators (e.g. `aa:bb-cc:dd-ee:ff`) are
 /// rejected.
-fn parse_separated(b: &[u8]) -> Result<MacAddr, MacAddrParseError> {
+///
+/// Taking a fixed-size array rather than a slice lets the compiler prove
+/// every index below is in bounds at compile time, eliding the runtime
+/// bounds checks a `&[u8]` parameter would require.
+fn parse_separated(b: &[u8; 17]) -> Result<MacAddr, MacAddrParseError> {
     let sep = b[2];
     if sep != b':' && sep != b'-' {
         return Err(MacAddrParseError);
