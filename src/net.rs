@@ -257,7 +257,12 @@ impl IpNetwork {
     /// );
     /// ```
     pub fn parse(buf: &str) -> Result<Self, IpNetParseError> {
-        match Ipv4Network::parse(buf) {
+        let (addr, mask) = match buf.split_once('/') {
+            Some((addr, mask)) => (addr, Some(mask)),
+            None => (buf, None),
+        };
+
+        match Ipv4Network::parse_parts(addr, mask) {
             Ok(net) => {
                 return Ok(Self::V4(net));
             }
@@ -267,7 +272,7 @@ impl IpNetwork {
             }
         }
 
-        let net = Ipv6Network::parse(buf)?;
+        let net = Ipv6Network::parse_parts(addr, mask)?;
         Ok(Self::V6(net))
     }
 
@@ -825,10 +830,21 @@ impl Ipv4Network {
     /// );
     /// ```
     pub fn parse(buf: &str) -> Result<Self, IpNetParseError> {
-        let mut parts = buf.splitn(2, '/');
-        let addr = parts.next().ok_or(IpNetParseError::ExpectedIpAddr)?;
+        match buf.split_once('/') {
+            Some((addr, mask)) => Self::parse_parts(addr, Some(mask)),
+            None => Self::parse_parts(buf, None),
+        }
+    }
+
+    /// Parses an address paired with an already-extracted, optional mask.
+    ///
+    /// Shared by [`Self::parse`] and [`IpNetwork::parse`], the latter of which
+    /// splits `buf` on `/` once and reuses the parts across both address
+    /// families instead of letting each family parser re-scan the input.
+    #[inline]
+    fn parse_parts(addr: &str, mask: Option<&str>) -> Result<Self, IpNetParseError> {
         let addr: Ipv4Addr = addr.parse()?;
-        match parts.next() {
+        match mask {
             Some(mask) => match mask.parse::<u8>() {
                 Ok(cidr) => Ok(Self::try_from((addr, cidr))?),
                 Err(..) => {
@@ -2066,10 +2082,21 @@ impl Ipv6Network {
     /// );
     /// ```
     pub fn parse(buf: &str) -> Result<Self, IpNetParseError> {
-        let mut parts = buf.splitn(2, '/');
-        let addr = parts.next().ok_or(IpNetParseError::ExpectedIpNetwork)?;
+        match buf.split_once('/') {
+            Some((addr, mask)) => Self::parse_parts(addr, Some(mask)),
+            None => Self::parse_parts(buf, None),
+        }
+    }
+
+    /// Parses an address paired with an already-extracted, optional mask.
+    ///
+    /// Shared by [`Self::parse`] and [`IpNetwork::parse`], the latter of which
+    /// splits `buf` on `/` once and reuses the parts across both address
+    /// families instead of letting each family parser re-scan the input.
+    #[inline]
+    fn parse_parts(addr: &str, mask: Option<&str>) -> Result<Self, IpNetParseError> {
         let addr: Ipv6Addr = addr.parse()?;
-        match parts.next() {
+        match mask {
             Some(mask) => match mask.parse::<u8>() {
                 Ok(mask) => Ok(Self::try_from((addr, mask))?),
                 Err(..) => {
@@ -5687,6 +5714,175 @@ mod test {
         assert_eq!(
             ContiguousIpNetParseError::NonContiguousNetwork,
             Contiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap_err(),
+        );
+    }
+
+    // The following `parse_pin_*` tests pin the exact `IpNetParseError` variant
+    // returned for malformed input, so that the `splitn`-to-`split_once`
+    // refactor of `Ipv4Network::parse` / `Ipv6Network::parse` / `IpNetwork::parse`
+    // cannot silently change error variants while remaining `Result::is_err`.
+
+    const MALFORMED_INPUTS: &[&str] = &["", "/", "10.0.0.1/", "/24", "10.0.0.1//24", "hello", "zz/24"];
+
+    #[test]
+    fn parse_pin_ipv4_malformed_inputs_yield_addr_parse_error() {
+        for input in MALFORMED_INPUTS {
+            let err = Ipv4Network::parse(input).unwrap_err();
+            assert!(
+                matches!(err, IpNetParseError::AddrParseError(..)),
+                "input {input:?} gave {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_pin_ipv6_malformed_inputs_yield_addr_parse_error() {
+        for input in MALFORMED_INPUTS {
+            let err = Ipv6Network::parse(input).unwrap_err();
+            assert!(
+                matches!(err, IpNetParseError::AddrParseError(..)),
+                "input {input:?} gave {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_pin_ipnetwork_malformed_inputs_yield_addr_parse_error() {
+        for input in MALFORMED_INPUTS {
+            let err = IpNetwork::parse(input).unwrap_err();
+            assert!(
+                matches!(err, IpNetParseError::AddrParseError(..)),
+                "input {input:?} gave {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_pin_ipv4_rejects_ipv6_literal() {
+        let err = Ipv4Network::parse("2001:db8::1").unwrap_err();
+        assert!(matches!(err, IpNetParseError::AddrParseError(..)));
+    }
+
+    #[test]
+    fn parse_pin_ipv6_rejects_ipv4_literal() {
+        let err = Ipv6Network::parse("192.168.1.1").unwrap_err();
+        assert!(matches!(err, IpNetParseError::AddrParseError(..)));
+    }
+
+    #[test]
+    fn parse_pin_ipnetwork_cross_family_mask_notation_yields_addr_parse_error() {
+        // IPv4 address with an IPv6-shaped mask, and vice versa: neither family
+        // accepts the pairing, so `IpNetwork::parse` must fail on both.
+        for input in ["10.0.0.1/2001:db8::1", "2001:db8::1/255.255.255.0"] {
+            let err = IpNetwork::parse(input).unwrap_err();
+            assert!(
+                matches!(err, IpNetParseError::AddrParseError(..)),
+                "input {input:?} gave {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_pin_leading_trailing_whitespace_yields_addr_parse_error() {
+        for input in [" 10.0.0.1/24", "10.0.0.1/24 "] {
+            assert!(matches!(
+                Ipv4Network::parse(input).unwrap_err(),
+                IpNetParseError::AddrParseError(..)
+            ));
+            assert!(matches!(
+                Ipv6Network::parse(input).unwrap_err(),
+                IpNetParseError::AddrParseError(..)
+            ));
+            assert!(matches!(
+                IpNetwork::parse(input).unwrap_err(),
+                IpNetParseError::AddrParseError(..)
+            ));
+        }
+    }
+
+    #[test]
+    fn parse_pin_mask_out_of_range() {
+        assert_eq!(
+            IpNetParseError::CidrOverflow(CidrOverflowError(33, 32)),
+            Ipv4Network::parse("10.0.0.0/33").unwrap_err(),
+        );
+        assert_eq!(
+            IpNetParseError::CidrOverflow(CidrOverflowError(33, 32)),
+            IpNetwork::parse("10.0.0.0/33").unwrap_err(),
+        );
+        assert_eq!(
+            IpNetParseError::CidrOverflow(CidrOverflowError(129, 128)),
+            Ipv6Network::parse("::/129").unwrap_err(),
+        );
+        assert_eq!(
+            IpNetParseError::CidrOverflow(CidrOverflowError(129, 128)),
+            IpNetwork::parse("::/129").unwrap_err(),
+        );
+    }
+
+    #[test]
+    fn parse_pin_ipnetwork_valid_v4_cidr() {
+        assert_eq!(
+            IpNetwork::V4(Ipv4Network::new(
+                Ipv4Addr::new(10, 0, 0, 0),
+                Ipv4Addr::new(255, 0, 0, 0)
+            )),
+            IpNetwork::parse("10.0.0.0/8").unwrap(),
+        );
+    }
+
+    #[test]
+    fn parse_pin_ipnetwork_valid_v4_dotted_mask() {
+        assert_eq!(
+            IpNetwork::V4(Ipv4Network::new(
+                Ipv4Addr::new(10, 0, 0, 0),
+                Ipv4Addr::new(255, 0, 0, 0)
+            )),
+            IpNetwork::parse("10.0.0.0/255.0.0.0").unwrap(),
+        );
+    }
+
+    #[test]
+    fn parse_pin_ipnetwork_valid_v6_cidr() {
+        assert_eq!(
+            IpNetwork::V6(Ipv6Network::new(
+                Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+                Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0),
+            )),
+            IpNetwork::parse("2001:db8::/32").unwrap(),
+        );
+    }
+
+    #[test]
+    fn parse_pin_ipnetwork_valid_v6_full_mask() {
+        assert_eq!(
+            IpNetwork::V6(Ipv6Network::new(
+                Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
+                Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0xffff),
+            )),
+            IpNetwork::parse("2001:db8::1/ffff:ffff::ffff").unwrap(),
+        );
+    }
+
+    #[test]
+    fn parse_pin_ipnetwork_valid_bare_v4() {
+        assert_eq!(
+            IpNetwork::V4(Ipv4Network::new(
+                Ipv4Addr::new(192, 168, 1, 1),
+                Ipv4Addr::new(255, 255, 255, 255)
+            )),
+            IpNetwork::parse("192.168.1.1").unwrap(),
+        );
+    }
+
+    #[test]
+    fn parse_pin_ipnetwork_valid_bare_v6() {
+        assert_eq!(
+            IpNetwork::V6(Ipv6Network::new(
+                Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
+                Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff),
+            )),
+            IpNetwork::parse("2001:db8::1").unwrap(),
         );
     }
 
