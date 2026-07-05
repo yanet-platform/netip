@@ -401,6 +401,148 @@ fn bench_aggregate(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_binary_split(c: &mut Criterion) {
+    use netip::{ipv4_binary_split, ipv6_binary_split};
+
+    fn ipv4_consecutive(count: u32, prefix: u32) -> Vec<Ipv4Network> {
+        let step = 1u32 << (32 - prefix);
+        let mut nets: Vec<Ipv4Network> = (0..count)
+            .map(|i| {
+                let base = i * step;
+                let o1 = (base >> 16) & 0xFF;
+                let o2 = (base >> 8) & 0xFF;
+                let o3 = base & 0xFF;
+                Ipv4Network::parse(&format!("10.{o1}.{o2}.{o3}/{prefix}")).unwrap()
+            })
+            .collect();
+        nets.sort();
+        nets.dedup();
+        nets
+    }
+
+    fn ipv6_consecutive(count: u32, prefix: u32) -> Vec<Ipv6Network> {
+        let step = 1u32 << (128 - prefix);
+        let mut nets: Vec<Ipv6Network> = (0..count)
+            .map(|i| {
+                let last = i * step;
+                Ipv6Network::parse(&format!("2001:db8::{last:x}/{prefix}")).unwrap()
+            })
+            .collect();
+        nets.sort();
+        nets.dedup();
+        nets
+    }
+
+    // Mask "255.255.0.255" leaves a hole in the third octet, so networks that
+    // only differ in the fixed last octet do not overlap.
+    fn ipv4_non_contiguous(count: u32) -> Vec<Ipv4Network> {
+        let mut nets: Vec<Ipv4Network> = (0..count)
+            .map(|i| Ipv4Network::parse(&format!("10.0.0.{i}/255.255.0.255")).unwrap())
+            .collect();
+        nets.sort();
+        nets.dedup();
+        nets
+    }
+
+    // Mask "ffff:ffff:ff00:ffff:ffff:ffff:ffff:ffff" leaves an 8-bit hole in
+    // the third group, so networks that only differ in the fixed last group
+    // do not overlap.
+    fn ipv6_non_contiguous(count: u32) -> Vec<Ipv6Network> {
+        let mut nets: Vec<Ipv6Network> = (0..count)
+            .map(|i| {
+                Ipv6Network::parse(&format!("2001:db8:c00::{i:x}/ffff:ffff:ff00:ffff:ffff:ffff:ffff:ffff")).unwrap()
+            })
+            .collect();
+        nets.sort();
+        nets.dedup();
+        nets
+    }
+
+    let mut group = c.benchmark_group("netip");
+
+    group.throughput(Throughput::Elements(16));
+    group.bench_function("ipv4_binary_split 16x /28", |b| {
+        let nets = ipv4_consecutive(16, 28);
+        b.iter(|| {
+            core::hint::black_box(ipv4_binary_split(core::hint::black_box(&nets)));
+        });
+    });
+
+    group.throughput(Throughput::Elements(64));
+    group.bench_function("ipv4_binary_split 64x /28", |b| {
+        let nets = ipv4_consecutive(64, 28);
+        b.iter(|| {
+            core::hint::black_box(ipv4_binary_split(core::hint::black_box(&nets)));
+        });
+    });
+
+    group.throughput(Throughput::Elements(256));
+    group.bench_function("ipv4_binary_split 256x /28", |b| {
+        let nets = ipv4_consecutive(256, 28);
+        b.iter(|| {
+            core::hint::black_box(ipv4_binary_split(core::hint::black_box(&nets)));
+        });
+    });
+
+    group.throughput(Throughput::Elements(1024));
+    group.bench_function("ipv4_binary_split 1024x /28", |b| {
+        let nets = ipv4_consecutive(1024, 28);
+        b.iter(|| {
+            core::hint::black_box(ipv4_binary_split(core::hint::black_box(&nets)));
+        });
+    });
+
+    group.throughput(Throughput::Elements(256));
+    group.bench_function("ipv4_binary_split 256x non-contiguous", |b| {
+        let nets = ipv4_non_contiguous(256);
+        b.iter(|| {
+            core::hint::black_box(ipv4_binary_split(core::hint::black_box(&nets)));
+        });
+    });
+
+    group.throughput(Throughput::Elements(16));
+    group.bench_function("ipv6_binary_split 16x /124", |b| {
+        let nets = ipv6_consecutive(16, 124);
+        b.iter(|| {
+            core::hint::black_box(ipv6_binary_split(core::hint::black_box(&nets)));
+        });
+    });
+
+    group.throughput(Throughput::Elements(64));
+    group.bench_function("ipv6_binary_split 64x /124", |b| {
+        let nets = ipv6_consecutive(64, 124);
+        b.iter(|| {
+            core::hint::black_box(ipv6_binary_split(core::hint::black_box(&nets)));
+        });
+    });
+
+    group.throughput(Throughput::Elements(256));
+    group.bench_function("ipv6_binary_split 256x /124", |b| {
+        let nets = ipv6_consecutive(256, 124);
+        b.iter(|| {
+            core::hint::black_box(ipv6_binary_split(core::hint::black_box(&nets)));
+        });
+    });
+
+    group.throughput(Throughput::Elements(1024));
+    group.bench_function("ipv6_binary_split 1024x /124", |b| {
+        let nets = ipv6_consecutive(1024, 124);
+        b.iter(|| {
+            core::hint::black_box(ipv6_binary_split(core::hint::black_box(&nets)));
+        });
+    });
+
+    group.throughput(Throughput::Elements(256));
+    group.bench_function("ipv6_binary_split 256x non-contiguous", |b| {
+        let nets = ipv6_non_contiguous(256);
+        b.iter(|| {
+            core::hint::black_box(ipv6_binary_split(core::hint::black_box(&nets)));
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_net_addrs,
@@ -409,6 +551,7 @@ criterion_group!(
     bench_merge,
     bench_is_adjacent,
     bench_is_contiguous,
-    bench_aggregate
+    bench_aggregate,
+    bench_binary_split
 );
 criterion_main!(benches);

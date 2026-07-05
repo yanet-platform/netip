@@ -3456,8 +3456,31 @@ where
     ip_binary_split(nets)
 }
 
+// Dispatches to the faster of the two implementations below, based on input
+// size.
+//
+// Both implementations return identical results, so the threshold only affects
+// speed, never correctness. The crossover is per-family and measured — see
+// `Word::SPLIT_THRESHOLD`.
 #[inline]
 fn ip_binary_split<T, U>(nets: &[T]) -> Option<(U, Range<usize>)>
+where
+    T: AsRef<U>,
+    U: BinarySplit + Copy,
+{
+    if nets.len() < U::Bits::SPLIT_THRESHOLD {
+        ip_binary_split_quadratic(nets)
+    } else {
+        ip_binary_split_linear(nets)
+    }
+}
+
+// Finds the widest-mask window among all windows of size `window_size` by brute
+// force.
+//
+// O(N^2) time, O(1) memory. Smaller constant factor than
+// `ip_binary_split_linear`, so it wins on small inputs.
+fn ip_binary_split_quadratic<T, U>(nets: &[T]) -> Option<(U, Range<usize>)>
 where
     T: AsRef<U>,
     U: BinarySplit + Copy,
@@ -3466,12 +3489,8 @@ where
         return None;
     }
 
-    // Window size.
-    let size = nets.len().div_ceil(2);
+    let window_size = nets.len().div_ceil(2);
 
-    // Fold supernet_for over a window: equivalent to calling supernet_for
-    // with all elements at once (mask intersection is associative under fold
-    // because cleared mask positions stay cleared regardless of addr bits).
     let window_supernet = |window: &[T]| -> U {
         let mut supernet = *window[0].as_ref();
         for elem in &window[1..] {
@@ -3480,49 +3499,218 @@ where
         supernet
     };
 
-    // We start with supernet that covers all given networks.
     let mut range = 0..nets.len();
     let mut candidate = window_supernet(nets);
 
-    for (idx, window) in nets.windows(size).enumerate() {
+    for (idx, window) in nets.windows(window_size).enumerate() {
         let supernet = window_supernet(window);
 
         if supernet.mask() > candidate.mask() {
-            range = idx..(idx + size);
+            range = idx..(idx + window_size);
             candidate = supernet;
         }
     }
 
-    // Adjust range from both sides, since our supernet may cover more networks.
-    while range.start > 0 {
-        if candidate.contains(nets[range.start - 1].as_ref()) {
-            range.start -= 1;
-        } else {
-            break;
-        }
+    while range.start > 0 && candidate.contains(nets[range.start - 1].as_ref()) {
+        range.start -= 1;
     }
-    while range.end < nets.len() {
-        // Remember, range end is exclusive.
-        if candidate.contains(nets[range.end].as_ref()) {
-            range.end += 1;
-        } else {
-            break;
-        }
+    while range.end < nets.len() && candidate.contains(nets[range.end].as_ref()) {
+        range.end += 1;
     }
 
     Some((candidate, range))
 }
 
+// Finds the widest-mask window among all windows of size `window_size` in one
+// linear pass.
+//
+// A window's supernet mask is the complement of the sliding OR of kill words
+// `!mask_j | (addr_j ^ addr_{j+1})` over its element pairs, AND-ed with the
+// last element's own mask. Per-bit counters keep that OR exact as kill words
+// are added and removed while the window slides. O(N) time, O(1) memory.
+fn ip_binary_split_linear<T, U>(nets: &[T]) -> Option<(U, Range<usize>)>
+where
+    T: AsRef<U>,
+    U: BinarySplit + Copy,
+{
+    let n = nets.len();
+    if n < 3 {
+        return None;
+    }
+
+    let window_size = n.div_ceil(2);
+
+    let bits = |j: usize| nets[j].as_ref().to_bits();
+    let kill_word = |j: usize| -> U::Bits {
+        let (addr_j, mask_j) = bits(j);
+        let (addr_next, ..) = bits(j + 1);
+        !mask_j | (addr_j ^ addr_next)
+    };
+
+    let mut bit_counters = [0usize; 128];
+    let mut window_or = U::Bits::ZERO;
+    let mut full_or = U::Bits::ZERO;
+
+    // Pass 1: OR all kill words for the full-slice candidate, and preload the
+    // counters with the first window's kill words, [0, window_size - 2].
+    for j in 0..n - 1 {
+        let kill = kill_word(j);
+        full_or |= kill;
+        if j < window_size - 1 {
+            add_kill(&mut window_or, &mut bit_counters, kill);
+        }
+    }
+
+    let (.., mask_last) = bits(n - 1);
+    let mut best_start = 0;
+    let mut best_len = n;
+    let mut best_mask = !full_or & mask_last;
+
+    // Pass 2: scan windows left to right; strict `>` keeps the first-seen
+    // best window on ties.
+    for i in 0..=(n - window_size) {
+        if i > 0 {
+            remove_kill(&mut window_or, &mut bit_counters, kill_word(i - 1));
+            add_kill(&mut window_or, &mut bit_counters, kill_word(i + window_size - 2));
+        }
+
+        let (.., mask_end) = bits(i + window_size - 1);
+        let window_mask = !window_or & mask_end;
+        if window_mask > best_mask {
+            best_start = i;
+            best_len = window_size;
+            best_mask = window_mask;
+        }
+    }
+
+    let mut range = best_start..(best_start + best_len);
+    let candidate = U::from_bits(bits(best_start).0, best_mask);
+
+    // The candidate's mask can match more networks than were in the window it came
+    // from.
+    while range.start > 0 && candidate.contains(nets[range.start - 1].as_ref()) {
+        range.start -= 1;
+    }
+    while range.end < n && candidate.contains(nets[range.end].as_ref()) {
+        range.end += 1;
+    }
+
+    Some((candidate, range))
+}
+
+// Adds a kill word into the sliding-window OR, incrementing the counters of its
+// set bits.
+#[inline]
+fn add_kill<W: Word>(window_or: &mut W, bit_counters: &mut [usize; 128], mut kill_word: W) {
+    *window_or |= kill_word;
+    while kill_word != W::ZERO {
+        let bit = kill_word.trailing_zeros();
+        bit_counters[bit as usize] += 1;
+        kill_word = kill_word.clear_lowest();
+    }
+}
+
+// Removes a kill word from the sliding-window OR, clearing bits whose counters
+// drop to zero.
+#[inline]
+fn remove_kill<W: Word>(window_or: &mut W, bit_counters: &mut [usize; 128], mut kill_word: W) {
+    while kill_word != W::ZERO {
+        let bit = kill_word.trailing_zeros();
+        bit_counters[bit as usize] -= 1;
+        if bit_counters[bit as usize] == 0 {
+            *window_or = window_or.clear_bit(bit);
+        }
+        kill_word = kill_word.clear_lowest();
+    }
+}
+
+// Word-sized bit operations needed by `ip_binary_split` on the packed (addr,
+// mask) representation.
+//
+// Implemented for `u32` (IPv4) and `u128` (IPv6).
+trait Word:
+    Copy
+    + Eq
+    + Ord
+    + core::ops::Not<Output = Self>
+    + core::ops::BitAnd<Output = Self>
+    + core::ops::BitOr<Output = Self>
+    + core::ops::BitXor<Output = Self>
+    + core::ops::BitOrAssign
+{
+    const ZERO: Self;
+
+    // Below this many elements, `ip_binary_split_quadratic` is faster than
+    // `ip_binary_split_linear` for this word width.
+    const SPLIT_THRESHOLD: usize;
+
+    fn trailing_zeros(self) -> u32;
+    fn clear_lowest(self) -> Self;
+    fn clear_bit(self, b: u32) -> Self;
+}
+
+impl Word for u32 {
+    const ZERO: Self = 0;
+
+    // Measured with `cargo bench --bench net -- binary_split`: the IPv4
+    // crossover falls between n = 20 (quadratic faster) and n = 24 (linear
+    // faster).
+    const SPLIT_THRESHOLD: usize = 24;
+
+    #[inline]
+    fn trailing_zeros(self) -> u32 {
+        self.trailing_zeros()
+    }
+
+    #[inline]
+    fn clear_lowest(self) -> Self {
+        self & self.wrapping_sub(1)
+    }
+
+    #[inline]
+    fn clear_bit(self, b: u32) -> Self {
+        self & !(1 << b)
+    }
+}
+
+impl Word for u128 {
+    const ZERO: Self = 0;
+
+    // Measured with `cargo bench --bench net -- binary_split`: the IPv6
+    // crossover falls between n = 48 (quadratic faster) and n = 56 (linear
+    // faster).
+    const SPLIT_THRESHOLD: usize = 56;
+
+    #[inline]
+    fn trailing_zeros(self) -> u32 {
+        self.trailing_zeros()
+    }
+
+    #[inline]
+    fn clear_lowest(self) -> Self {
+        self & self.wrapping_sub(1)
+    }
+
+    #[inline]
+    fn clear_bit(self, b: u32) -> Self {
+        self & !(1 << b)
+    }
+}
+
 trait BinarySplit: Sized {
     type Mask: PartialOrd;
+    type Bits: Word;
 
     fn mask(&self) -> &Self::Mask;
     fn contains(&self, other: &Self) -> bool;
     fn supernet_for(&self, nets: &[Self]) -> Self;
+    fn to_bits(&self) -> (Self::Bits, Self::Bits);
+    fn from_bits(addr: Self::Bits, mask: Self::Bits) -> Self;
 }
 
 impl BinarySplit for Ipv4Network {
     type Mask = Ipv4Addr;
+    type Bits = u32;
 
     #[inline]
     fn mask(&self) -> &Self::Mask {
@@ -3538,10 +3726,21 @@ impl BinarySplit for Ipv4Network {
     fn supernet_for(&self, nets: &[Self]) -> Ipv4Network {
         self.supernet_for(nets)
     }
+
+    #[inline]
+    fn to_bits(&self) -> (u32, u32) {
+        self.to_bits()
+    }
+
+    #[inline]
+    fn from_bits(addr: u32, mask: u32) -> Self {
+        Self::from_bits(addr, mask)
+    }
 }
 
 impl BinarySplit for Ipv6Network {
     type Mask = Ipv6Addr;
+    type Bits = u128;
 
     #[inline]
     fn mask(&self) -> &Self::Mask {
@@ -3556,6 +3755,16 @@ impl BinarySplit for Ipv6Network {
     #[inline]
     fn supernet_for(&self, nets: &[Self]) -> Ipv6Network {
         self.supernet_for(nets)
+    }
+
+    #[inline]
+    fn to_bits(&self) -> (u128, u128) {
+        self.to_bits()
+    }
+
+    #[inline]
+    fn from_bits(addr: u128, mask: u128) -> Self {
+        Self::from_bits(addr, mask)
     }
 }
 
@@ -5042,6 +5251,306 @@ mod test {
 
         for (idx, net) in nets.iter().enumerate() {
             assert_eq!(range.contains(&idx), supernet.contains(net));
+        }
+    }
+
+    #[test]
+    fn test_ipv4_binary_split_tie_first_window_wins() {
+        let nets = &[
+            "10.0.0.0/16",
+            "10.0.0.0/16",
+            "10.0.0.0/16",
+            "10.1.0.0/16",
+            "10.1.0.0/16",
+            "10.1.0.0/16",
+        ];
+        let nets: Vec<_> = nets.iter().map(|net| Ipv4Network::parse(net).unwrap()).collect();
+
+        let (supernet, range) = ipv4_binary_split(&nets).unwrap();
+        assert_eq!(Ipv4Network::parse("10.0.0.0/16").unwrap(), supernet);
+        assert_eq!(0..3, range);
+    }
+
+    #[test]
+    fn test_ipv4_binary_split_non_contiguous_worked_example() {
+        let nets = &[
+            "10.1.0.5/255.255.0.255",
+            "10.1.0.5/255.255.0.255",
+            "10.1.7.5/255.255.0.255",
+            "10.2.0.9/255.0.255.255",
+        ];
+        let nets: Vec<_> = nets.iter().map(|net| Ipv4Network::parse(net).unwrap()).collect();
+
+        let (supernet, range) = ipv4_binary_split(&nets).unwrap();
+        assert_eq!(Ipv4Network::parse("10.1.0.5/255.255.0.255").unwrap(), supernet);
+        assert_eq!(0..3, range);
+    }
+
+    #[test]
+    fn test_ipv4_binary_split_never_beaten() {
+        let nets = &[
+            "192.168.1.0/24",
+            "192.168.1.0/24",
+            "192.168.1.0/24",
+            "192.168.1.0/24",
+            "192.168.1.0/24",
+        ];
+        let nets: Vec<_> = nets.iter().map(|net| Ipv4Network::parse(net).unwrap()).collect();
+
+        let (supernet, range) = ipv4_binary_split(&nets).unwrap();
+        assert_eq!(Ipv4Network::parse("192.168.1.0/24").unwrap(), supernet);
+        assert_eq!(0..5, range);
+    }
+
+    // First element's kill word sets a bit that neither of the next two kill
+    // words set. When the window slides from [0, 2] to [1, 3], that bit's
+    // counter drops from 1 to 0 and must be cleared from the sliding OR
+    // (otherwise the winning window's mask would come out too narrow).
+    #[test]
+    fn test_ipv4_binary_split_counter_expiry() {
+        let nets = &[
+            "10.128.0.0/24",
+            "10.0.0.0/24",
+            "10.0.1.0/24",
+            "10.0.3.0/24",
+            "200.0.0.0/8",
+        ];
+        let nets: Vec<_> = nets.iter().map(|net| Ipv4Network::parse(net).unwrap()).collect();
+
+        let (supernet, range) = ipv4_binary_split(&nets).unwrap();
+        assert_eq!(Ipv4Network::parse("10.0.0.0/255.255.252.0").unwrap(), supernet);
+        assert_eq!(1..4, range);
+    }
+
+    #[test]
+    fn test_ipv6_binary_split_tie_first_window_wins() {
+        let nets = &[
+            "2001:db8::/32",
+            "2001:db8::/32",
+            "2001:db8::/32",
+            "2001:db9::/32",
+            "2001:db9::/32",
+            "2001:db9::/32",
+        ];
+        let nets: Vec<_> = nets.iter().map(|net| Ipv6Network::parse(net).unwrap()).collect();
+
+        let (supernet, range) = ipv6_binary_split(&nets).unwrap();
+        assert_eq!(Ipv6Network::parse("2001:db8::/32").unwrap(), supernet);
+        assert_eq!(0..3, range);
+    }
+
+    #[test]
+    fn test_ipv6_binary_split_non_contiguous_worked_example() {
+        let nets = &[
+            "2001:db8:1:2:0:3:4:5/ffff:ffff:ffff:ffff:0:ffff:ffff:ffff",
+            "2001:db8:1:2:0:3:4:5/ffff:ffff:ffff:ffff:0:ffff:ffff:ffff",
+            "2001:db8:1:2:77:3:4:5/ffff:ffff:ffff:ffff:0:ffff:ffff:ffff",
+            "2002:db8:1:2:0:3:4:5/ffff:0:ffff:ffff:ffff:ffff:ffff:ffff",
+        ];
+        let nets: Vec<_> = nets.iter().map(|net| Ipv6Network::parse(net).unwrap()).collect();
+
+        let (supernet, range) = ipv6_binary_split(&nets).unwrap();
+        assert_eq!(
+            Ipv6Network::parse("2001:db8:1:2:0:3:4:5/ffff:ffff:ffff:ffff:0:ffff:ffff:ffff").unwrap(),
+            supernet
+        );
+        assert_eq!(0..3, range);
+    }
+
+    #[test]
+    fn test_ipv6_binary_split_never_beaten() {
+        let nets = &[
+            "2001:db8::1/64",
+            "2001:db8::1/64",
+            "2001:db8::1/64",
+            "2001:db8::1/64",
+            "2001:db8::1/64",
+        ];
+        let nets: Vec<_> = nets.iter().map(|net| Ipv6Network::parse(net).unwrap()).collect();
+
+        let (supernet, range) = ipv6_binary_split(&nets).unwrap();
+        assert_eq!(Ipv6Network::parse("2001:db8::1/64").unwrap(), supernet);
+        assert_eq!(0..5, range);
+    }
+
+    // IPv6 analog of `test_ipv4_binary_split_counter_expiry`: the first
+    // element's kill word sets the top bit of the second segment, a bit that
+    // neither of the next two kill words set, so it must be cleared from the
+    // sliding OR once the window slides past index 0.
+    #[test]
+    fn test_ipv6_binary_split_counter_expiry() {
+        let nets = &[
+            "2001:8db8::/48",
+            "2001:db8::/48",
+            "2001:db8:1::/48",
+            "2001:db8:3::/48",
+            "9000::/16",
+        ];
+        let nets: Vec<_> = nets.iter().map(|net| Ipv6Network::parse(net).unwrap()).collect();
+
+        let (supernet, range) = ipv6_binary_split(&nets).unwrap();
+        assert_eq!(Ipv6Network::parse("2001:db8::/ffff:ffff:fffc::").unwrap(), supernet);
+        assert_eq!(1..4, range);
+    }
+
+    // Small deterministic xorshift64 PRNG used only to build randomized
+    // property-test fixtures; this crate stays zero-dependency, so no
+    // proptest/rand strategies are used for these cases.
+    struct Xorshift64(u64);
+
+    impl Xorshift64 {
+        fn new(seed: u64) -> Self {
+            Self(if seed == 0 { 0x9E37_79B9_7F4A_7C15 } else { seed })
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+
+        fn next_u8(&mut self) -> u8 {
+            self.next_u64() as u8
+        }
+
+        fn next_u16(&mut self) -> u16 {
+            self.next_u64() as u16
+        }
+
+        // Returns a value in `0..bound`.
+        fn below(&mut self, bound: usize) -> usize {
+            (self.next_u64() as usize) % bound
+        }
+    }
+
+    fn random_ipv4_network(rng: &mut Xorshift64) -> Ipv4Network {
+        let (a, b, c, d) = (rng.next_u8(), rng.next_u8(), rng.next_u8(), rng.next_u8());
+
+        if rng.below(2) == 0 {
+            let prefix = rng.below(33);
+            Ipv4Network::parse(&format!("{a}.{b}.{c}.{d}/{prefix}")).unwrap()
+        } else {
+            let (m0, m1, m2, m3) = (rng.next_u8(), rng.next_u8(), rng.next_u8(), rng.next_u8());
+            Ipv4Network::parse(&format!("{a}.{b}.{c}.{d}/{m0}.{m1}.{m2}.{m3}")).unwrap()
+        }
+    }
+
+    fn random_ipv6_network(rng: &mut Xorshift64) -> Ipv6Network {
+        let addr: [u16; 8] = core::array::from_fn(|_| rng.next_u16());
+        let addr = addr.iter().map(|seg| format!("{seg:x}")).collect::<Vec<_>>().join(":");
+
+        if rng.below(2) == 0 {
+            let prefix = rng.below(129);
+            Ipv6Network::parse(&format!("{addr}/{prefix}")).unwrap()
+        } else {
+            let mask: [u16; 8] = core::array::from_fn(|_| rng.next_u16());
+            let mask = mask.iter().map(|seg| format!("{seg:x}")).collect::<Vec<_>>().join(":");
+            Ipv6Network::parse(&format!("{addr}/{mask}")).unwrap()
+        }
+    }
+
+    // Compares the two implementations directly, bypassing `ip_binary_split`'s
+    // size-based router entirely, so both are exercised across the full n
+    // range regardless of `Word::SPLIT_THRESHOLD`.
+    #[test]
+    fn test_ipv4_binary_split_linear_matches_quadratic() {
+        let mut rng = Xorshift64::new(0xC0FF_EE12_3456_789A);
+        let mut cases = 0usize;
+
+        for n in 3..=64usize {
+            for _ in 0..20 {
+                let mut nets: Vec<Ipv4Network> = (0..n).map(|_| random_ipv4_network(&mut rng)).collect();
+                nets.sort();
+                nets.dedup();
+                if nets.len() < 3 {
+                    continue;
+                }
+                cases += 1;
+
+                let expected = ip_binary_split_quadratic(&nets);
+                let actual = ip_binary_split_linear(&nets);
+                assert_eq!(expected, actual, "mismatch for n = {n}, nets = {nets:?}");
+            }
+        }
+
+        assert!(cases >= 1000, "expected at least 1000 cases, got {cases}");
+    }
+
+    #[test]
+    fn test_ipv6_binary_split_linear_matches_quadratic() {
+        let mut rng = Xorshift64::new(0xFEED_FACE_DEAD_BEEF);
+        let mut cases = 0usize;
+
+        for n in 3..=64usize {
+            for _ in 0..20 {
+                let mut nets: Vec<Ipv6Network> = (0..n).map(|_| random_ipv6_network(&mut rng)).collect();
+                nets.sort();
+                nets.dedup();
+                if nets.len() < 3 {
+                    continue;
+                }
+                cases += 1;
+
+                let expected = ip_binary_split_quadratic(&nets);
+                let actual = ip_binary_split_linear(&nets);
+                assert_eq!(expected, actual, "mismatch for n = {n}, nets = {nets:?}");
+            }
+        }
+
+        assert!(cases >= 1000, "expected at least 1000 cases, got {cases}");
+    }
+
+    // Consecutive /24 networks, deterministic and distinct without needing to
+    // sort or dedup: `10.0.0.0/24`, `10.0.1.0/24`, `10.0.2.0/24`, ...
+    fn ipv4_boundary_fixture(n: usize) -> Vec<Ipv4Network> {
+        (0..n as u32)
+            .map(|i| Ipv4Network::parse(&format!("10.0.{i}.0/24")).unwrap())
+            .collect()
+    }
+
+    // Consecutive /124 networks, deterministic and distinct without needing to
+    // sort or dedup: `2001:db8::/124`, `2001:db8::10/124`, `2001:db8::20/124`, ...
+    fn ipv6_boundary_fixture(n: usize) -> Vec<Ipv6Network> {
+        (0..n as u32)
+            .map(|i| Ipv6Network::parse(&format!("2001:db8::{:x}/124", i * 16)).unwrap())
+            .collect()
+    }
+
+    // `ipv4_binary_split` is `ip_binary_split`'s router; check it picks
+    // whichever implementation is correct on both sides of the threshold, not
+    // just above it.
+    #[test]
+    fn test_ipv4_binary_split_router_matches_at_threshold_boundary() {
+        let threshold = <u32 as Word>::SPLIT_THRESHOLD;
+
+        for n in [threshold - 1, threshold, threshold + 1] {
+            let nets = ipv4_boundary_fixture(n);
+
+            let quadratic = ip_binary_split_quadratic(&nets);
+            let linear = ip_binary_split_linear(&nets);
+            let routed = ipv4_binary_split(&nets);
+
+            assert_eq!(quadratic, linear, "quadratic/linear mismatch at n = {n}");
+            assert_eq!(routed, linear, "router mismatch at n = {n}");
+        }
+    }
+
+    #[test]
+    fn test_ipv6_binary_split_router_matches_at_threshold_boundary() {
+        let threshold = <u128 as Word>::SPLIT_THRESHOLD;
+
+        for n in [threshold - 1, threshold, threshold + 1] {
+            let nets = ipv6_boundary_fixture(n);
+
+            let quadratic = ip_binary_split_quadratic(&nets);
+            let linear = ip_binary_split_linear(&nets);
+            let routed = ipv6_binary_split(&nets);
+
+            assert_eq!(quadratic, linear, "quadratic/linear mismatch at n = {n}");
+            assert_eq!(routed, linear, "router mismatch at n = {n}");
         }
     }
 
