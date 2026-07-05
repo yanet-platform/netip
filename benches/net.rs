@@ -790,6 +790,54 @@ fn bench_ord(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_display(c: &mut Criterion) {
+    use netip::{IpNetwork, fmt::Compact};
+
+    let mut group = c.benchmark_group("netip");
+
+    group.bench_function("IpNetwork::to_string v4", |b| {
+        let net = IpNetwork::parse("10.0.0.0/8").unwrap();
+        b.iter(|| core::hint::black_box(core::hint::black_box(&net).to_string()));
+    });
+
+    group.bench_function("IpNetwork::to_string v6", |b| {
+        let net = IpNetwork::parse("2001:db8::/32").unwrap();
+        b.iter(|| core::hint::black_box(core::hint::black_box(&net).to_string()));
+    });
+
+    group.bench_function("Ipv4Network::to_string CIDR", |b| {
+        let net = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        b.iter(|| core::hint::black_box(core::hint::black_box(&net).to_string()));
+    });
+
+    group.bench_function("Ipv4Network::to_string non-contiguous", |b| {
+        let net = Ipv4Network::parse("192.168.0.1/255.255.0.255").unwrap();
+        b.iter(|| core::hint::black_box(core::hint::black_box(&net).to_string()));
+    });
+
+    group.bench_function("Ipv6Network::to_string CIDR", |b| {
+        let net = Ipv6Network::parse("2001:db8::/32").unwrap();
+        b.iter(|| core::hint::black_box(core::hint::black_box(&net).to_string()));
+    });
+
+    group.bench_function("Ipv6Network::to_string non-contiguous", |b| {
+        let net = Ipv6Network::parse("2001:db8::1/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        b.iter(|| core::hint::black_box(core::hint::black_box(&net).to_string()));
+    });
+
+    group.bench_function("Compact<Ipv4Network>::to_string", |b| {
+        let net = Ipv4Network::parse("10.0.0.0/24").unwrap();
+        b.iter(|| core::hint::black_box(Compact(core::hint::black_box(net)).to_string()));
+    });
+
+    group.bench_function("Compact<Ipv6Network>::to_string", |b| {
+        let net = Ipv6Network::parse("2001:db8::/32").unwrap();
+        b.iter(|| core::hint::black_box(Compact(core::hint::black_box(net)).to_string()));
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_net_addrs,
@@ -805,6 +853,7 @@ criterion_group!(
     bench_to_ipv4_mapped,
     bench_to_contiguous,
     bench_parse,
-    bench_ord
+    bench_ord,
+    bench_display
 );
 criterion_main!(benches);
