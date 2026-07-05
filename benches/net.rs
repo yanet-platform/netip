@@ -648,6 +648,30 @@ fn bench_difference(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_difference_count(c: &mut Criterion) {
+    let mut group = c.benchmark_group("netip");
+
+    group.bench_function("Ipv4Network::difference count", |b| {
+        let source = Ipv4Network::parse("0.0.0.0/0").unwrap();
+        let other = Ipv4Network::parse("1.2.3.4/32").unwrap();
+        b.iter(|| {
+            let diff = core::hint::black_box(&source).difference(core::hint::black_box(&other));
+            core::hint::black_box(diff.count());
+        });
+    });
+
+    group.bench_function("Ipv6Network::difference count", |b| {
+        let source = Ipv6Network::parse("::/0").unwrap();
+        let other = Ipv6Network::parse("2001:db8::1/128").unwrap();
+        b.iter(|| {
+            let diff = core::hint::black_box(&source).difference(core::hint::black_box(&other));
+            core::hint::black_box(diff.count());
+        });
+    });
+
+    group.finish();
+}
+
 fn bench_range_to_networks(c: &mut Criterion) {
     use netip::{ipv4_range_to_networks, ipv6_range_to_networks};
 
@@ -927,6 +951,7 @@ criterion_group!(
     bench_aggregate,
     bench_binary_split,
     bench_difference,
+    bench_difference_count,
     bench_range_to_networks,
     bench_to_ipv4_mapped,
     bench_to_contiguous,
