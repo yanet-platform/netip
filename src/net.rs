@@ -646,8 +646,8 @@ impl IpNetwork {
 impl Display for IpNetwork {
     fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
         match self {
-            IpNetwork::V4(net) => Display::fmt(&net, fmt),
-            IpNetwork::V6(net) => Display::fmt(&net, fmt),
+            IpNetwork::V4(net) => Display::fmt(net, fmt),
+            IpNetwork::V6(net) => Display::fmt(net, fmt),
         }
     }
 }
