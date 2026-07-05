@@ -47,6 +47,20 @@ fn bench_display(c: &mut Criterion) {
         });
     });
 
+    // Bulk formatting: 64 distinct addresses, each via a fresh (unsized)
+    // `to_string()`. This mirrors bulk serialization / logging call sites,
+    // where every call pays its own allocator round-trip instead of reusing
+    // a pre-sized buffer, unlike the single-value bench above.
+    group.throughput(Throughput::Elements(64));
+    group.bench_function("MacAddr::to_string bulk 64x", |b| {
+        let macs: [MacAddr; 64] = core::array::from_fn(|i| MacAddr::from(0x0102_0304_0506u64.wrapping_add(i as u64)));
+        b.iter(|| {
+            for mac in core::hint::black_box(&macs) {
+                core::hint::black_box(mac.to_string());
+            }
+        });
+    });
+
     group.finish();
 }
 
