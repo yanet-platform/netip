@@ -31,3 +31,7 @@ overflow-checks = false
 [[bench]]
 name = "net"
 harness = false
+
+[[bench]]
+name = "macaddr"
+harness = false
