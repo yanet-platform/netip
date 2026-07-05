@@ -1796,7 +1796,8 @@ impl Iterator for Ipv4NetworkDiff {
         self.processed |= b;
         self.remaining ^= b;
 
-        Some(Ipv4Network::from_bits(addr, mask))
+        // NOTE: address is already normalized by the `& mask` above.
+        Some(Ipv4Network(Ipv4Addr::from_bits(addr), Ipv4Addr::from_bits(mask)))
     }
 
     #[inline]
@@ -3067,7 +3068,8 @@ impl Iterator for Ipv6NetworkDiff {
         self.processed |= b;
         self.remaining ^= b;
 
-        Some(Ipv6Network::from_bits(addr, mask))
+        // NOTE: address is already normalized by the `& mask` above.
+        Some(Ipv6Network(Ipv6Addr::from_bits(addr), Ipv6Addr::from_bits(mask)))
     }
 
     #[inline]
@@ -7919,6 +7921,40 @@ mod test {
             prop_assert_eq!(agg_len, nets.len());
 
             prop_assert!(nets.len() <= 2 * 128 - 2);
+        }
+    }
+
+    // `Ipv4NetworkDiff::next` constructs items directly from an already
+    // `& mask`-ed address instead of re-normalizing through `Ipv4Network::new`.
+    // This checks that every yielded network still satisfies the (addr, mask)
+    // invariant `addr & mask == addr`.
+    #[test]
+    fn prop_ipv4_difference_items_are_normalized() {
+        let mut rng = Xorshift64::new(0x1A2B_3C4D_5E6F_7081);
+
+        for _ in 0..500 {
+            let a = random_ipv4_network(&mut rng);
+            let b = random_ipv4_network(&mut rng);
+
+            for net in a.difference(&b) {
+                let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
+                assert_eq!(addr & mask, addr, "a={a}, b={b}, net={net}");
+            }
+        }
+    }
+
+    #[test]
+    fn prop_ipv6_difference_items_are_normalized() {
+        let mut rng = Xorshift64::new(0x9C4E_2F0A_6B1D_8357);
+
+        for _ in 0..500 {
+            let a = random_ipv6_network(&mut rng);
+            let b = random_ipv6_network(&mut rng);
+
+            for net in a.difference(&b) {
+                let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
+                assert_eq!(addr & mask, addr, "a={a}, b={b}, net={net}");
+            }
         }
     }
 }
