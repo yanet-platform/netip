@@ -462,6 +462,34 @@ fn bench_is_contiguous(c: &mut Criterion) {
 fn bench_aggregate(c: &mut Criterion) {
     use netip::{ipv4_aggregate, ipv6_aggregate};
 
+    // Host route whose bit pattern always has an even popcount. XOR-ing any
+    // two even-popcount values yields an even popcount too, which can never
+    // equal 1 — so no two of these addresses are single-bit (sibling) pairs,
+    // and since every network shares the same all-ones mask, none can
+    // contain another either. `aggregate` is left with nothing to merge, so
+    // each candidate pays the full O(current stack size) scan for nothing:
+    // this is the worst case, Theta(N^2), for the single-pass collapse loop.
+    fn never_merges_host(i: u32) -> u32 {
+        let host = 2 * i;
+        if host.count_ones().is_multiple_of(2) {
+            host
+        } else {
+            host + 1
+        }
+    }
+
+    fn ipv4_never_merges(count: u32) -> Vec<Ipv4Network> {
+        (0..count)
+            .map(|i| Ipv4Network::from_bits((10u32 << 24) | never_merges_host(i), 0xFFFFFFFF))
+            .collect()
+    }
+
+    fn ipv6_never_merges(count: u32) -> Vec<Ipv6Network> {
+        (0..count)
+            .map(|i| Ipv6Network::from_bits((0x2001_0db8u128 << 96) | never_merges_host(i) as u128, !0u128))
+            .collect()
+    }
+
     let mut group = c.benchmark_group("netip");
 
     group.throughput(Throughput::Elements(256));
@@ -506,6 +534,54 @@ fn bench_aggregate(c: &mut Criterion) {
                 Ipv6Network::from_bits(addr, mask)
             })
             .collect();
+        b.iter_batched(
+            || template.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv6_aggregate(&mut nets));
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
+    group.throughput(Throughput::Elements(1024));
+    group.bench_function("ipv4_aggregate 1024x /32 never-merges", |b| {
+        let template = ipv4_never_merges(1024);
+        b.iter_batched(
+            || template.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv4_aggregate(&mut nets));
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
+    group.throughput(Throughput::Elements(256));
+    group.bench_function("ipv4_aggregate 256x /32 never-merges", |b| {
+        let template = ipv4_never_merges(256);
+        b.iter_batched(
+            || template.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv4_aggregate(&mut nets));
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
+    group.throughput(Throughput::Elements(1024));
+    group.bench_function("ipv6_aggregate 1024x /128 never-merges", |b| {
+        let template = ipv6_never_merges(1024);
+        b.iter_batched(
+            || template.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv6_aggregate(&mut nets));
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
+    group.throughput(Throughput::Elements(256));
+    group.bench_function("ipv6_aggregate 256x /128 never-merges", |b| {
+        let template = ipv6_never_merges(256);
         b.iter_batched(
             || template.clone(),
             |mut nets| {
