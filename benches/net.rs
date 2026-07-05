@@ -543,6 +543,66 @@ fn bench_binary_split(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_ord(c: &mut Criterion) {
+    let mut group = c.benchmark_group("netip");
+
+    group.throughput(Throughput::Elements(1024));
+    group.bench_function("Ipv4Network::sort_unstable 1024 random-ish", |b| {
+        let template: Vec<Ipv4Network> = (0..1024u32)
+            .map(|i| {
+                let bits = i.wrapping_mul(2_654_435_761); // Knuth's multiplicative hash constant
+                let prefix = 8 + (bits % 25); // spread prefixes across /8../32
+                let o0 = (bits >> 24) & 0xFF;
+                let o1 = (bits >> 16) & 0xFF;
+                let o2 = (bits >> 8) & 0xFF;
+                let o3 = bits & 0xFF;
+                Ipv4Network::parse(&format!("{o0}.{o1}.{o2}.{o3}/{prefix}")).unwrap()
+            })
+            .collect();
+        b.iter_batched(
+            || template.clone(),
+            |mut nets| {
+                nets.sort_unstable();
+                core::hint::black_box(&nets);
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
+    group.throughput(Throughput::Elements(1024));
+    group.bench_function("Ipv6Network::sort_unstable 1024 random-ish", |b| {
+        let template: Vec<Ipv6Network> = (0..1024u32)
+            .map(|i| {
+                let bits = (i as u128).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                let prefix = 16 + (bits % 113) as u32; // spread prefixes across /16../128
+                let g0 = ((bits >> 112) & 0xFFFF) as u16;
+                let g1 = ((bits >> 96) & 0xFFFF) as u16;
+                let g2 = ((bits >> 80) & 0xFFFF) as u16;
+                let g3 = ((bits >> 64) & 0xFFFF) as u16;
+                Ipv6Network::parse(&format!("{g0:x}:{g1:x}:{g2:x}:{g3:x}::/{prefix}")).unwrap()
+            })
+            .collect();
+        b.iter_batched(
+            || template.clone(),
+            |mut nets| {
+                nets.sort_unstable();
+                core::hint::black_box(&nets);
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function("Ipv4Network::cmp", |b| {
+        let n0 = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        let n1 = Ipv4Network::parse("10.0.0.0/24").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).cmp(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_net_addrs,
@@ -552,6 +612,7 @@ criterion_group!(
     bench_is_adjacent,
     bench_is_contiguous,
     bench_aggregate,
-    bench_binary_split
+    bench_binary_split,
+    bench_ord
 );
 criterion_main!(benches);
