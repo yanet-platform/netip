@@ -4121,6 +4121,8 @@ impl FromStr for Contiguous<Ipv6Network> {
 
 #[cfg(test)]
 mod test {
+    use core::cmp::Ordering;
+
     use proptest::prelude::*;
 
     use super::*;
@@ -7578,6 +7580,208 @@ mod test {
         .collect();
         assert_eq!(1, nets.len());
         assert_eq!("2001:db8::/127", nets[0].to_string());
+    }
+
+    // Pin tests for `Ipv4Network`/`Ipv6Network` ordering, written against the
+    // CURRENT derived `Ord` (lexicographic on the `(addr, mask)` tuple), so a
+    // later packed-key rewrite of `Ord` can be checked against this exact
+    // behavior. Sorted-input consumers (`ip_binary_split`, `*_aggregate`) rely
+    // on this order staying bitwise identical.
+
+    #[test]
+    fn test_ipv4_network_ord_address_dominates_mask() {
+        // Octet 0 differs (10 vs 11) and is kept by both masks, while the
+        // mask magnitude points the other way (a /32 mask is numerically
+        // larger than a /8 mask), so this isolates address-first ordering.
+        let lower_addr_bigger_mask = Ipv4Network::parse("10.0.0.0/32").unwrap();
+        let higher_addr_smaller_mask = Ipv4Network::parse("11.0.0.0/8").unwrap();
+
+        assert!(lower_addr_bigger_mask < higher_addr_smaller_mask);
+        assert_eq!(Ordering::Less, lower_addr_bigger_mask.cmp(&higher_addr_smaller_mask));
+    }
+
+    #[test]
+    fn test_ipv6_network_ord_address_dominates_mask() {
+        // Hextet 1 differs (0 vs db9) and is kept by both masks, while the
+        // mask magnitude points the other way (a /128 mask is numerically
+        // larger than a /32 mask), so this isolates address-first ordering.
+        let lower_addr_bigger_mask = Ipv6Network::parse("2001::/128").unwrap();
+        let higher_addr_smaller_mask = Ipv6Network::parse("2001:db9::/32").unwrap();
+
+        assert!(lower_addr_bigger_mask < higher_addr_smaller_mask);
+        assert_eq!(Ordering::Less, lower_addr_bigger_mask.cmp(&higher_addr_smaller_mask));
+    }
+
+    #[test]
+    fn test_ipv4_network_ord_equal_address_mask_decides() {
+        let smaller_mask = Ipv4Network::parse("10.0.0.0/16").unwrap();
+        let bigger_mask = Ipv4Network::parse("10.0.0.0/24").unwrap();
+
+        assert_eq!(smaller_mask.addr(), bigger_mask.addr());
+        assert!(smaller_mask < bigger_mask);
+    }
+
+    #[test]
+    fn test_ipv6_network_ord_equal_address_mask_decides() {
+        let smaller_mask = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let bigger_mask = Ipv6Network::parse("2001:db8::/64").unwrap();
+
+        assert_eq!(smaller_mask.addr(), bigger_mask.addr());
+        assert!(smaller_mask < bigger_mask);
+    }
+
+    #[test]
+    fn test_ipv4_network_ord_equality() {
+        let net_a = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        let net_b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+
+        assert_eq!(Ordering::Equal, net_a.cmp(&net_b));
+        assert_eq!(net_a, net_b);
+    }
+
+    #[test]
+    fn test_ipv6_network_ord_equality() {
+        let net_a = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let net_b = Ipv6Network::parse("2001:db8::/32").unwrap();
+
+        assert_eq!(Ordering::Equal, net_a.cmp(&net_b));
+        assert_eq!(net_a, net_b);
+    }
+
+    #[test]
+    fn test_ipv4_network_ord_non_contiguous_mask_participates() {
+        // Both masks leave octet 1 as a hole, and octet 1 of the address is
+        // already zero, so the two networks share the same normalized
+        // address and only the non-contiguous mask decides the order.
+        let smaller_mask = Ipv4Network::parse("10.0.0.5/255.0.0.255").unwrap();
+        let bigger_mask = Ipv4Network::parse("10.0.0.5/255.255.0.255").unwrap();
+
+        assert_eq!(smaller_mask.addr(), bigger_mask.addr());
+        assert!(smaller_mask < bigger_mask);
+    }
+
+    #[test]
+    fn test_ipv6_network_ord_non_contiguous_mask_participates() {
+        // Both masks leave hextet 2 (and, for the smaller one, hextet 3 too)
+        // as a hole, and those hextets are already zero in the address, so
+        // the two networks share the same normalized address and only the
+        // non-contiguous mask decides the order.
+        let smaller_mask = Ipv6Network::parse("2001:db8::5/ffff:ffff:ff00:ff00:ffff:ffff:ffff:ffff").unwrap();
+        let bigger_mask = Ipv6Network::parse("2001:db8::5/ffff:ffff:ff00:ffff:ffff:ffff:ffff:ffff").unwrap();
+
+        assert_eq!(smaller_mask.addr(), bigger_mask.addr());
+        assert!(smaller_mask < bigger_mask);
+    }
+
+    #[test]
+    fn test_ipv4_network_ord_boundary_values() {
+        let zero = Ipv4Network::parse("0.0.0.0/0").unwrap();
+        let max = Ipv4Network::parse("255.255.255.255/32").unwrap();
+        let middle = Ipv4Network::parse("10.0.0.0/8").unwrap();
+
+        assert!(zero < middle);
+        assert!(middle < max);
+        assert!(zero < max);
+    }
+
+    #[test]
+    fn test_ipv6_network_ord_boundary_values() {
+        let zero = Ipv6Network::parse("::/0").unwrap();
+        let max = Ipv6Network::parse("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/128").unwrap();
+        let middle = Ipv6Network::parse("2001:db8::/32").unwrap();
+
+        assert!(zero < middle);
+        assert!(middle < max);
+        assert!(zero < max);
+    }
+
+    // Fixed shuffled input; `sort()` must reproduce this exact order so
+    // sorted-input consumers (`ip_binary_split`, `*_aggregate`) keep working
+    // across any `Ord` rewrite.
+    #[test]
+    fn test_ipv4_network_sort_matches_expected_order() {
+        let mut nets = [
+            Ipv4Network::parse("192.168.1.1/32").unwrap(),
+            Ipv4Network::parse("10.1.0.0/16").unwrap(),
+            Ipv4Network::parse("255.255.255.255/32").unwrap(),
+            Ipv4Network::parse("10.0.0.5/255.255.0.255").unwrap(),
+            Ipv4Network::parse("0.0.0.0/0").unwrap(),
+            Ipv4Network::parse("10.0.0.0/24").unwrap(),
+            Ipv4Network::parse("10.0.0.5/255.0.0.255").unwrap(),
+            Ipv4Network::parse("10.0.0.0/8").unwrap(),
+        ];
+        nets.sort();
+
+        let expected = [
+            Ipv4Network::parse("0.0.0.0/0").unwrap(),
+            Ipv4Network::parse("10.0.0.0/8").unwrap(),
+            Ipv4Network::parse("10.0.0.0/24").unwrap(),
+            Ipv4Network::parse("10.0.0.5/255.0.0.255").unwrap(),
+            Ipv4Network::parse("10.0.0.5/255.255.0.255").unwrap(),
+            Ipv4Network::parse("10.1.0.0/16").unwrap(),
+            Ipv4Network::parse("192.168.1.1/32").unwrap(),
+            Ipv4Network::parse("255.255.255.255/32").unwrap(),
+        ];
+        assert_eq!(expected, nets);
+    }
+
+    #[test]
+    fn test_ipv6_network_sort_matches_expected_order() {
+        let mut nets = [
+            Ipv6Network::parse("2a02:6b8::1/128").unwrap(),
+            Ipv6Network::parse("2001:db9::/32").unwrap(),
+            Ipv6Network::parse("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/128").unwrap(),
+            Ipv6Network::parse("2001:db8::5/ffff:ffff:ff00:ffff:ffff:ffff:ffff:ffff").unwrap(),
+            Ipv6Network::parse("::/0").unwrap(),
+            Ipv6Network::parse("2001:db8::/48").unwrap(),
+            Ipv6Network::parse("2001:db8::5/ffff:ffff:ff00:ff00:ffff:ffff:ffff:ffff").unwrap(),
+            Ipv6Network::parse("2001:db8::/32").unwrap(),
+        ];
+        nets.sort();
+
+        let expected = [
+            Ipv6Network::parse("::/0").unwrap(),
+            Ipv6Network::parse("2001:db8::/32").unwrap(),
+            Ipv6Network::parse("2001:db8::/48").unwrap(),
+            Ipv6Network::parse("2001:db8::5/ffff:ffff:ff00:ff00:ffff:ffff:ffff:ffff").unwrap(),
+            Ipv6Network::parse("2001:db8::5/ffff:ffff:ff00:ffff:ffff:ffff:ffff:ffff").unwrap(),
+            Ipv6Network::parse("2001:db9::/32").unwrap(),
+            Ipv6Network::parse("2a02:6b8::1/128").unwrap(),
+            Ipv6Network::parse("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/128").unwrap(),
+        ];
+        assert_eq!(expected, nets);
+    }
+
+    // The (addr, mask) tuple is exactly the derived semantics, so it remains a
+    // valid reference after the `Ord` impl is swapped for a packed-key one.
+    #[test]
+    fn prop_ipv4_network_ord_matches_addr_mask_tuple() {
+        let mut rng = Xorshift64::new(0x51ED_1949_2C13_9AC1);
+
+        for _ in 0..2000 {
+            let net_x = random_ipv4_network(&mut rng);
+            let net_y = random_ipv4_network(&mut rng);
+
+            let expected = (net_x.addr(), net_x.mask()).cmp(&(net_y.addr(), net_y.mask()));
+            assert_eq!(expected, net_x.cmp(&net_y));
+            assert_eq!(Some(net_x.cmp(&net_y)), net_x.partial_cmp(&net_y));
+            assert_eq!(net_x.cmp(&net_y) == Ordering::Equal, net_x == net_y);
+        }
+    }
+
+    #[test]
+    fn prop_ipv6_network_ord_matches_addr_mask_tuple() {
+        let mut rng = Xorshift64::new(0x8B5A_46F1_D30C_77E9);
+
+        for _ in 0..2000 {
+            let net_x = random_ipv6_network(&mut rng);
+            let net_y = random_ipv6_network(&mut rng);
+
+            let expected = (net_x.addr(), net_x.mask()).cmp(&(net_y.addr(), net_y.mask()));
+            assert_eq!(expected, net_x.cmp(&net_y));
+            assert_eq!(Some(net_x.cmp(&net_y)), net_x.partial_cmp(&net_y));
+            assert_eq!(net_x.cmp(&net_y) == Ordering::Equal, net_x == net_y);
+        }
     }
 
     proptest! {
