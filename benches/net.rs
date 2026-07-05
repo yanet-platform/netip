@@ -736,6 +736,111 @@ fn bench_binary_split(c: &mut Criterion) {
     group.finish();
 }
 
+// Regression guard: `supernet_for`'s fold is auto-vectorized by LLVM for
+// `Ipv4Network` (8-wide SSE with a byte-shuffle transpose) but stays scalar
+// for `Ipv6Network`; these benches make that per-element cost gap visible so
+// a change that silently defeats vectorization (e.g. an early exit) shows up
+// as a measured regression rather than going unnoticed.
+fn bench_supernet_for(c: &mut Criterion) {
+    // Consecutive /28s that all share the "10.0.0.0/16" prefix, so the fold
+    // mask never collapses to zero: this is the realistic "summarize related
+    // networks" case.
+    fn ipv4_related(count: u32) -> Vec<Ipv4Network> {
+        (0..count)
+            .map(|i| {
+                let host = i * 16;
+                let o2 = (host >> 8) & 0xFF;
+                let o3 = host & 0xFF;
+                Ipv4Network::parse(&format!("10.0.{o2}.{o3}/28")).unwrap()
+            })
+            .collect()
+    }
+
+    // Consecutive /124s that all share the "2001:db8:1::/48" prefix.
+    fn ipv6_related(count: u32) -> Vec<Ipv6Network> {
+        (0..count)
+            .map(|i| {
+                let host = i * 16;
+                Ipv6Network::parse(&format!("2001:db8:1::{host:x}/124")).unwrap()
+            })
+            .collect()
+    }
+
+    // Mask "255.255.0.255" leaves a hole in the third octet, so networks
+    // differing only there do not affect the fold.
+    fn ipv4_related_non_contiguous(count: u32) -> Vec<Ipv4Network> {
+        (0..count)
+            .map(|i| {
+                let o1 = (i >> 8) & 0xFF;
+                let o3 = i & 0xFF;
+                Ipv4Network::parse(&format!("10.{o1}.0.{o3}/255.255.0.255")).unwrap()
+            })
+            .collect()
+    }
+
+    // Mask "ffff:ffff:ff00:ffff:ffff:ffff:ffff:ffff" leaves an 8-bit hole in
+    // the third group, so networks differing only there do not affect the fold.
+    fn ipv6_related_non_contiguous(count: u32) -> Vec<Ipv6Network> {
+        (0..count)
+            .map(|i| {
+                Ipv6Network::parse(&format!("2001:db8:c00::{i:x}/ffff:ffff:ff00:ffff:ffff:ffff:ffff:ffff")).unwrap()
+            })
+            .collect()
+    }
+
+    let mut group = c.benchmark_group("netip");
+
+    group.throughput(Throughput::Elements(64));
+    group.bench_function("Ipv4Network::supernet_for 64x /28", |b| {
+        let nets = ipv4_related(64);
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&nets[0]).supernet_for(core::hint::black_box(&nets[1..])));
+        });
+    });
+
+    group.throughput(Throughput::Elements(1024));
+    group.bench_function("Ipv4Network::supernet_for 1024x /28", |b| {
+        let nets = ipv4_related(1024);
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&nets[0]).supernet_for(core::hint::black_box(&nets[1..])));
+        });
+    });
+
+    group.throughput(Throughput::Elements(64));
+    group.bench_function("Ipv6Network::supernet_for 64x /124", |b| {
+        let nets = ipv6_related(64);
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&nets[0]).supernet_for(core::hint::black_box(&nets[1..])));
+        });
+    });
+
+    group.throughput(Throughput::Elements(1024));
+    group.bench_function("Ipv6Network::supernet_for 1024x /124", |b| {
+        let nets = ipv6_related(1024);
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&nets[0]).supernet_for(core::hint::black_box(&nets[1..])));
+        });
+    });
+
+    group.throughput(Throughput::Elements(1024));
+    group.bench_function("Ipv4Network::supernet_for 1024x non-contiguous", |b| {
+        let nets = ipv4_related_non_contiguous(1024);
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&nets[0]).supernet_for(core::hint::black_box(&nets[1..])));
+        });
+    });
+
+    group.throughput(Throughput::Elements(1024));
+    group.bench_function("Ipv6Network::supernet_for 1024x non-contiguous", |b| {
+        let nets = ipv6_related_non_contiguous(1024);
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&nets[0]).supernet_for(core::hint::black_box(&nets[1..])));
+        });
+    });
+
+    group.finish();
+}
+
 fn bench_difference(c: &mut Criterion) {
     let mut group = c.benchmark_group("netip");
 
@@ -1066,6 +1171,7 @@ criterion_group!(
     bench_is_contiguous,
     bench_aggregate,
     bench_binary_split,
+    bench_supernet_for,
     bench_difference,
     bench_difference_count,
     bench_range_to_networks,
