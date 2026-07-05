@@ -1834,6 +1834,11 @@ impl Iterator for Ipv4NetworkDiff {
     }
 
     #[inline]
+    fn count(self) -> usize {
+        self.len()
+    }
+
+    #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         let n = self.len();
         (n, Some(n))
@@ -3125,6 +3130,11 @@ impl Iterator for Ipv6NetworkDiff {
 
         // NOTE: address is already normalized by the `& mask` above.
         Some(Ipv6Network(Ipv6Addr::from_bits(addr), Ipv6Addr::from_bits(mask)))
+    }
+
+    #[inline]
+    fn count(self) -> usize {
+        self.len()
     }
 
     #[inline]
@@ -5047,6 +5057,32 @@ mod test {
         assert_eq!(diff.len(), 15);
     }
 
+    // `count()` must agree with `len()` across all three branches: an
+    // overlapping pair (multiple parts), a disjoint pair (one part), and a
+    // subset pair (no parts), plus a non-contiguous mask.
+    #[test]
+    fn ipv6_difference_count_matches_len_fixed_cases() {
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let b = Ipv6Network::parse("2001:db8::/64").unwrap();
+        assert_eq!(a.difference(&b).len(), 16);
+        assert_eq!(a.difference(&b).count(), 16);
+
+        let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let b = Ipv6Network::parse("fe80::/10").unwrap();
+        assert_eq!(a.difference(&b).len(), 1);
+        assert_eq!(a.difference(&b).count(), 1);
+
+        let a = Ipv6Network::parse("2001:db8::/64").unwrap();
+        let b = Ipv6Network::parse("2001:db8::/48").unwrap();
+        assert_eq!(a.difference(&b).len(), 0);
+        assert_eq!(a.difference(&b).count(), 0);
+
+        let a = Ipv6Network::parse("2001::/ffff::").unwrap();
+        let b = Ipv6Network::parse("2001::1/ffff::ff").unwrap();
+        assert_eq!(a.difference(&b).len(), 8);
+        assert_eq!(a.difference(&b).count(), 8);
+    }
+
     #[test]
     fn test_ipv4_binary_split_empty() {
         assert!(ipv4_binary_split::<Ipv4Network>(&[]).is_none());
@@ -6318,6 +6354,32 @@ mod test {
         diff.next();
         assert_eq!(0, diff.len());
         assert_eq!(None, diff.next());
+    }
+
+    // `count()` must agree with `len()` across all three branches: an
+    // overlapping pair (multiple parts), a disjoint pair (one part), and a
+    // subset pair (no parts), plus a non-contiguous mask.
+    #[test]
+    fn ipv4_difference_count_matches_len_fixed_cases() {
+        let a = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        assert_eq!(a.difference(&b).len(), 8);
+        assert_eq!(a.difference(&b).count(), 8);
+
+        let a = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        let b = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        assert_eq!(a.difference(&b).len(), 1);
+        assert_eq!(a.difference(&b).count(), 1);
+
+        let a = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        let b = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        assert_eq!(a.difference(&b).len(), 0);
+        assert_eq!(a.difference(&b).count(), 0);
+
+        let a = Ipv4Network::parse("10.0.0.0/255.0.0.0").unwrap();
+        let b = Ipv4Network::parse("10.0.0.1/255.0.0.255").unwrap();
+        assert_eq!(a.difference(&b).len(), 8);
+        assert_eq!(a.difference(&b).count(), 8);
     }
 
     #[test]
@@ -8221,6 +8283,43 @@ mod test {
                 let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
                 assert_eq!(addr & mask, addr, "a={a}, b={b}, net={net}");
             }
+        }
+    }
+
+    // `Ipv4NetworkDiff::count` overrides the default full-iteration fallback
+    // with `len()`. This checks the two stay in agreement, and both match
+    // manual iteration, over random pairs (contiguous and non-contiguous).
+    #[test]
+    fn prop_ipv4_difference_count_matches_len() {
+        let mut rng = Xorshift64::new(0x7C3A_91E4_2B5D_60F8);
+
+        for _ in 0..500 {
+            let a = random_ipv4_network(&mut rng);
+            let b = random_ipv4_network(&mut rng);
+            let diff = a.difference(&b);
+
+            let len = diff.len();
+            let manual = a.difference(&b).fold(0usize, |n, _| n + 1);
+
+            assert_eq!(diff.count(), len, "a={a}, b={b}");
+            assert_eq!(manual, len, "a={a}, b={b}");
+        }
+    }
+
+    #[test]
+    fn prop_ipv6_difference_count_matches_len() {
+        let mut rng = Xorshift64::new(0x2D6F_5A81_C93E_4B07);
+
+        for _ in 0..500 {
+            let a = random_ipv6_network(&mut rng);
+            let b = random_ipv6_network(&mut rng);
+            let diff = a.difference(&b);
+
+            let len = diff.len();
+            let manual = a.difference(&b).fold(0usize, |n, _| n + 1);
+
+            assert_eq!(diff.count(), len, "a={a}, b={b}");
+            assert_eq!(manual, len, "a={a}, b={b}");
         }
     }
 
