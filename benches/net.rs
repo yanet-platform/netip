@@ -600,6 +600,14 @@ fn bench_ord(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("Ipv6Network::cmp", |b| {
+        let n0 = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let n1 = Ipv6Network::parse("2001:db8::/48").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).cmp(core::hint::black_box(&n1)));
+        });
+    });
+
     group.finish();
 }
 
