@@ -289,6 +289,22 @@ fn bench_merge(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("Ipv4Network::merge comparable masks address mismatch", |b| {
+        let n0 = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        let n1 = Ipv4Network::parse("172.16.0.0/16").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).merge(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv4Network::merge incomparable masks", |b| {
+        let n0 = Ipv4Network::parse("10.0.0.1/255.255.0.255").unwrap();
+        let n1 = Ipv4Network::parse("10.0.0.1/255.0.255.255").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).merge(core::hint::black_box(&n1)));
+        });
+    });
+
     group.bench_function("Ipv4Network::merge non-contiguous", |b| {
         let n0 = Ipv4Network::new(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::from(0xffff00ffu32));
         let n1 = Ipv4Network::new(Ipv4Addr::new(10, 1, 0, 1), Ipv4Addr::from(0xffff00ffu32));
@@ -305,9 +321,33 @@ fn bench_merge(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("Ipv6Network::merge equal-mask non-mergeable", |b| {
+        let n0 = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let n1 = Ipv6Network::parse("2001:db8:5::/48").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).merge(core::hint::black_box(&n1)));
+        });
+    });
+
     group.bench_function("Ipv6Network::merge containment", |b| {
         let n0 = Ipv6Network::parse("2001:db8::/32").unwrap();
         let n1 = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).merge(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv6Network::merge comparable masks address mismatch", |b| {
+        let n0 = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let n1 = Ipv6Network::parse("2001:beef:1::/48").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).merge(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv6Network::merge incomparable masks", |b| {
+        let n0 = Ipv6Network::parse("2001:db8::1/ffff:0:ffff::").unwrap();
+        let n1 = Ipv6Network::parse("2001:db8::1/0:ffff:ffff::").unwrap();
         b.iter(|| {
             core::hint::black_box(core::hint::black_box(&n0).merge(core::hint::black_box(&n1)));
         });
