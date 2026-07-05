@@ -1079,6 +1079,11 @@ impl Ipv4Network {
     /// let diff: Vec<_> = a.difference(&b).collect();
     /// assert_eq!(diff.len(), 8);
     ///
+    /// // The iterator is double-ended: `.rev()` yields the same networks in
+    /// // reverse order, and consumption from either end can be freely mixed.
+    /// let rev: Vec<_> = a.difference(&b).rev().collect();
+    /// assert_eq!(rev, diff.into_iter().rev().collect::<Vec<_>>());
+    ///
     /// // Disjoint networks: difference is the original.
     /// let a = Ipv4Network::parse("10.0.0.0/8").unwrap();
     /// let b = Ipv4Network::parse("192.168.0.0/16").unwrap();
@@ -1749,7 +1754,10 @@ impl ExactSizeIterator for Ipv4NetworkAddrs {
 /// `S(A) \ S(B)`.
 ///
 /// Each call to [`next`](Iterator::next) computes one network by peeling the
-/// highest remaining bit from the difference mask.
+/// highest remaining bit from the difference mask; each call to
+/// [`next_back`](DoubleEndedIterator::next_back) peels the lowest remaining
+/// bit instead. Consumption from either end is O(1) and the two can be
+/// freely interleaved.
 #[derive(Debug, Clone, Copy)]
 pub struct Ipv4NetworkDiff {
     /// Intersection address, or an encoded address for the disjoint shortcut.
@@ -1838,6 +1846,40 @@ impl Iterator for Ipv4NetworkDiff {
     fn size_hint(&self) -> (usize, Option<usize>) {
         let n = self.len();
         (n, Some(n))
+    }
+
+    #[inline]
+    fn last(mut self) -> Option<Self::Item> {
+        // The last item in forward order is the one for `remaining`'s lowest
+        // bit, which is exactly what `next_back` computes: O(1) instead of
+        // the default's full O(n) walk.
+        self.next_back()
+    }
+}
+
+impl DoubleEndedIterator for Ipv4NetworkDiff {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+
+        // Lowest remaining bit of `d`, the mirror of `next()`'s highest-bit peel.
+        let b = self.remaining & self.remaining.wrapping_neg();
+
+        // The item for `b` is fixed by `b` alone: `mask` already holds every
+        // bit of `d` above the whole `remaining` band (folded in by prior
+        // `next()` calls), and `remaining` holds every bit from `b` upward
+        // that is still pending, so their union is exactly the bits of `d`
+        // at or above `b`. Unlike `next()`, `b` must NOT be folded into
+        // `self.mask`: bits peeled from the back sit below every bit any
+        // future item (front or back) will use.
+        let mask = self.mask | self.remaining;
+        let addr = (self.addr ^ b) & mask;
+        self.remaining ^= b;
+
+        // NOTE: address is already normalized by the `& mask` above.
+        Some(Ipv4Network(Ipv4Addr::from_bits(addr), Ipv4Addr::from_bits(mask)))
     }
 }
 
@@ -3044,7 +3086,10 @@ const fn pdep_u128(mut src: u128, mut mask: u128) -> u128 {
 /// `S(A) \ S(B)`.
 ///
 /// Each call to [`next`](Iterator::next) computes one network by peeling the
-/// highest remaining bit from the difference mask.
+/// highest remaining bit from the difference mask; each call to
+/// [`next_back`](DoubleEndedIterator::next_back) peels the lowest remaining
+/// bit instead. Consumption from either end is O(1) and the two can be
+/// freely interleaved.
 #[derive(Debug, Clone, Copy)]
 pub struct Ipv6NetworkDiff {
     /// Intersection address, or an encoded address for the disjoint shortcut.
@@ -3129,6 +3174,40 @@ impl Iterator for Ipv6NetworkDiff {
     fn size_hint(&self) -> (usize, Option<usize>) {
         let n = self.len();
         (n, Some(n))
+    }
+
+    #[inline]
+    fn last(mut self) -> Option<Self::Item> {
+        // The last item in forward order is the one for `remaining`'s lowest
+        // bit, which is exactly what `next_back` computes: O(1) instead of
+        // the default's full O(n) walk.
+        self.next_back()
+    }
+}
+
+impl DoubleEndedIterator for Ipv6NetworkDiff {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+
+        // Lowest remaining bit of `d`, the mirror of `next()`'s highest-bit peel.
+        let b = self.remaining & self.remaining.wrapping_neg();
+
+        // The item for `b` is fixed by `b` alone: `mask` already holds every
+        // bit of `d` above the whole `remaining` band (folded in by prior
+        // `next()` calls), and `remaining` holds every bit from `b` upward
+        // that is still pending, so their union is exactly the bits of `d`
+        // at or above `b`. Unlike `next()`, `b` must NOT be folded into
+        // `self.mask`: bits peeled from the back sit below every bit any
+        // future item (front or back) will use.
+        let mask = self.mask | self.remaining;
+        let addr = (self.addr ^ b) & mask;
+        self.remaining ^= b;
+
+        // NOTE: address is already normalized by the `& mask` above.
+        Some(Ipv6Network(Ipv6Addr::from_bits(addr), Ipv6Addr::from_bits(mask)))
     }
 }
 
@@ -5072,6 +5151,61 @@ mod test {
     }
 
     #[test]
+    fn ipv6_difference_next_back_disjoint_yields_source() {
+        let a = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let b = Ipv6Network::parse("fe80::/10").unwrap();
+        let mut diff = a.difference(&b);
+        assert_eq!(Some(a), diff.next_back());
+        assert_eq!(None, diff.next_back());
+    }
+
+    #[test]
+    fn ipv6_difference_next_back_subset_is_none() {
+        let a = Ipv6Network::parse("2001:db8::/64").unwrap();
+        let b = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let mut diff = a.difference(&b);
+        assert_eq!(None, diff.next_back());
+    }
+
+    #[test]
+    fn ipv6_difference_rev_matches_forward_reversed() {
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let b = Ipv6Network::parse("2001:db8::/64").unwrap();
+        let mut forward_reversed: Vec<_> = a.difference(&b).collect();
+        forward_reversed.reverse();
+        let reversed: Vec<_> = a.difference(&b).rev().collect();
+        assert_eq!(forward_reversed, reversed);
+    }
+
+    #[test]
+    fn ipv6_difference_last_matches_forward_last() {
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let b = Ipv6Network::parse("2001:db8::/64").unwrap();
+        let forward: Vec<_> = a.difference(&b).collect();
+        assert_eq!(forward.last().copied(), a.difference(&b).last());
+    }
+
+    #[test]
+    fn ipv6_difference_next_back_non_contiguous() {
+        let a = Ipv6Network::parse("2001::/ffff::").unwrap();
+        let b = Ipv6Network::parse("2001::1/ffff::ff").unwrap();
+
+        let mut diff = a.difference(&b);
+        // `d` is the lowest byte (`ffff::ff` adds only the low 8 bits over
+        // `ffff::`), so `next_back` must yield the lowest-bit item first,
+        // mirroring `ipv4_difference_next_back_non_contiguous`.
+        assert_eq!(
+            Ipv6Network::parse("2001::/ffff::ff").unwrap(),
+            diff.next_back().unwrap()
+        );
+        assert_eq!(
+            Ipv6Network::parse("2001::2/ffff::fe").unwrap(),
+            diff.next_back().unwrap()
+        );
+        assert_eq!(6, diff.len());
+    }
+
+    #[test]
     fn test_ipv4_binary_split_empty() {
         assert!(ipv4_binary_split::<Ipv4Network>(&[]).is_none());
     }
@@ -6355,6 +6489,61 @@ mod test {
         let b = Ipv4Network::parse("10.0.0.1/255.0.0.255").unwrap();
         assert_eq!(a.difference(&b).len(), 8);
         assert_eq!(a.difference(&b).count(), 8);
+    }
+
+    #[test]
+    fn ipv4_difference_next_back_disjoint_yields_source() {
+        let a = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        let b = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        let mut diff = a.difference(&b);
+        assert_eq!(Some(a), diff.next_back());
+        assert_eq!(None, diff.next_back());
+    }
+
+    #[test]
+    fn ipv4_difference_next_back_subset_is_none() {
+        let a = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        let b = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        let mut diff = a.difference(&b);
+        assert_eq!(None, diff.next_back());
+    }
+
+    #[test]
+    fn ipv4_difference_rev_matches_forward_reversed() {
+        let a = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        let mut forward_reversed: Vec<_> = a.difference(&b).collect();
+        forward_reversed.reverse();
+        let reversed: Vec<_> = a.difference(&b).rev().collect();
+        assert_eq!(forward_reversed, reversed);
+    }
+
+    #[test]
+    fn ipv4_difference_last_matches_forward_last() {
+        let a = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        let forward: Vec<_> = a.difference(&b).collect();
+        assert_eq!(forward.last().copied(), a.difference(&b).last());
+    }
+
+    #[test]
+    fn ipv4_difference_next_back_non_contiguous() {
+        let a = Ipv4Network::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(255, 0, 0, 0));
+        let b = Ipv4Network::new(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(255, 0, 0, 255));
+
+        let mut diff = a.difference(&b);
+        // Mirrors `ipv4_difference_non_contiguous`'s forward `expected` array
+        // read back to front: `next_back` must yield the lowest-bit item
+        // first, regardless of consumption order.
+        assert_eq!(
+            Ipv4Network::parse("10.0.0.0/255.0.0.255").unwrap(),
+            diff.next_back().unwrap()
+        );
+        assert_eq!(
+            Ipv4Network::parse("10.0.0.2/255.0.0.254").unwrap(),
+            diff.next_back().unwrap()
+        );
+        assert_eq!(6, diff.len());
     }
 
     #[test]
@@ -8136,6 +8325,163 @@ mod test {
             }
 
             prop_assert_eq!(extra_so_far, d, "a={}, b={}", a, b);
+        }
+
+        // `rev()` must yield exactly the forward sequence in reverse: the
+        // per-bit item identity is fixed regardless of which end peels it.
+        #[test]
+        fn prop_ipv4_difference_rev_matches_forward_reversed(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+            let mut forward_reversed: Vec<_> = a.difference(&b).collect();
+            forward_reversed.reverse();
+            let reversed: Vec<_> = a.difference(&b).rev().collect();
+            prop_assert_eq!(reversed, forward_reversed, "a={}, b={}", a, b);
+        }
+
+        #[test]
+        fn prop_ipv6_difference_rev_matches_forward_reversed(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+            let mut forward_reversed: Vec<_> = a.difference(&b).collect();
+            forward_reversed.reverse();
+            let reversed: Vec<_> = a.difference(&b).rev().collect();
+            prop_assert_eq!(reversed, forward_reversed, "a={}, b={}", a, b);
+        }
+
+        // Any interleaving of `next`/`next_back` calls must consume exactly
+        // the forward-collected sequence from both ends, matching a
+        // `VecDeque` popped with the same front/back pattern.
+        #[test]
+        fn prop_ipv4_difference_interleaved_consumption_matches_forward(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+            pattern in proptest::collection::vec(any::<bool>(), 0..40),
+        ) {
+            use std::collections::VecDeque;
+
+            let mut expected: VecDeque<_> = a.difference(&b).collect();
+            let mut diff = a.difference(&b);
+
+            for pop_front in pattern {
+                let expected_item = if pop_front { expected.pop_front() } else { expected.pop_back() };
+                let actual_item = if pop_front { diff.next() } else { diff.next_back() };
+                prop_assert_eq!(actual_item, expected_item, "a={}, b={}, pop_front={}", a, b, pop_front);
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_difference_interleaved_consumption_matches_forward(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+            pattern in proptest::collection::vec(any::<bool>(), 0..140),
+        ) {
+            use std::collections::VecDeque;
+
+            let mut expected: VecDeque<_> = a.difference(&b).collect();
+            let mut diff = a.difference(&b);
+
+            for pop_front in pattern {
+                let expected_item = if pop_front { expected.pop_front() } else { expected.pop_back() };
+                let actual_item = if pop_front { diff.next() } else { diff.next_back() };
+                prop_assert_eq!(actual_item, expected_item, "a={}, b={}, pop_front={}", a, b, pop_front);
+            }
+        }
+
+        // `len()` must decrement by exactly one per item consumed, from
+        // either end, and stay at zero once exhausted.
+        #[test]
+        fn prop_ipv4_difference_len_decrements_with_mixed_consumption(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+            pattern in proptest::collection::vec(any::<bool>(), 0..40),
+        ) {
+            let mut diff = a.difference(&b);
+
+            for pop_front in pattern {
+                let len_before = diff.len();
+                let item = if pop_front { diff.next() } else { diff.next_back() };
+                let len_after = diff.len();
+
+                if item.is_some() {
+                    prop_assert_eq!(len_after, len_before - 1, "a={}, b={}, pop_front={}", a, b, pop_front);
+                } else {
+                    prop_assert_eq!(len_before, 0, "a={}, b={}, pop_front={}", a, b, pop_front);
+                    prop_assert_eq!(len_after, 0, "a={}, b={}, pop_front={}", a, b, pop_front);
+                }
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_difference_len_decrements_with_mixed_consumption(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+            pattern in proptest::collection::vec(any::<bool>(), 0..140),
+        ) {
+            let mut diff = a.difference(&b);
+
+            for pop_front in pattern {
+                let len_before = diff.len();
+                let item = if pop_front { diff.next() } else { diff.next_back() };
+                let len_after = diff.len();
+
+                if item.is_some() {
+                    prop_assert_eq!(len_after, len_before - 1, "a={}, b={}, pop_front={}", a, b, pop_front);
+                } else {
+                    prop_assert_eq!(len_before, 0, "a={}, b={}, pop_front={}", a, b, pop_front);
+                    prop_assert_eq!(len_after, 0, "a={}, b={}, pop_front={}", a, b, pop_front);
+                }
+            }
+        }
+
+        // `last()` must match the forward-collected sequence's last element,
+        // in O(1) instead of the default full walk.
+        #[test]
+        fn prop_ipv4_difference_last_matches_forward_last(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+            let forward: Vec<_> = a.difference(&b).collect();
+            let last = a.difference(&b).last();
+            prop_assert_eq!(last, forward.last().copied(), "a={}, b={}", a, b);
+        }
+
+        #[test]
+        fn prop_ipv6_difference_last_matches_forward_last(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+            let forward: Vec<_> = a.difference(&b).collect();
+            let last = a.difference(&b).last();
+            prop_assert_eq!(last, forward.last().copied(), "a={}, b={}", a, b);
+        }
+
+        // `last()` after partial forward consumption must still match the
+        // last element of whatever remains.
+        #[test]
+        fn prop_ipv4_difference_last_after_partial_consumption_matches_forward(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+            steps in 0usize..40,
+        ) {
+            let forward: Vec<_> = a.difference(&b).collect();
+            let mut diff = a.difference(&b);
+
+            let consumed = steps.min(forward.len());
+            for _ in 0..consumed {
+                diff.next();
+            }
+
+            let expected = forward[consumed..].last().copied();
+            prop_assert_eq!(diff.last(), expected, "a={}, b={}, steps={}", a, b, steps);
+        }
+
+        #[test]
+        fn prop_ipv6_difference_last_after_partial_consumption_matches_forward(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+            steps in 0usize..140,
+        ) {
+            let forward: Vec<_> = a.difference(&b).collect();
+            let mut diff = a.difference(&b);
+
+            let consumed = steps.min(forward.len());
+            for _ in 0..consumed {
+                diff.next();
+            }
+
+            let expected = forward[consumed..].last().copied();
+            prop_assert_eq!(diff.last(), expected, "a={}, b={}, steps={}", a, b, steps);
         }
 
         // `Ipv6Network::to_ipv4_mapped` truncates an already-normalized
