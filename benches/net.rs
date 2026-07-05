@@ -606,6 +606,36 @@ fn bench_range_to_networks(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_to_ipv4_mapped(c: &mut Criterion) {
+    let mut group = c.benchmark_group("netip");
+
+    group.bench_function("Ipv6Network::to_ipv4_mapped contiguous", |b| {
+        let net = Ipv6Network::parse("::ffff:192.168.1.0/120").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&net).to_ipv4_mapped());
+        });
+    });
+
+    group.bench_function("Ipv6Network::to_ipv4_mapped non-contiguous", |b| {
+        let net = Ipv6Network::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0xc0a8, 1),
+            Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xff00),
+        );
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&net).to_ipv4_mapped());
+        });
+    });
+
+    group.bench_function("Ipv6Network::to_ipv4_mapped not mapped", |b| {
+        let net = Ipv6Network::parse("2001:db8::/32").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&net).to_ipv4_mapped());
+        });
+    });
+
+    group.finish();
+}
+
 fn bench_ord(c: &mut Criterion) {
     let mut group = c.benchmark_group("netip");
 
@@ -686,6 +716,7 @@ criterion_group!(
     bench_binary_split,
     bench_difference,
     bench_range_to_networks,
+    bench_to_ipv4_mapped,
     bench_ord
 );
 criterion_main!(benches);

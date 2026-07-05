@@ -2470,7 +2470,9 @@ impl Ipv6Network {
             let addr: u32 = (addr & 0xffffffff) as u32;
             let mask: u32 = (mask & 0xffffffff) as u32;
 
-            Some(Ipv4Network::from_bits(addr, mask))
+            // NOTE: address is already normalized: truncation preserves `addr & mask ==
+            // addr`.
+            Some(Ipv4Network(Ipv4Addr::from_bits(addr), Ipv4Addr::from_bits(mask)))
         } else {
             None
         }
@@ -8036,6 +8038,26 @@ mod test {
                 let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
                 assert_eq!(addr & mask, addr, "first={first}, last={last}, net={net}");
             }
+        }
+    }
+
+    // `Ipv6Network::to_ipv4_mapped` truncates an already-normalized (addr,
+    // mask) pair to their low 32 bits and constructs the result directly,
+    // instead of re-normalizing through `Ipv4Network::new`.
+    #[test]
+    fn prop_ipv4_to_ipv6_mapped_roundtrip_is_normalized() {
+        let mut rng = Xorshift64::new(0x2E7B_91FA_C34D_6810);
+
+        for _ in 0..500 {
+            let net4 = random_ipv4_network(&mut rng);
+            let mapped = net4.to_ipv6_mapped();
+
+            let recovered = mapped.to_ipv4_mapped();
+            assert_eq!(Some(net4), recovered, "net4={net4}, mapped={mapped}");
+
+            let recovered = recovered.unwrap();
+            let (addr, mask) = (recovered.addr().to_bits(), recovered.mask().to_bits());
+            assert_eq!(addr & mask, addr, "net4={net4}, mapped={mapped}");
         }
     }
 }
