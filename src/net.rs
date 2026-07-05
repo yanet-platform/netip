@@ -7871,6 +7871,126 @@ mod test {
         }
 
         #[test]
+        fn ipv6_aggregate_preserves_addresses(
+            raw_nets in prop::collection::vec(
+                (0u128..=255, 120u8..=124),
+                1..=32,
+            )
+        ) {
+            let mut nets: Vec<Ipv6Network> = raw_nets
+                .iter()
+                .map(|&(low_byte, prefix)| {
+                    let mask = if prefix == 0 { 0 } else { !0u128 << (128 - prefix) };
+                    let addr = 0x2001_0db8_0000_0000_0000_0000_0000_0000u128 | (low_byte << 8);
+                    Ipv6Network::from_bits(addr, mask)
+                })
+                .collect();
+
+            let mut before_addrs: Vec<u128> = Vec::new();
+            for net in &nets {
+                for addr in (*net).addrs() {
+                    before_addrs.push(addr.to_bits());
+                }
+            }
+            before_addrs.sort_unstable();
+            before_addrs.dedup();
+
+            let result = ipv6_aggregate(&mut nets);
+
+            let mut after_addrs: Vec<u128> = Vec::new();
+            for net in result.iter() {
+                for addr in (*net).addrs() {
+                    after_addrs.push(addr.to_bits());
+                }
+            }
+            after_addrs.sort_unstable();
+            after_addrs.dedup();
+
+            prop_assert_eq!(before_addrs, after_addrs);
+        }
+
+        #[test]
+        fn ipv6_aggregate_result_is_minimal(
+            raw_nets in prop::collection::vec(
+                (0u128..=255, 120u8..=124),
+                1..=32,
+            )
+        ) {
+            let mut nets: Vec<Ipv6Network> = raw_nets
+                .iter()
+                .map(|&(low_byte, prefix)| {
+                    let mask = if prefix == 0 { 0 } else { !0u128 << (128 - prefix) };
+                    let addr = 0x2001_0db8_0000_0000_0000_0000_0000_0000u128 | (low_byte << 8);
+                    Ipv6Network::from_bits(addr, mask)
+                })
+                .collect();
+
+            let result = ipv6_aggregate(&mut nets);
+
+            // No duplicates.
+            for i in 0..result.len() {
+                for j in (i + 1)..result.len() {
+                    prop_assert_ne!(result[i], result[j]);
+                }
+            }
+
+            // No containment.
+            for i in 0..result.len() {
+                for j in 0..result.len() {
+                    if i != j {
+                        prop_assert!(!result[i].contains(&result[j]));
+                    }
+                }
+            }
+
+            // No mergeable pairs.
+            for i in 0..result.len() {
+                for j in (i + 1)..result.len() {
+                    prop_assert!(result[i].merge(&result[j]).is_none());
+                }
+            }
+        }
+
+        #[test]
+        fn ipv6_aggregate_non_contiguous_preserves_addresses(
+            raw_nets in prop::collection::vec(
+                (0u128..=0xFF, 0u128..=0xFF),
+                1..=8,
+            )
+        ) {
+            let mut nets: Vec<Ipv6Network> = raw_nets
+                .iter()
+                .map(|&(addr_low, mask_low)| {
+                    let addr = 0x2001_0db8_0000_0000_0000_0000_0000_0000u128 | addr_low;
+                    let mask = !0xFFu128 | mask_low;
+                    Ipv6Network::from_bits(addr, mask)
+                })
+                .collect();
+
+            let mut before_addrs: Vec<u128> = Vec::new();
+            for net in &nets {
+                for addr in (*net).addrs() {
+                    before_addrs.push(addr.to_bits());
+                }
+            }
+            before_addrs.sort_unstable();
+            before_addrs.dedup();
+
+            let result = ipv6_aggregate(&mut nets);
+
+            let mut after_addrs: Vec<u128> = Vec::new();
+            for net in result.iter() {
+                for addr in (*net).addrs() {
+                    after_addrs.push(addr.to_bits());
+                }
+            }
+            after_addrs.sort_unstable();
+            after_addrs.dedup();
+
+            prop_assert_eq!(before_addrs, after_addrs);
+        }
+
+        #[test]
         fn ipnetwork_addr_mask_roundtrip_v4(net in arb_ipv4_network()) {
             let ip_net = IpNetwork::V4(net);
             prop_assert_eq!(IpAddr::V4(*net.addr()), ip_net.addr());
