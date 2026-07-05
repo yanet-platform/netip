@@ -382,6 +382,8 @@ impl core::error::Error for MacAddrParseError {}
 
 #[cfg(test)]
 mod test {
+    use proptest::prelude::*;
+
     use super::*;
 
     const MAC: MacAddr = MacAddr::new(0x3a, 0xac, 0x26, 0x9b, 0x5b, 0xf9);
@@ -600,44 +602,26 @@ mod test {
         assert!("3a:ac:26:9b:5bxf9".parse::<MacAddr>().is_err());
     }
 
-    // Small deterministic xorshift64 PRNG used only to build randomized
-    // property-test fixtures; this crate stays zero-dependency, so no
-    // proptest/rand strategies are used for these cases.
-    struct Xorshift64(u64);
-
-    impl Xorshift64 {
-        fn new(seed: u64) -> Self {
-            Self(if seed == 0 { 0x9E37_79B9_7F4A_7C15 } else { seed })
-        }
-
-        fn next_u64(&mut self) -> u64 {
-            let mut x = self.0;
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            self.0 = x;
-            x
-        }
+    fn arb_mac_addr() -> impl Strategy<Value = MacAddr> {
+        any::<u64>().prop_map(MacAddr::from)
     }
 
-    #[test]
-    fn parse_display_roundtrip_property() {
-        let mut rng = Xorshift64::new(0xC0FF_EE12_3456_789A);
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
 
-        for _ in 0..1000 {
-            let random_bits = rng.next_u64() & 0xffff_ffff_ffff;
-            let mac = MacAddr::from(random_bits);
+        #[test]
+        fn prop_mac_addr_parse_display_roundtrip(mac in arb_mac_addr()) {
             let formatted = mac.to_string();
 
-            assert_eq!(
+            prop_assert_eq!(
                 Ok(mac),
                 MacAddr::parse_ascii(formatted.as_bytes()),
-                "roundtrip for {formatted}"
+                "roundtrip for {}", formatted
             );
-            assert_eq!(
+            prop_assert_eq!(
                 formatted.parse::<MacAddr>(),
                 MacAddr::parse_ascii(formatted.as_bytes()),
-                "FromStr/parse_ascii mismatch for {formatted}"
+                "FromStr/parse_ascii mismatch for {}", formatted
             );
         }
     }

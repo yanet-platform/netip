@@ -5550,65 +5550,6 @@ mod test {
         assert_eq!(1..4, range);
     }
 
-    // Small deterministic xorshift64 PRNG used only to build randomized
-    // property-test fixtures; this crate stays zero-dependency, so no
-    // proptest/rand strategies are used for these cases.
-    struct Xorshift64(u64);
-
-    impl Xorshift64 {
-        fn new(seed: u64) -> Self {
-            Self(if seed == 0 { 0x9E37_79B9_7F4A_7C15 } else { seed })
-        }
-
-        fn next_u64(&mut self) -> u64 {
-            let mut x = self.0;
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            self.0 = x;
-            x
-        }
-
-        fn next_u8(&mut self) -> u8 {
-            self.next_u64() as u8
-        }
-
-        fn next_u16(&mut self) -> u16 {
-            self.next_u64() as u16
-        }
-
-        // Returns a value in `0..bound`.
-        fn below(&mut self, bound: usize) -> usize {
-            (self.next_u64() as usize) % bound
-        }
-    }
-
-    fn random_ipv4_network(rng: &mut Xorshift64) -> Ipv4Network {
-        let (a, b, c, d) = (rng.next_u8(), rng.next_u8(), rng.next_u8(), rng.next_u8());
-
-        if rng.below(2) == 0 {
-            let prefix = rng.below(33);
-            Ipv4Network::parse(&format!("{a}.{b}.{c}.{d}/{prefix}")).unwrap()
-        } else {
-            let (m0, m1, m2, m3) = (rng.next_u8(), rng.next_u8(), rng.next_u8(), rng.next_u8());
-            Ipv4Network::parse(&format!("{a}.{b}.{c}.{d}/{m0}.{m1}.{m2}.{m3}")).unwrap()
-        }
-    }
-
-    fn random_ipv6_network(rng: &mut Xorshift64) -> Ipv6Network {
-        let addr: [u16; 8] = core::array::from_fn(|_| rng.next_u16());
-        let addr = addr.iter().map(|seg| format!("{seg:x}")).collect::<Vec<_>>().join(":");
-
-        if rng.below(2) == 0 {
-            let prefix = rng.below(129);
-            Ipv6Network::parse(&format!("{addr}/{prefix}")).unwrap()
-        } else {
-            let mask: [u16; 8] = core::array::from_fn(|_| rng.next_u16());
-            let mask = mask.iter().map(|seg| format!("{seg:x}")).collect::<Vec<_>>().join(":");
-            Ipv6Network::parse(&format!("{addr}/{mask}")).unwrap()
-        }
-    }
-
     // Pre-rewrite `Ipv4Network::merge` body, kept verbatim to validate the
     // cheaper-reject-path rewrite against known-correct behavior.
     fn ipv4_merge_reference(a: &Ipv4Network, b: &Ipv4Network) -> Option<Ipv4Network> {
@@ -5663,55 +5604,47 @@ mod test {
         None
     }
 
-    // Compares the two implementations directly, bypassing `ip_binary_split`'s
-    // size-based router entirely, so both are exercised across the full n
-    // range regardless of `Word::SPLIT_THRESHOLD`.
-    #[test]
-    fn test_ipv4_binary_split_linear_matches_quadratic() {
-        let mut rng = Xorshift64::new(0xC0FF_EE12_3456_789A);
-        let mut cases = 0usize;
-
-        for n in 3..=64usize {
-            for _ in 0..20 {
-                let mut nets: Vec<Ipv4Network> = (0..n).map(|_| random_ipv4_network(&mut rng)).collect();
+    fn arb_sorted_ipv4_networks() -> impl Strategy<Value = Vec<Ipv4Network>> {
+        (3usize..=64)
+            .prop_flat_map(|len| prop::collection::vec(arb_ipv4_network(), len))
+            .prop_map(|mut nets| {
                 nets.sort();
                 nets.dedup();
-                if nets.len() < 3 {
-                    continue;
-                }
-                cases += 1;
-
-                let expected = ip_binary_split_quadratic(&nets);
-                let actual = ip_binary_split_linear(&nets);
-                assert_eq!(expected, actual, "mismatch for n = {n}, nets = {nets:?}");
-            }
-        }
-
-        assert!(cases >= 1000, "expected at least 1000 cases, got {cases}");
+                nets
+            })
+            .prop_filter("need at least 3 distinct networks after dedup", |nets| nets.len() >= 3)
     }
 
-    #[test]
-    fn test_ipv6_binary_split_linear_matches_quadratic() {
-        let mut rng = Xorshift64::new(0xFEED_FACE_DEAD_BEEF);
-        let mut cases = 0usize;
-
-        for n in 3..=64usize {
-            for _ in 0..20 {
-                let mut nets: Vec<Ipv6Network> = (0..n).map(|_| random_ipv6_network(&mut rng)).collect();
+    fn arb_sorted_ipv6_networks() -> impl Strategy<Value = Vec<Ipv6Network>> {
+        (3usize..=64)
+            .prop_flat_map(|len| prop::collection::vec(arb_ipv6_network(), len))
+            .prop_map(|mut nets| {
                 nets.sort();
                 nets.dedup();
-                if nets.len() < 3 {
-                    continue;
-                }
-                cases += 1;
+                nets
+            })
+            .prop_filter("need at least 3 distinct networks after dedup", |nets| nets.len() >= 3)
+    }
 
-                let expected = ip_binary_split_quadratic(&nets);
-                let actual = ip_binary_split_linear(&nets);
-                assert_eq!(expected, actual, "mismatch for n = {n}, nets = {nets:?}");
-            }
+    // Compares the two implementations directly, bypassing `ip_binary_split`'s
+    // size-based router entirely, so both are exercised across the full n
+    // range regardless of `Word::SPLIT_THRESHOLD`. Kept at the default case
+    // count: each case already does O(n^2) work up to n = 64 in the
+    // quadratic reference, so it is deliberately not inflated further.
+    proptest! {
+        #[test]
+        fn prop_ipv4_binary_split_linear_matches_quadratic(nets in arb_sorted_ipv4_networks()) {
+            let expected = ip_binary_split_quadratic(&nets);
+            let actual = ip_binary_split_linear(&nets);
+            prop_assert_eq!(expected, actual, "mismatch for nets = {:?}", nets);
         }
 
-        assert!(cases >= 1000, "expected at least 1000 cases, got {cases}");
+        #[test]
+        fn prop_ipv6_binary_split_linear_matches_quadratic(nets in arb_sorted_ipv6_networks()) {
+            let expected = ip_binary_split_quadratic(&nets);
+            let actual = ip_binary_split_linear(&nets);
+            prop_assert_eq!(expected, actual, "mismatch for nets = {:?}", nets);
+        }
     }
 
     // Consecutive /24 networks, deterministic and distinct without needing to
@@ -6718,19 +6651,13 @@ mod test {
         }
     }
 
-    #[test]
-    fn ipv4_merge_matches_reference_random() {
-        let mut rng = Xorshift64::new(0x4D45_5247_4531_3234);
-        let mut cases = 0usize;
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2000))]
 
-        for _ in 0..4000 {
-            let a = random_ipv4_network(&mut rng);
-            let b = random_ipv4_network(&mut rng);
-            cases += 1;
-            assert_eq!(ipv4_merge_reference(&a, &b), a.merge(&b), "mismatch: a={a}, b={b}");
+        #[test]
+        fn prop_ipv4_merge_matches_reference(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+            prop_assert_eq!(ipv4_merge_reference(&a, &b), a.merge(&b), "mismatch: a={}, b={}", a, b);
         }
-
-        assert!(cases >= 2000, "expected at least 2000 cases, got {cases}");
     }
 
     #[test]
@@ -6766,19 +6693,13 @@ mod test {
         }
     }
 
-    #[test]
-    fn ipv6_merge_matches_reference_random() {
-        let mut rng = Xorshift64::new(0x4956_3648_4E45_5457);
-        let mut cases = 0usize;
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2000))]
 
-        for _ in 0..4000 {
-            let a = random_ipv6_network(&mut rng);
-            let b = random_ipv6_network(&mut rng);
-            cases += 1;
-            assert_eq!(ipv6_merge_reference(&a, &b), a.merge(&b), "mismatch: a={a}, b={b}");
+        #[test]
+        fn prop_ipv6_merge_matches_reference(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+            prop_assert_eq!(ipv6_merge_reference(&a, &b), a.merge(&b), "mismatch: a={}, b={}", a, b);
         }
-
-        assert!(cases >= 2000, "expected at least 2000 cases, got {cases}");
     }
 
     #[test]
@@ -7989,6 +7910,65 @@ mod test {
             let ip_net = IpNetwork::V6(net);
             prop_assert!(ip_net.to_contiguous().contains(&ip_net));
         }
+
+        // `Ipv4/6NetworkDiff::next` constructs items directly from an already
+        // `& mask`-ed address instead of re-normalizing through
+        // `Ipv4Network::new`/`Ipv6Network::new`. This checks that every
+        // yielded network still satisfies the (addr, mask) invariant
+        // `addr & mask == addr`.
+        #[test]
+        fn prop_ipv4_difference_items_are_normalized(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+            for net in a.difference(&b) {
+                let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
+                prop_assert_eq!(addr & mask, addr, "a={}, b={}, net={}", a, b, net);
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_difference_items_are_normalized(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+            for net in a.difference(&b) {
+                let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
+                prop_assert_eq!(addr & mask, addr, "a={}, b={}, net={}", a, b, net);
+            }
+        }
+
+        // `Ipv4/6NetworkDiff::count` overrides the default full-iteration
+        // fallback with `len()`. This checks the two stay in agreement, and
+        // both match manual iteration, over random pairs (contiguous and
+        // non-contiguous).
+        #[test]
+        fn prop_ipv4_difference_count_matches_len(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+            let diff = a.difference(&b);
+            let len = diff.len();
+            let manual = a.difference(&b).fold(0usize, |n, _| n + 1);
+
+            prop_assert_eq!(diff.count(), len, "a={}, b={}", a, b);
+            prop_assert_eq!(manual, len, "a={}, b={}", a, b);
+        }
+
+        #[test]
+        fn prop_ipv6_difference_count_matches_len(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+            let diff = a.difference(&b);
+            let len = diff.len();
+            let manual = a.difference(&b).fold(0usize, |n, _| n + 1);
+
+            prop_assert_eq!(diff.count(), len, "a={}, b={}", a, b);
+            prop_assert_eq!(manual, len, "a={}, b={}", a, b);
+        }
+
+        // `Ipv6Network::to_ipv4_mapped` truncates an already-normalized
+        // (addr, mask) pair to their low 32 bits and constructs the result
+        // directly, instead of re-normalizing through `Ipv4Network::new`.
+        #[test]
+        fn prop_ipv4_to_ipv6_mapped_roundtrip_is_normalized(net4 in arb_ipv4_network()) {
+            let mapped = net4.to_ipv6_mapped();
+            let recovered = mapped.to_ipv4_mapped();
+            prop_assert_eq!(Some(net4), recovered, "net4={}, mapped={}", net4, mapped);
+
+            let recovered = recovered.unwrap();
+            let (addr, mask) = (recovered.addr().to_bits(), recovered.mask().to_bits());
+            prop_assert_eq!(addr & mask, addr, "net4={}, mapped={}", net4, mapped);
+        }
     }
 
     #[test]
@@ -8287,33 +8267,23 @@ mod test {
 
     // The (addr, mask) tuple is exactly the derived semantics, so it remains a
     // valid reference after the `Ord` impl is swapped for a packed-key one.
-    #[test]
-    fn prop_ipv4_network_ord_matches_addr_mask_tuple() {
-        let mut rng = Xorshift64::new(0x51ED_1949_2C13_9AC1);
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2000))]
 
-        for _ in 0..2000 {
-            let net_x = random_ipv4_network(&mut rng);
-            let net_y = random_ipv4_network(&mut rng);
-
-            let expected = (net_x.addr(), net_x.mask()).cmp(&(net_y.addr(), net_y.mask()));
-            assert_eq!(expected, net_x.cmp(&net_y));
-            assert_eq!(Some(net_x.cmp(&net_y)), net_x.partial_cmp(&net_y));
-            assert_eq!(net_x.cmp(&net_y) == Ordering::Equal, net_x == net_y);
+        #[test]
+        fn prop_ipv4_network_ord_matches_addr_mask_tuple(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+            let expected = (a.addr(), a.mask()).cmp(&(b.addr(), b.mask()));
+            prop_assert_eq!(expected, a.cmp(&b));
+            prop_assert_eq!(Some(a.cmp(&b)), a.partial_cmp(&b));
+            prop_assert_eq!(a.cmp(&b) == Ordering::Equal, a == b);
         }
-    }
 
-    #[test]
-    fn prop_ipv6_network_ord_matches_addr_mask_tuple() {
-        let mut rng = Xorshift64::new(0x8B5A_46F1_D30C_77E9);
-
-        for _ in 0..2000 {
-            let net_x = random_ipv6_network(&mut rng);
-            let net_y = random_ipv6_network(&mut rng);
-
-            let expected = (net_x.addr(), net_x.mask()).cmp(&(net_y.addr(), net_y.mask()));
-            assert_eq!(expected, net_x.cmp(&net_y));
-            assert_eq!(Some(net_x.cmp(&net_y)), net_x.partial_cmp(&net_y));
-            assert_eq!(net_x.cmp(&net_y) == Ordering::Equal, net_x == net_y);
+        #[test]
+        fn prop_ipv6_network_ord_matches_addr_mask_tuple(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+            let expected = (a.addr(), a.mask()).cmp(&(b.addr(), b.mask()));
+            prop_assert_eq!(expected, a.cmp(&b));
+            prop_assert_eq!(Some(a.cmp(&b)), a.partial_cmp(&b));
+            prop_assert_eq!(a.cmp(&b) == Ordering::Equal, a == b);
         }
     }
 
@@ -8399,76 +8369,33 @@ mod test {
 
             prop_assert!(nets.len() <= 2 * 128 - 2);
         }
-    }
 
-    // `Ipv4NetworkDiff::next` constructs items directly from an already
-    // `& mask`-ed address instead of re-normalizing through `Ipv4Network::new`.
-    // This checks that every yielded network still satisfies the (addr, mask)
-    // invariant `addr & mask == addr`.
-    #[test]
-    fn prop_ipv4_difference_items_are_normalized() {
-        let mut rng = Xorshift64::new(0x1A2B_3C4D_5E6F_7081);
+        // Randomized counterpart to `ipv4_range_to_networks_items_are_normalized_edge_cases`:
+        // every yielded network must still satisfy the (addr, mask) invariant.
+        #[test]
+        fn prop_ipv4_range_to_networks_items_are_normalized(a in any::<u32>(), b in any::<u32>()) {
+            let (first_bits, last_bits) = if a <= b { (a, b) } else { (b, a) };
+            let first = Ipv4Addr::from_bits(first_bits);
+            let last = Ipv4Addr::from_bits(last_bits);
 
-        for _ in 0..500 {
-            let a = random_ipv4_network(&mut rng);
-            let b = random_ipv4_network(&mut rng);
-
-            for net in a.difference(&b) {
+            for net in ipv4_range_to_networks(first, last) {
                 let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
-                assert_eq!(addr & mask, addr, "a={a}, b={b}, net={net}");
+                prop_assert_eq!(addr & mask, addr, "first={}, last={}, net={}", first_bits, last_bits, net);
             }
         }
-    }
 
-    #[test]
-    fn prop_ipv6_difference_items_are_normalized() {
-        let mut rng = Xorshift64::new(0x9C4E_2F0A_6B1D_8357);
+        // Randomized counterpart to `ipv6_range_to_networks_items_are_normalized_edge_cases`:
+        // every yielded network must still satisfy the (addr, mask) invariant.
+        #[test]
+        fn prop_ipv6_range_to_networks_items_are_normalized(a in any::<u128>(), b in any::<u128>()) {
+            let (first_bits, last_bits) = if a <= b { (a, b) } else { (b, a) };
+            let first = Ipv6Addr::from_bits(first_bits);
+            let last = Ipv6Addr::from_bits(last_bits);
 
-        for _ in 0..500 {
-            let a = random_ipv6_network(&mut rng);
-            let b = random_ipv6_network(&mut rng);
-
-            for net in a.difference(&b) {
+            for net in ipv6_range_to_networks(first, last) {
                 let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
-                assert_eq!(addr & mask, addr, "a={a}, b={b}, net={net}");
+                prop_assert_eq!(addr & mask, addr, "first={}, last={}, net={}", first_bits, last_bits, net);
             }
-        }
-    }
-
-    // `Ipv4NetworkDiff::count` overrides the default full-iteration fallback
-    // with `len()`. This checks the two stay in agreement, and both match
-    // manual iteration, over random pairs (contiguous and non-contiguous).
-    #[test]
-    fn prop_ipv4_difference_count_matches_len() {
-        let mut rng = Xorshift64::new(0x7C3A_91E4_2B5D_60F8);
-
-        for _ in 0..500 {
-            let a = random_ipv4_network(&mut rng);
-            let b = random_ipv4_network(&mut rng);
-            let diff = a.difference(&b);
-
-            let len = diff.len();
-            let manual = a.difference(&b).fold(0usize, |n, _| n + 1);
-
-            assert_eq!(diff.count(), len, "a={a}, b={b}");
-            assert_eq!(manual, len, "a={a}, b={b}");
-        }
-    }
-
-    #[test]
-    fn prop_ipv6_difference_count_matches_len() {
-        let mut rng = Xorshift64::new(0x2D6F_5A81_C93E_4B07);
-
-        for _ in 0..500 {
-            let a = random_ipv6_network(&mut rng);
-            let b = random_ipv6_network(&mut rng);
-            let diff = a.difference(&b);
-
-            let len = diff.len();
-            let manual = a.difference(&b).fold(0usize, |n, _| n + 1);
-
-            assert_eq!(diff.count(), len, "a={a}, b={b}");
-            assert_eq!(manual, len, "a={a}, b={b}");
         }
     }
 
@@ -8486,22 +8413,6 @@ mod test {
         ];
 
         for &(first, last) in cases {
-            let nets = ipv4_range_to_networks(Ipv4Addr::from_bits(first), Ipv4Addr::from_bits(last));
-            for net in nets {
-                let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
-                assert_eq!(addr & mask, addr, "first={first}, last={last}, net={net}");
-            }
-        }
-    }
-
-    #[test]
-    fn prop_ipv4_range_to_networks_items_are_normalized() {
-        let mut rng = Xorshift64::new(0x3F1A_9C2E_77BB_5601);
-
-        for _ in 0..500 {
-            let (a, b) = (rng.next_u64() as u32, rng.next_u64() as u32);
-            let (first, last) = if a <= b { (a, b) } else { (b, a) };
-
             let nets = ipv4_range_to_networks(Ipv4Addr::from_bits(first), Ipv4Addr::from_bits(last));
             for net in nets {
                 let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
@@ -8529,43 +8440,6 @@ mod test {
                 let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
                 assert_eq!(addr & mask, addr, "first={first}, last={last}, net={net}");
             }
-        }
-    }
-
-    #[test]
-    fn prop_ipv6_range_to_networks_items_are_normalized() {
-        let mut rng = Xorshift64::new(0xD1E2_A3B4_C5F6_0798);
-
-        for _ in 0..500 {
-            let a = ((rng.next_u64() as u128) << 64) | (rng.next_u64() as u128);
-            let b = ((rng.next_u64() as u128) << 64) | (rng.next_u64() as u128);
-            let (first, last) = if a <= b { (a, b) } else { (b, a) };
-
-            let nets = ipv6_range_to_networks(Ipv6Addr::from_bits(first), Ipv6Addr::from_bits(last));
-            for net in nets {
-                let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
-                assert_eq!(addr & mask, addr, "first={first}, last={last}, net={net}");
-            }
-        }
-    }
-
-    // `Ipv6Network::to_ipv4_mapped` truncates an already-normalized (addr,
-    // mask) pair to their low 32 bits and constructs the result directly,
-    // instead of re-normalizing through `Ipv4Network::new`.
-    #[test]
-    fn prop_ipv4_to_ipv6_mapped_roundtrip_is_normalized() {
-        let mut rng = Xorshift64::new(0x2E7B_91FA_C34D_6810);
-
-        for _ in 0..500 {
-            let net4 = random_ipv4_network(&mut rng);
-            let mapped = net4.to_ipv6_mapped();
-
-            let recovered = mapped.to_ipv4_mapped();
-            assert_eq!(Some(net4), recovered, "net4={net4}, mapped={mapped}");
-
-            let recovered = recovered.unwrap();
-            let (addr, mask) = (recovered.addr().to_bits(), recovered.mask().to_bits());
-            assert_eq!(addr & mask, addr, "net4={net4}, mapped={mapped}");
         }
     }
 }
