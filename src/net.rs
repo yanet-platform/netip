@@ -96,10 +96,13 @@ impl From<CidrOverflowError> for IpNetParseError {
 /// This function is used to construct IP masks for the given network prefix
 /// size.
 #[inline]
-pub fn ipv4_mask_from_cidr(cidr: u8) -> Result<Ipv4Addr, CidrOverflowError> {
+pub const fn ipv4_mask_from_cidr(cidr: u8) -> Result<Ipv4Addr, CidrOverflowError> {
     if cidr <= 32 {
-        let mask = !(u32::MAX.checked_shr(cidr as u32).unwrap_or_default());
-        Ok(mask.into())
+        let shifted = match u32::MAX.checked_shr(cidr as u32) {
+            Some(shifted) => shifted,
+            None => 0,
+        };
+        Ok(Ipv4Addr::from_bits(!shifted))
     } else {
         Err(CidrOverflowError(cidr, 32))
     }
@@ -111,10 +114,13 @@ pub fn ipv4_mask_from_cidr(cidr: u8) -> Result<Ipv4Addr, CidrOverflowError> {
 /// This function is used to construct IP masks for the given network prefix
 /// size.
 #[inline]
-pub fn ipv6_mask_from_cidr(cidr: u8) -> Result<Ipv6Addr, CidrOverflowError> {
+pub const fn ipv6_mask_from_cidr(cidr: u8) -> Result<Ipv6Addr, CidrOverflowError> {
     if cidr <= 128 {
-        let mask = !(u128::MAX.checked_shr(cidr as u32).unwrap_or_default());
-        Ok(mask.into())
+        let shifted = match u128::MAX.checked_shr(cidr as u32) {
+            Some(shifted) => shifted,
+            None => 0,
+        };
+        Ok(Ipv6Addr::from_bits(!shifted))
     } else {
         Err(CidrOverflowError(cidr, 128))
     }
@@ -378,7 +384,7 @@ impl IpNetwork {
     /// ```
     #[inline]
     #[must_use]
-    pub fn to_contiguous(&self) -> Self {
+    pub const fn to_contiguous(&self) -> Self {
         match self {
             Self::V4(net) => Self::V4(net.to_contiguous()),
             Self::V6(net) => Self::V6(net.to_contiguous()),
@@ -1175,10 +1181,15 @@ impl Ipv4Network {
     /// assert_eq!(expected, net.to_contiguous());
     /// ```
     #[must_use]
-    pub fn to_contiguous(&self) -> Self {
+    pub const fn to_contiguous(&self) -> Self {
         let (addr, mask) = self.to_bits();
 
-        Self::try_from((addr.into(), mask.leading_ones() as u8)).expect("CIDR must be in range [0; 32]")
+        // NOTE: `mask.leading_ones()` is at most 32, which `ipv4_mask_from_cidr` always
+        // accepts.
+        match ipv4_mask_from_cidr(mask.leading_ones() as u8) {
+            Ok(mask) => Self::new(Ipv4Addr::from_bits(addr), mask),
+            Err(..) => unreachable!(),
+        }
     }
 
     /// Calculates and returns the [`Ipv4Network`], which will be a supernet,
@@ -2444,10 +2455,15 @@ impl Ipv6Network {
     /// assert_eq!(expected, net.to_contiguous());
     /// ```
     #[must_use]
-    pub fn to_contiguous(&self) -> Self {
+    pub const fn to_contiguous(&self) -> Self {
         let (addr, mask) = self.to_bits();
 
-        Self::try_from((addr.into(), mask.leading_ones() as u8)).expect("CIDR must be in range [0; 128]")
+        // NOTE: `mask.leading_ones()` is at most 128, which `ipv6_mask_from_cidr`
+        // always accepts.
+        match ipv6_mask_from_cidr(mask.leading_ones() as u8) {
+            Ok(mask) => Self::new(Ipv6Addr::from_bits(addr), mask),
+            Err(..) => unreachable!(),
+        }
     }
 
     /// Converts this network to an [`IPv4` network] if it's an IPv4-mapped
@@ -6912,6 +6928,42 @@ mod test {
     fn ipnetwork_to_contiguous_already_contiguous_v6() {
         let net = IpNetwork::parse("2001:db8::/32").unwrap();
         assert_eq!(net, net.to_contiguous());
+    }
+
+    #[test]
+    fn ipv4_network_to_contiguous_const_fn() {
+        const NET: Ipv4Network = Ipv4Network::new(Ipv4Addr::new(192, 168, 0, 1), Ipv4Addr::new(255, 255, 0, 255));
+        const CONTIGUOUS: Ipv4Network = NET.to_contiguous();
+
+        let expected = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        assert_eq!(expected, CONTIGUOUS);
+        assert_eq!(NET.to_contiguous(), CONTIGUOUS);
+    }
+
+    #[test]
+    fn ipv6_network_to_contiguous_const_fn() {
+        const NET: Ipv6Network = Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0xffff, 0xffff, 0xff00, 0, 0xffff, 0xffff, 0, 0),
+        );
+        const CONTIGUOUS: Ipv6Network = NET.to_contiguous();
+
+        let expected = Ipv6Network::parse("2001:db8::/40").unwrap();
+        assert_eq!(expected, CONTIGUOUS);
+        assert_eq!(NET.to_contiguous(), CONTIGUOUS);
+    }
+
+    #[test]
+    fn ipnetwork_to_contiguous_const_fn() {
+        const NET: IpNetwork = IpNetwork::V4(Ipv4Network::new(
+            Ipv4Addr::new(192, 168, 0, 1),
+            Ipv4Addr::new(255, 255, 0, 255),
+        ));
+        const CONTIGUOUS: IpNetwork = NET.to_contiguous();
+
+        let expected = IpNetwork::parse("192.168.0.0/16").unwrap();
+        assert_eq!(expected, CONTIGUOUS);
+        assert_eq!(NET.to_contiguous(), CONTIGUOUS);
     }
 
     #[test]
