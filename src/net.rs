@@ -1966,7 +1966,7 @@ impl core::iter::FusedIterator for Ipv4RangeNetworks {}
 /// `2a02:6b8:c00::1234:0:0/ffff:ffff:ff00::ffff:ffff:0:0`.
 ///
 /// [IETF RFC 4632]: https://tools.ietf.org/html/rfc4632
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Ipv6Network(Ipv6Addr, Ipv6Addr);
 
 impl Ipv6Network {
@@ -2830,6 +2830,31 @@ impl Ipv6Network {
         let back = u128::MAX.checked_shr(128 - host_bits).unwrap_or(0);
 
         Ipv6NetworkAddrs { base: addr, mask, front: 0, back }
+    }
+}
+
+// Total order on the `(addr, mask)` pair compared as `u128`s, in place of the
+// derived lexicographic comparison of the two `Ipv6Addr` fields.
+//
+// `Ipv6Addr`'s own comparison is lexicographic over its eight `u16` segments,
+// which agrees with the numeric order of the big-endian `u128` returned by
+// `to_bits()`, so comparing the bit patterns directly reaches the same
+// verdict without walking the segments one at a time.
+impl Ord for Ipv6Network {
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        let (self_addr, self_mask) = self.to_bits();
+        let (other_addr, other_mask) = other.to_bits();
+
+        (self_addr, self_mask).cmp(&(other_addr, other_mask))
+    }
+}
+
+// Delegates to `Ord::cmp`, which defines `Ipv6Network`'s total order.
+impl PartialOrd for Ipv6Network {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
