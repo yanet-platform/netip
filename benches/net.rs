@@ -185,6 +185,83 @@ fn bench_intersection(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_contains(c: &mut Criterion) {
+    use netip::IpNetwork;
+
+    let mut group = c.benchmark_group("netip");
+
+    group.bench_function("Ipv4Network::contains contiguous true", |b| {
+        let n0 = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        let n1 = Ipv4Network::parse("10.1.0.0/16").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).contains(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv4Network::contains contiguous false", |b| {
+        let n0 = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        let n1 = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).contains(core::hint::black_box(&n1)));
+        });
+    });
+
+    // Mask "255.0.0.255" leaves a hole in the two middle octets, so the
+    // contained network may differ freely there while still matching on the
+    // fixed first and last octets.
+    group.bench_function("Ipv4Network::contains non-contiguous", |b| {
+        let n0 = Ipv4Network::parse("10.0.0.0/255.0.0.255").unwrap();
+        let n1 = Ipv4Network::parse("10.5.9.0/255.255.0.255").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).contains(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv6Network::contains contiguous true", |b| {
+        let n0 = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let n1 = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).contains(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv6Network::contains contiguous false", |b| {
+        let n0 = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let n1 = Ipv6Network::parse("fe80::/10").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).contains(core::hint::black_box(&n1)));
+        });
+    });
+
+    // Mask "ffff:ffff:ff00:ffff:ffff:ffff:ffff:ffff" leaves an 8-bit hole in
+    // the third group, so the contained network's low byte there is free.
+    group.bench_function("Ipv6Network::contains non-contiguous", |b| {
+        let n0 = Ipv6Network::parse("2001:db8:c00::1/ffff:ffff:ff00:ffff:ffff:ffff:ffff:ffff").unwrap();
+        let n1 = Ipv6Network::parse("2001:db8:c05::1/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).contains(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("IpNetwork::contains v4", |b| {
+        let n0 = IpNetwork::parse("10.0.0.0/8").unwrap();
+        let n1 = IpNetwork::parse("10.1.0.0/16").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).contains(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("IpNetwork::contains v6", |b| {
+        let n0 = IpNetwork::parse("2001:db8::/32").unwrap();
+        let n1 = IpNetwork::parse("2001:db8:1::/48").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).contains(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.finish();
+}
+
 fn bench_merge(c: &mut Criterion) {
     let mut group = c.benchmark_group("netip");
 
@@ -843,6 +920,7 @@ criterion_group!(
     bench_net_addrs,
     bench_net_addrs_count,
     bench_intersection,
+    bench_contains,
     bench_merge,
     bench_is_adjacent,
     bench_is_contiguous,
