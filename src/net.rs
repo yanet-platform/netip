@@ -663,6 +663,7 @@ impl From<Ipv4Addr> for IpNetwork {
 impl TryFrom<(Ipv4Addr, u8)> for IpNetwork {
     type Error = CidrOverflowError;
 
+    #[inline]
     fn try_from((addr, cidr): (Ipv4Addr, u8)) -> Result<Self, Self::Error> {
         Ok(Self::V4(Ipv4Network::new(addr, ipv4_mask_from_cidr(cidr)?)))
     }
@@ -682,6 +683,7 @@ impl From<Ipv4Network> for IpNetwork {
 }
 
 impl From<Ipv6Addr> for IpNetwork {
+    #[inline]
     fn from(addr: Ipv6Addr) -> Self {
         // Construct network directly, because no address mutation occurs.
         Self::V6(Ipv6Network(addr, IPV6_ALL_BITS))
@@ -691,6 +693,7 @@ impl From<Ipv6Addr> for IpNetwork {
 impl TryFrom<(Ipv6Addr, u8)> for IpNetwork {
     type Error = CidrOverflowError;
 
+    #[inline]
     fn try_from((addr, cidr): (Ipv6Addr, u8)) -> Result<Self, Self::Error> {
         Ok(Self::V6(Ipv6Network::new(addr, ipv6_mask_from_cidr(cidr)?)))
     }
@@ -1180,6 +1183,7 @@ impl Ipv4Network {
     ///
     /// assert_eq!(expected, net.to_contiguous());
     /// ```
+    #[inline]
     #[must_use]
     pub const fn to_contiguous(&self) -> Self {
         let (addr, mask) = self.to_bits();
@@ -1232,6 +1236,7 @@ impl Ipv4Network {
     ///     a.supernet_for(&[b])
     /// );
     /// ```
+    #[inline]
     #[must_use]
     pub fn supernet_for(&self, nets: &[Ipv4Network]) -> Ipv4Network {
         let (addr, mut mask) = self.to_bits();
@@ -1606,6 +1611,7 @@ impl From<Ipv4Addr> for Ipv4Network {
 impl TryFrom<(Ipv4Addr, u8)> for Ipv4Network {
     type Error = CidrOverflowError;
 
+    #[inline]
     fn try_from((addr, cidr): (Ipv4Addr, u8)) -> Result<Self, Self::Error> {
         let mask = ipv4_mask_from_cidr(cidr)?;
         Ok(Self::new(addr, mask))
@@ -2454,6 +2460,7 @@ impl Ipv6Network {
     ///
     /// assert_eq!(expected, net.to_contiguous());
     /// ```
+    #[inline]
     #[must_use]
     pub const fn to_contiguous(&self) -> Self {
         let (addr, mask) = self.to_bits();
@@ -2611,6 +2618,7 @@ impl Ipv6Network {
     ///     a.supernet_for(&[b])
     /// );
     /// ```
+    #[inline]
     #[must_use]
     pub fn supernet_for(&self, nets: &[Ipv6Network]) -> Ipv6Network {
         let (addr, mut mask) = self.to_bits();
@@ -3264,6 +3272,7 @@ impl From<Ipv6Addr> for Ipv6Network {
 impl TryFrom<(Ipv6Addr, u8)> for Ipv6Network {
     type Error = CidrOverflowError;
 
+    #[inline]
     fn try_from((addr, cidr): (Ipv6Addr, u8)) -> Result<Self, Self::Error> {
         let mask = ipv6_mask_from_cidr(cidr)?;
         Ok(Ipv6Network::new(addr, mask))
@@ -4203,6 +4212,7 @@ where
 impl FromStr for Contiguous<IpNetwork> {
     type Err = ContiguousIpNetParseError;
 
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
     }
@@ -4211,6 +4221,7 @@ impl FromStr for Contiguous<IpNetwork> {
 impl FromStr for Contiguous<Ipv4Network> {
     type Err = ContiguousIpNetParseError;
 
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
     }
@@ -4219,6 +4230,7 @@ impl FromStr for Contiguous<Ipv4Network> {
 impl FromStr for Contiguous<Ipv6Network> {
     type Err = ContiguousIpNetParseError;
 
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
     }

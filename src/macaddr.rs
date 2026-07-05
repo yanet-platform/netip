@@ -90,6 +90,7 @@ impl MacAddr {
     ///
     /// assert_eq!(mac, MacAddr::parse_ascii(b"3a-ac-26-9b-5b-f9").unwrap());
     /// ```
+    #[inline]
     pub fn parse_ascii(b: &[u8]) -> Result<Self, MacAddrParseError> {
         match b.len() {
             // The length check above guarantees this conversion never fails.
@@ -307,12 +308,14 @@ const fn hex_octet(byte: u8) -> [u8; 2] {
 impl FromStr for MacAddr {
     type Err = MacAddrParseError;
 
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse_ascii(s.as_bytes())
     }
 }
 
 /// Decodes a single ASCII hex digit.
+#[inline]
 const fn decode_hex(b: u8) -> Result<u8, MacAddrParseError> {
     match b {
         b'0'..=b'9' => Ok(b - b'0'),
@@ -323,6 +326,7 @@ const fn decode_hex(b: u8) -> Result<u8, MacAddrParseError> {
 }
 
 /// Decodes two ASCII hex digits into a single byte.
+#[inline]
 const fn decode_hex_pair(hi: u8, lo: u8) -> Result<u8, MacAddrParseError> {
     // NOTE: no "?", because of constant function.
     let hi = match decode_hex(hi) {
@@ -345,6 +349,7 @@ const fn decode_hex_pair(hi: u8, lo: u8) -> Result<u8, MacAddrParseError> {
 /// Taking a fixed-size array rather than a slice lets the compiler prove
 /// every index below is in bounds at compile time, eliding the runtime
 /// bounds checks a `&[u8]` parameter would require.
+#[inline]
 fn parse_separated(b: &[u8; 17]) -> Result<MacAddr, MacAddrParseError> {
     let sep = b[2];
     if sep != b':' && sep != b'-' {
