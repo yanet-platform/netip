@@ -1916,7 +1916,9 @@ impl Iterator for Ipv4RangeNetworks {
         let block_max: u32 = if n == 32 { u32::MAX } else { (1u32 << n) - 1 };
         let end = first.wrapping_add(block_max);
         let mask = !block_max;
-        let net = Contiguous(Ipv4Network::from_bits(first, mask));
+        // NOTE: address is already normalized: n <= trailing_zeros(first), so the low
+        // bits are zero.
+        let net = Contiguous(Ipv4Network(Ipv4Addr::from_bits(first), Ipv4Addr::from_bits(mask)));
 
         if end == last {
             self.done = true;
@@ -3156,7 +3158,9 @@ impl Iterator for Ipv6RangeNetworks {
         let block_max: u128 = if n == 128 { u128::MAX } else { (1u128 << n) - 1 };
         let end = first.wrapping_add(block_max);
         let mask = !block_max;
-        let net = Contiguous(Ipv6Network::from_bits(first, mask));
+        // NOTE: address is already normalized: n <= trailing_zeros(first), so the low
+        // bits are zero.
+        let net = Contiguous(Ipv6Network(Ipv6Addr::from_bits(first), Ipv6Addr::from_bits(mask)));
 
         if end == last {
             self.done = true;
@@ -7954,6 +7958,83 @@ mod test {
             for net in a.difference(&b) {
                 let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
                 assert_eq!(addr & mask, addr, "a={a}, b={b}, net={net}");
+            }
+        }
+    }
+
+    // `Ipv4RangeNetworks::next` constructs each block directly from `first`,
+    // relying on `n <= trailing_zeros(first)` to guarantee the low bits are
+    // already zero, instead of re-normalizing through `Ipv4Network::new`.
+    #[test]
+    fn ipv4_range_to_networks_items_are_normalized_edge_cases() {
+        let cases: &[(u32, u32)] = &[
+            (0, u32::MAX),              // full range
+            (0, 0),                     // single address at the start
+            (u32::MAX, u32::MAX),       // single address at the end
+            (1, u32::MAX - 1),          // misaligned worst-case-ish range
+            (0x1234_5678, 0x1234_5678), // single misaligned address
+        ];
+
+        for &(first, last) in cases {
+            let nets = ipv4_range_to_networks(Ipv4Addr::from_bits(first), Ipv4Addr::from_bits(last));
+            for net in nets {
+                let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
+                assert_eq!(addr & mask, addr, "first={first}, last={last}, net={net}");
+            }
+        }
+    }
+
+    #[test]
+    fn prop_ipv4_range_to_networks_items_are_normalized() {
+        let mut rng = Xorshift64::new(0x3F1A_9C2E_77BB_5601);
+
+        for _ in 0..500 {
+            let (a, b) = (rng.next_u64() as u32, rng.next_u64() as u32);
+            let (first, last) = if a <= b { (a, b) } else { (b, a) };
+
+            let nets = ipv4_range_to_networks(Ipv4Addr::from_bits(first), Ipv4Addr::from_bits(last));
+            for net in nets {
+                let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
+                assert_eq!(addr & mask, addr, "first={first}, last={last}, net={net}");
+            }
+        }
+    }
+
+    #[test]
+    fn ipv6_range_to_networks_items_are_normalized_edge_cases() {
+        let cases: &[(u128, u128)] = &[
+            (0, u128::MAX),         // full range
+            (0, 0),                 // single address at the start
+            (u128::MAX, u128::MAX), // single address at the end
+            (1, u128::MAX - 1),     // misaligned worst-case-ish range
+            (
+                0x1234_5678_9abc_def0_1234_5678_9abc_def0,
+                0x1234_5678_9abc_def0_1234_5678_9abc_def0,
+            ), // single misaligned address
+        ];
+
+        for &(first, last) in cases {
+            let nets = ipv6_range_to_networks(Ipv6Addr::from_bits(first), Ipv6Addr::from_bits(last));
+            for net in nets {
+                let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
+                assert_eq!(addr & mask, addr, "first={first}, last={last}, net={net}");
+            }
+        }
+    }
+
+    #[test]
+    fn prop_ipv6_range_to_networks_items_are_normalized() {
+        let mut rng = Xorshift64::new(0xD1E2_A3B4_C5F6_0798);
+
+        for _ in 0..500 {
+            let a = ((rng.next_u64() as u128) << 64) | (rng.next_u64() as u128);
+            let b = ((rng.next_u64() as u128) << 64) | (rng.next_u64() as u128);
+            let (first, last) = if a <= b { (a, b) } else { (b, a) };
+
+            let nets = ipv6_range_to_networks(Ipv6Addr::from_bits(first), Ipv6Addr::from_bits(last));
+            for net in nets {
+                let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
+                assert_eq!(addr & mask, addr, "first={first}, last={last}, net={net}");
             }
         }
     }

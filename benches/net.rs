@@ -571,6 +571,41 @@ fn bench_difference(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_range_to_networks(c: &mut Criterion) {
+    use netip::{ipv4_range_to_networks, ipv6_range_to_networks};
+
+    let mut group = c.benchmark_group("netip");
+
+    // Misaligned at both ends: `first = 1` has no trailing zero bits and
+    // `last = u32::MAX - 1` is not block-aligned either, forcing the
+    // documented worst case of `2 * 32 - 2 = 62` blocks.
+    group.throughput(Throughput::Elements(62));
+    group.bench_function("ipv4_range_to_networks misaligned worst-case", |b| {
+        let first = Ipv4Addr::from_bits(1);
+        let last = Ipv4Addr::from_bits(u32::MAX - 1);
+        b.iter(|| {
+            for net in ipv4_range_to_networks(core::hint::black_box(first), core::hint::black_box(last)) {
+                core::hint::black_box(net);
+            }
+        });
+    });
+
+    // Same construction as above, forcing the documented worst case of
+    // `2 * 128 - 2 = 254` blocks.
+    group.throughput(Throughput::Elements(254));
+    group.bench_function("ipv6_range_to_networks misaligned worst-case", |b| {
+        let first = Ipv6Addr::from_bits(1);
+        let last = Ipv6Addr::from_bits(u128::MAX - 1);
+        b.iter(|| {
+            for net in ipv6_range_to_networks(core::hint::black_box(first), core::hint::black_box(last)) {
+                core::hint::black_box(net);
+            }
+        });
+    });
+
+    group.finish();
+}
+
 fn bench_ord(c: &mut Criterion) {
     let mut group = c.benchmark_group("netip");
 
@@ -650,6 +685,7 @@ criterion_group!(
     bench_aggregate,
     bench_binary_split,
     bench_difference,
+    bench_range_to_networks,
     bench_ord
 );
 criterion_main!(benches);
