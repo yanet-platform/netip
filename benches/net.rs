@@ -516,6 +516,61 @@ fn bench_contiguous_addrs(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_bicontiguous_addrs(c: &mut Criterion) {
+    use netip::BiContiguous;
+
+    let mut group = c.benchmark_group("netip");
+
+    // `net` is re-black-boxed on every `b.iter()` call (not just the yielded
+    // addresses), for the same reason as `bench_contiguous_addrs`: these
+    // loops are small enough that the compiler could otherwise hoist them
+    // out of criterion's repeated-call structure entirely.
+
+    group.throughput(Throughput::Elements(256));
+    group.bench_function("BiContiguous<Ipv6Network>::addrs 8 host bits (4+4)", |b| {
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ffff:fff0:ffff:ffff:ffff:fff0")
+            .unwrap();
+        b.iter(|| {
+            for addr in core::hint::black_box(net).addrs() {
+                core::hint::black_box(addr);
+            }
+        });
+    });
+
+    group.bench_function("Ipv6Network::addrs via Deref 8 host bits (4+4)", |b| {
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ffff:fff0:ffff:ffff:ffff:fff0")
+            .unwrap();
+        b.iter(|| {
+            for addr in (*core::hint::black_box(net)).addrs() {
+                core::hint::black_box(addr);
+            }
+        });
+    });
+
+    group.throughput(Throughput::Elements(65536));
+    group.bench_function("BiContiguous<Ipv6Network>::addrs 16 host bits (8+8)", |b| {
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ffff:ff00:ffff:ffff:ffff:ff00")
+            .unwrap();
+        b.iter(|| {
+            for addr in core::hint::black_box(net).addrs() {
+                core::hint::black_box(addr);
+            }
+        });
+    });
+
+    group.bench_function("Ipv6Network::addrs via Deref 16 host bits (8+8)", |b| {
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ffff:ff00:ffff:ffff:ffff:ff00")
+            .unwrap();
+        b.iter(|| {
+            for addr in (*core::hint::black_box(net)).addrs() {
+                core::hint::black_box(addr);
+            }
+        });
+    });
+
+    group.finish();
+}
+
 fn bench_merge(c: &mut Criterion) {
     let mut group = c.benchmark_group("netip");
 
@@ -1503,6 +1558,7 @@ criterion_group!(
     bench_contains,
     bench_contiguous_contains,
     bench_contiguous_addrs,
+    bench_bicontiguous_addrs,
     bench_merge,
     bench_is_adjacent,
     bench_is_contiguous,
