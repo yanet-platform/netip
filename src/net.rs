@@ -4230,6 +4230,42 @@ impl Contiguous<IpNetwork> {
             Self(net) => *net,
         }
     }
+
+    /// Returns `true` if this IP network fully contains the specified one.
+    ///
+    /// Returns `false` for networks of different address families. Both
+    /// operands are guaranteed to have contiguous masks by the [`Contiguous`]
+    /// type invariant, so same-family cases delegate to the cheaper
+    /// [`Contiguous<Ipv4Network>::contains`] /
+    /// [`Contiguous<Ipv6Network>::contains`] overrides instead of
+    /// [`IpNetwork::contains`].
+    ///
+    /// Reach the general check for a possibly non-contiguous network through
+    /// [`Deref`] instead, e.g. `(*net).contains(&other)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, IpNetwork};
+    ///
+    /// let a = Contiguous::<IpNetwork>::parse("192.168.0.0/16").unwrap();
+    /// let b = Contiguous::<IpNetwork>::parse("192.168.1.0/24").unwrap();
+    /// assert!(a.contains(&b));
+    /// assert!(!b.contains(&a));
+    ///
+    /// // Different address families.
+    /// let v6 = Contiguous::<IpNetwork>::parse("2001:db8::/32").unwrap();
+    /// assert!(!a.contains(&v6));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn contains(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self(IpNetwork::V4(a)), Self(IpNetwork::V4(b))) => Contiguous(*a).contains(&Contiguous(*b)),
+            (Self(IpNetwork::V6(a)), Self(IpNetwork::V6(b))) => Contiguous(*a).contains(&Contiguous(*b)),
+            _ => false,
+        }
+    }
 }
 
 impl Contiguous<Ipv4Network> {
@@ -4307,6 +4343,38 @@ impl Contiguous<Ipv4Network> {
             Self(net) => *net,
         }
     }
+
+    /// Returns `true` if this IPv4 network fully contains the specified one.
+    ///
+    /// Both operands are guaranteed to have contiguous masks by the
+    /// [`Contiguous`] type invariant, so mask-subset containment collapses
+    /// from `mask & mask == mask` to a plain unsigned integer comparison.
+    /// This overrides the [`Ipv4Network::contains`] check with that cheaper
+    /// formula; reach the general check for a possibly non-contiguous
+    /// network through [`Deref`], e.g. `(*net).contains(&other)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, Ipv4Network};
+    ///
+    /// let a = Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap();
+    /// let b = Contiguous::<Ipv4Network>::parse("10.1.0.0/16").unwrap();
+    /// assert!(a.contains(&b));
+    /// assert!(!b.contains(&a));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn contains(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self(a), Self(b)) => {
+                let (a1, m1) = a.to_bits();
+                let (a2, m2) = b.to_bits();
+
+                (a2 & m1 == a1) && (m1 <= m2)
+            }
+        }
+    }
 }
 
 impl Contiguous<Ipv6Network> {
@@ -4382,6 +4450,38 @@ impl Contiguous<Ipv6Network> {
     pub const fn to_contiguous(&self) -> Ipv6Network {
         match self {
             Self(net) => *net,
+        }
+    }
+
+    /// Returns `true` if this IPv6 network fully contains the specified one.
+    ///
+    /// Both operands are guaranteed to have contiguous masks by the
+    /// [`Contiguous`] type invariant, so mask-subset containment collapses
+    /// from `mask & mask == mask` to a plain unsigned integer comparison.
+    /// This overrides the [`Ipv6Network::contains`] check with that cheaper
+    /// formula; reach the general check for a possibly non-contiguous
+    /// network through [`Deref`], e.g. `(*net).contains(&other)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, Ipv6Network};
+    ///
+    /// let a = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+    /// let b = Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap();
+    /// assert!(a.contains(&b));
+    /// assert!(!b.contains(&a));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn contains(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self(a), Self(b)) => {
+                let (a1, m1) = a.to_bits();
+                let (a2, m2) = b.to_bits();
+
+                (a2 & m1 == a1) && (m1 <= m2)
+            }
         }
     }
 }
@@ -7517,6 +7617,129 @@ mod test {
         assert_eq!(net.to_contiguous(), (*net).to_contiguous());
     }
 
+    // The following `contiguous_*_contains_*` tests pin down that the
+    // constant-time `Contiguous<T>::contains` override (integer mask
+    // comparison) returns exactly what the `Deref`-ed inner type's general
+    // `contains` (`mask & mask == mask`) would compute.
+
+    #[test]
+    fn contiguous_ipv4_contains_override_matches_inner() {
+        let a = Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap();
+        let b = Contiguous::<Ipv4Network>::parse("10.1.0.0/16").unwrap();
+
+        assert!(a.contains(&b));
+        assert_eq!(a.contains(&b), (*a).contains(&b));
+
+        assert!(!b.contains(&a));
+        assert_eq!(b.contains(&a), (*b).contains(&a));
+    }
+
+    #[test]
+    fn contiguous_ipv4_contains_equal_networks() {
+        let a = Contiguous::<Ipv4Network>::parse("192.168.1.0/24").unwrap();
+        let b = Contiguous::<Ipv4Network>::parse("192.168.1.0/24").unwrap();
+
+        assert!(a.contains(&b));
+        assert_eq!(a.contains(&b), (*a).contains(&b));
+    }
+
+    #[test]
+    fn contiguous_ipv4_contains_boundary_prefixes() {
+        let universe = Contiguous::<Ipv4Network>::parse("0.0.0.0/0").unwrap();
+        let host = Contiguous::<Ipv4Network>::parse("10.0.0.1/32").unwrap();
+        let other_host = Contiguous::<Ipv4Network>::parse("10.0.0.2/32").unwrap();
+
+        assert!(universe.contains(&host));
+        assert_eq!(universe.contains(&host), (*universe).contains(&host));
+
+        assert!(!host.contains(&universe));
+        assert_eq!(host.contains(&universe), (*host).contains(&universe));
+
+        assert!(host.contains(&host));
+        assert!(!host.contains(&other_host));
+        assert_eq!(host.contains(&other_host), (*host).contains(&other_host));
+    }
+
+    #[test]
+    fn contiguous_ipv6_contains_override_matches_inner() {
+        let a = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let b = Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap();
+
+        assert!(a.contains(&b));
+        assert_eq!(a.contains(&b), (*a).contains(&b));
+
+        assert!(!b.contains(&a));
+        assert_eq!(b.contains(&a), (*b).contains(&a));
+    }
+
+    #[test]
+    fn contiguous_ipv6_contains_equal_networks() {
+        let a = Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap();
+        let b = Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap();
+
+        assert!(a.contains(&b));
+        assert_eq!(a.contains(&b), (*a).contains(&b));
+    }
+
+    #[test]
+    fn contiguous_ipv6_contains_boundary_prefixes() {
+        let universe = Contiguous::<Ipv6Network>::parse("::/0").unwrap();
+        let host = Contiguous::<Ipv6Network>::parse("::1/128").unwrap();
+        let other_host = Contiguous::<Ipv6Network>::parse("::2/128").unwrap();
+
+        assert!(universe.contains(&host));
+        assert_eq!(universe.contains(&host), (*universe).contains(&host));
+
+        assert!(!host.contains(&universe));
+        assert_eq!(host.contains(&universe), (*host).contains(&universe));
+
+        assert!(host.contains(&host));
+        assert!(!host.contains(&other_host));
+        assert_eq!(host.contains(&other_host), (*host).contains(&other_host));
+    }
+
+    #[test]
+    fn contiguous_ip_contains_matches_inner_v4() {
+        let a = Contiguous::<Ipv4Network>::parse("192.168.0.0/16").unwrap();
+        let b = Contiguous::<Ipv4Network>::parse("192.168.1.0/24").unwrap();
+        let net_a = Contiguous::<IpNetwork>::from(a);
+        let net_b = Contiguous::<IpNetwork>::from(b);
+
+        assert!(net_a.contains(&net_b));
+        assert_eq!(net_a.contains(&net_b), (*net_a).contains(&net_b));
+
+        assert!(!net_b.contains(&net_a));
+        assert_eq!(net_b.contains(&net_a), (*net_b).contains(&net_a));
+    }
+
+    #[test]
+    fn contiguous_ip_contains_matches_inner_v6() {
+        let a = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let b = Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap();
+        let net_a = Contiguous::<IpNetwork>::from(a);
+        let net_b = Contiguous::<IpNetwork>::from(b);
+
+        assert!(net_a.contains(&net_b));
+        assert_eq!(net_a.contains(&net_b), (*net_a).contains(&net_b));
+
+        assert!(!net_b.contains(&net_a));
+        assert_eq!(net_b.contains(&net_a), (*net_b).contains(&net_a));
+    }
+
+    #[test]
+    fn contiguous_ip_contains_mixed_family_is_false() {
+        let v4 = Contiguous::<Ipv4Network>::parse("192.168.0.0/16").unwrap();
+        let v6 = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let net_v4 = Contiguous::<IpNetwork>::from(v4);
+        let net_v6 = Contiguous::<IpNetwork>::from(v6);
+
+        assert!(!net_v4.contains(&net_v6));
+        assert_eq!(net_v4.contains(&net_v6), (*net_v4).contains(&net_v6));
+
+        assert!(!net_v6.contains(&net_v4));
+        assert_eq!(net_v6.contains(&net_v4), (*net_v6).contains(&net_v4));
+    }
+
     fn arb_ipv4_network() -> impl Strategy<Value = Ipv4Network> {
         (any::<u32>(), any::<u32>()).prop_map(|(a, m)| Ipv4Network::from_bits(a, m))
     }
@@ -7575,6 +7798,30 @@ mod test {
         fn prop_contiguous_ip_to_contiguous_is_identity(net in arb_contiguous_ip_network()) {
             prop_assert_eq!(net.to_contiguous(), *net);
             prop_assert_eq!(net.to_contiguous(), (*net).to_contiguous());
+        }
+
+        #[test]
+        fn prop_contiguous_ipv4_contains_matches_inner(
+            a in arb_contiguous_ipv4_network(),
+            b in arb_contiguous_ipv4_network(),
+        ) {
+            prop_assert_eq!(a.contains(&b), (*a).contains(&b));
+        }
+
+        #[test]
+        fn prop_contiguous_ipv6_contains_matches_inner(
+            a in arb_contiguous_ipv6_network(),
+            b in arb_contiguous_ipv6_network(),
+        ) {
+            prop_assert_eq!(a.contains(&b), (*a).contains(&b));
+        }
+
+        #[test]
+        fn prop_contiguous_ip_contains_matches_inner(
+            a in arb_contiguous_ip_network(),
+            b in arb_contiguous_ip_network(),
+        ) {
+            prop_assert_eq!(a.contains(&b), (*a).contains(&b));
         }
     }
 
