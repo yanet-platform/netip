@@ -4953,8 +4953,11 @@ impl Error for BiContiguousIpNetParseError {}
 /// `p = 64`), so upgrading from it is infallible -- see
 /// `From<Contiguous<Ipv6Network>>`.
 ///
-/// Per the wrapper principle, only methods that run strictly faster given
-/// the bi-contiguous guarantee get a behavior-preserving override:
+/// Per the wrapper principle, a method gets a behavior-preserving override
+/// either when it runs strictly faster given the bi-contiguous guarantee, or
+/// -- for [`intersection`](Self::intersection) -- when the class is provably
+/// closed under the operation, so the typed result can be returned with zero
+/// extra validation:
 /// - [`is_bicontiguous`](Self::is_bicontiguous) is overridden to a constant
 ///   `true`.
 /// - There is no single-prefix accessor equivalent to
@@ -4970,6 +4973,16 @@ impl Error for BiContiguousIpNetParseError {}
 ///   bi-contiguous only when the bit is the bottom bit of its run), so merging
 ///   two bi-contiguous networks can leave the class -- it returns a plain
 ///   [`Ipv6Network`] through [`Deref`], by design.
+/// - [`Ipv6Network::intersection`] IS overridden, but for closure, not speed:
+///   the class is closed under intersection (mask-or of two class masks is
+///   itself a class mask, each half's prefix becoming the max of the two
+///   inputs' prefixes for that half), so the general result never needs
+///   re-validating before being returned as `Option<Self>`. See
+///   [`intersection`](Self::intersection).
+/// - [`Ipv6Network::intersects`] / [`Ipv6Network::is_disjoint`] are
+///   intentionally NOT overridden: the general 3-op check already tests both
+///   halves of the address in one pass, so checking each half separately would
+///   cost more, not less.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BiContiguous<T>(T);
 
@@ -5173,6 +5186,73 @@ impl BiContiguous<Ipv6Network> {
                     back,
                 }
             }
+        }
+    }
+
+    /// Returns the intersection of this network with another bi-contiguous
+    /// network, or [`None`] if they are disjoint.
+    ///
+    /// This delegates to the general [`Ipv6Network::intersection`] verbatim
+    /// -- the win here is TYPE-level, not speed: the class is closed under
+    /// intersection (the mask-or of two class masks is itself a class mask,
+    /// each half's prefix becoming the max of the two inputs' prefixes for
+    /// that half), so the result never needs re-validating and is wrapped
+    /// straight back into [`BiContiguous`]. Callers building
+    /// rectangle-intersection pipelines stay in the typed world for free,
+    /// e.g. chaining directly into [`addrs`](Self::addrs) below, instead of
+    /// paying a `TryFrom` re-check per result.
+    ///
+    /// [`intersects`](Ipv6Network::intersects) and
+    /// [`is_disjoint`](Ipv6Network::is_disjoint) are intentionally NOT
+    /// overridden: reach them unchanged through [`Deref`], see the
+    /// type-level docs above for why.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::{BiContiguous, Ipv6Network};
+    ///
+    /// // Proper 2D overlap: `a`'s hi half is narrower (nested in `b`'s), but
+    /// // `b`'s lo half is narrower (nested in `a`'s) -- neither contains the
+    /// // other, yet the intersection is a well-defined single rectangle.
+    /// let a =
+    ///     BiContiguous::<Ipv6Network>::parse("2001:db8:1:0:abcd:0:0:0/ffff:ffff:ffff:0:ffff:0:0:0")
+    ///         .unwrap();
+    /// let b = BiContiguous::<Ipv6Network>::parse(
+    ///     "2001:db8:0:0:abcd:1234:0:0/ffff:ffff:0:0:ffff:ffff:0:0",
+    /// )
+    /// .unwrap();
+    ///
+    /// let result = a.intersection(&b).unwrap();
+    /// assert_eq!(48, result.hi_prefix());
+    /// assert_eq!(32, result.lo_prefix());
+    ///
+    /// // The typed result stays in the class, so it chains straight into
+    /// // the accelerated `addrs()` iterator.
+    /// assert_eq!(
+    ///     Some(Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0xabcd, 0x1234, 0, 0)),
+    ///     result.addrs().next()
+    /// );
+    ///
+    /// // Disjoint bi-contiguous networks intersect to `None`.
+    /// let c = BiContiguous::<Ipv6Network>::parse("2001:db9::/32").unwrap();
+    /// assert_eq!(None, a.intersection(&c));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn intersection(&self, other: &Self) -> Option<Self> {
+        // NOTE: use `Option::map` when it becomes const.
+        match (self, other) {
+            (Self(a), Self(b)) => match a.intersection(b) {
+                // CLOSURE (T-CLOSE-∩): the mask-or of two bi-contiguous masks
+                // is itself bi-contiguous, so the result never leaves the
+                // class -- no re-validation needed, unlike a normalization
+                // check.
+                Some(net) => Some(Self(net)),
+                None => None,
+            },
         }
     }
 }
@@ -7383,6 +7463,87 @@ mod test {
         assert_eq!((usize::MAX, None), net.addrs().size_hint());
     }
 
+    // Proper 2D overlap: `a`'s hi half (/48) is narrower than `b`'s (/32, so
+    // `b`'s hi block nests `a`'s), but `a`'s lo half (/16) is broader than
+    // `b`'s (/32, so `a`'s lo block nests `b`'s) -- neither network contains
+    // the other, yet the intersection is still a single well-defined
+    // rectangle: the narrower half from each axis.
+    #[test]
+    fn bicontiguous_ipv6_intersection_proper_2d_overlap() {
+        let a = BiContiguous::<Ipv6Network>::parse("2001:db8:1:0:abcd:0:0:0/ffff:ffff:ffff:0:ffff:0:0:0").unwrap();
+        let b = BiContiguous::<Ipv6Network>::parse("2001:db8:0:0:abcd:1234:0:0/ffff:ffff:0:0:ffff:ffff:0:0").unwrap();
+        let expected =
+            BiContiguous::<Ipv6Network>::parse("2001:db8:1:0:abcd:1234:0:0/ffff:ffff:ffff:0:ffff:ffff:0:0").unwrap();
+
+        assert!(!(*a).contains(&b) && !(*b).contains(&a));
+
+        let actual = a.intersection(&b);
+        assert_eq!(Some(expected), actual);
+        assert_eq!(actual.map(|net| *net), (*a).intersection(&b));
+    }
+
+    // Disjoint purely because of the hi axis: both networks share the same
+    // lo half (`abcd:1234::`), but their hi halves disagree inside the
+    // shared /48 mask region (`::1` vs `::2`).
+    #[test]
+    fn bicontiguous_ipv6_intersection_disjoint_hi_axis_only() {
+        let a =
+            BiContiguous::<Ipv6Network>::parse("2001:db8:1:0:abcd:1234:0:0/ffff:ffff:ffff:0:ffff:ffff:0:0").unwrap();
+        let b =
+            BiContiguous::<Ipv6Network>::parse("2001:db8:2:0:abcd:1234:0:0/ffff:ffff:ffff:0:ffff:ffff:0:0").unwrap();
+
+        assert_eq!(None, a.intersection(&b));
+        assert_eq!(None, (*a).intersection(&b));
+    }
+
+    // Disjoint purely because of the lo axis: both networks share the same
+    // hi half (`2001:db8:1::`), but their lo halves disagree inside the
+    // shared /32 mask region (`abcd:1234::` vs `abcd:5678::`).
+    #[test]
+    fn bicontiguous_ipv6_intersection_disjoint_lo_axis_only() {
+        let a =
+            BiContiguous::<Ipv6Network>::parse("2001:db8:1:0:abcd:1234:0:0/ffff:ffff:ffff:0:ffff:ffff:0:0").unwrap();
+        let b =
+            BiContiguous::<Ipv6Network>::parse("2001:db8:1:0:abcd:5678:0:0/ffff:ffff:ffff:0:ffff:ffff:0:0").unwrap();
+
+        assert_eq!(None, a.intersection(&b));
+        assert_eq!(None, (*a).intersection(&b));
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_intersection_equal_networks_is_self() {
+        let a =
+            BiContiguous::<Ipv6Network>::parse("2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+
+        assert_eq!(Some(a), a.intersection(&a));
+    }
+
+    // Both operands are degenerate (contiguous, `q == 0`) members of the
+    // class, upgraded through `From<Contiguous<Ipv6Network>>`; `b` is a CIDR
+    // subset of `a`, so containment reduces intersection to `b`.
+    #[test]
+    fn bicontiguous_ipv6_intersection_degenerate_contiguous_members() {
+        let a = BiContiguous::<Ipv6Network>::from(Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap());
+        let b = BiContiguous::<Ipv6Network>::from(Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap());
+
+        assert_eq!(Some(b), a.intersection(&b));
+        assert_eq!(Some(b), b.intersection(&a));
+    }
+
+    // The two motivating masks from the `BiContiguous` design (see the type
+    // docs): both have hi half /40, but `example1`'s lo half (/32) is a
+    // subset of `example2`'s (/16), so the intersection is `example1`.
+    #[test]
+    fn bicontiguous_ipv6_intersection_motivating_masks() {
+        let example1 =
+            BiContiguous::<Ipv6Network>::parse("2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        let example2 =
+            BiContiguous::<Ipv6Network>::parse("2a02:1a1:c00::1234:0:0:0/ffff:ffff:ff00::ffff:0:0:0").unwrap();
+
+        assert_eq!(Some(example1), example1.intersection(&example2));
+        assert_eq!(Some(example1), example2.intersection(&example1));
+    }
+
     // The following `parse_pin_*` tests pin the exact `IpNetParseError` variant
     // returned for malformed input, so that the `splitn`-to-`split_once`
     // refactor of `Ipv4Network::parse` / `Ipv6Network::parse` / `IpNetwork::parse`
@@ -9329,6 +9490,88 @@ mod test {
         fn prop_bicontiguous_ipv6_from_contiguous_preserves_value(net in arb_contiguous_ipv6_network()) {
             let converted = BiContiguous::<Ipv6Network>::from(net);
             prop_assert_eq!(*converted, *net);
+        }
+    }
+
+    proptest! {
+        // The load-bearing guard for T-CLOSE-∩: whenever the typed
+        // intersection is `Some`, its inner value equals the general
+        // `Ipv6Network::intersection` result exactly, and that result mask
+        // is itself always bi-contiguous -- i.e. the result never needs the
+        // re-validation the override skips.
+        #[test]
+        fn prop_bicontiguous_ipv6_intersection_closure_matches_general(
+            a in arb_bicontiguous_ipv6_network(),
+            b in arb_bicontiguous_ipv6_network(),
+        ) {
+            let expected = (*a).intersection(&b);
+            let actual = a.intersection(&b);
+
+            prop_assert_eq!(actual.map(|net| *net), expected);
+
+            if let Some(net) = expected {
+                prop_assert!(net.is_bicontiguous());
+            }
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_intersection_commutativity(
+            a in arb_bicontiguous_ipv6_network(),
+            b in arb_bicontiguous_ipv6_network(),
+        ) {
+            prop_assert_eq!(a.intersection(&b), b.intersection(&a));
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_intersection_subset_of_both(
+            a in arb_bicontiguous_ipv6_network(),
+            b in arb_bicontiguous_ipv6_network(),
+        ) {
+            if let Some(c) = a.intersection(&b) {
+                prop_assert!(a.contains(&c));
+                prop_assert!(b.contains(&c));
+            }
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_self_intersection_is_self(a in arb_bicontiguous_ipv6_network()) {
+            prop_assert_eq!(a.intersection(&a), Some(a));
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_intersection_is_normalized(
+            a in arb_bicontiguous_ipv6_network(),
+            b in arb_bicontiguous_ipv6_network(),
+        ) {
+            if let Some(c) = a.intersection(&b) {
+                let (addr, mask) = (*c).to_bits();
+                prop_assert_eq!(addr & mask, addr);
+            }
+        }
+
+        // Brute-force oracle: collects every address of `a` and `b` (bounded
+        // to at most 4096 each by `arb_small_bicontiguous_ipv6_network`) and
+        // checks the typed intersection's address set against the plain
+        // set intersection, or -- when disjoint -- that the address sets
+        // truly share nothing.
+        #[test]
+        fn prop_bicontiguous_ipv6_intersection_membership_brute_force(
+            a in arb_small_bicontiguous_ipv6_network(),
+            b in arb_small_bicontiguous_ipv6_network(),
+        ) {
+            use std::collections::HashSet;
+
+            let a_addrs: HashSet<_> = a.addrs().collect();
+            let b_addrs: HashSet<_> = b.addrs().collect();
+
+            match a.intersection(&b) {
+                Some(net) => {
+                    let actual: HashSet<_> = net.addrs().collect();
+                    let expected: HashSet<_> = a_addrs.intersection(&b_addrs).copied().collect();
+                    prop_assert_eq!(actual, expected);
+                }
+                None => prop_assert!(a_addrs.is_disjoint(&b_addrs)),
+            }
         }
     }
 
