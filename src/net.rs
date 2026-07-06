@@ -4188,6 +4188,48 @@ impl Contiguous<IpNetwork> {
             Self(IpNetwork::V6(net)) => Contiguous(*net).prefix(),
         }
     }
+
+    /// Checks whether this network is a contiguous network.
+    ///
+    /// Always returns `true`: the wrapped network is guaranteed to be
+    /// contiguous by the [`Contiguous`] type invariant, so this overrides the
+    /// [`IpNetwork::is_contiguous`] check with a constant result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, IpNetwork};
+    ///
+    /// let net = Contiguous::<IpNetwork>::parse("192.168.1.0/24").unwrap();
+    /// assert!(net.is_contiguous());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn is_contiguous(&self) -> bool {
+        true
+    }
+
+    /// Converts this network to a contiguous network.
+    ///
+    /// The wrapped network is already contiguous by the [`Contiguous`] type
+    /// invariant, so this overrides the [`IpNetwork::to_contiguous`]
+    /// conversion by returning the wrapped network unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, IpNetwork};
+    ///
+    /// let net = Contiguous::<IpNetwork>::parse("192.168.1.0/24").unwrap();
+    /// assert_eq!(*net, net.to_contiguous());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn to_contiguous(&self) -> IpNetwork {
+        match self {
+            Self(net) => *net,
+        }
+    }
 }
 
 impl Contiguous<Ipv4Network> {
@@ -4223,6 +4265,48 @@ impl Contiguous<Ipv4Network> {
             }
         }
     }
+
+    /// Checks whether this network is a contiguous network.
+    ///
+    /// Always returns `true`: the wrapped network is guaranteed to be
+    /// contiguous by the [`Contiguous`] type invariant, so this overrides the
+    /// [`Ipv4Network::is_contiguous`] check with a constant result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, Ipv4Network};
+    ///
+    /// let net = Contiguous::<Ipv4Network>::parse("172.16.0.0/12").unwrap();
+    /// assert!(net.is_contiguous());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn is_contiguous(&self) -> bool {
+        true
+    }
+
+    /// Converts this network to a contiguous network.
+    ///
+    /// The wrapped network is already contiguous by the [`Contiguous`] type
+    /// invariant, so this overrides the [`Ipv4Network::to_contiguous`]
+    /// conversion by returning the wrapped network unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, Ipv4Network};
+    ///
+    /// let net = Contiguous::<Ipv4Network>::parse("172.16.0.0/12").unwrap();
+    /// assert_eq!(*net, net.to_contiguous());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn to_contiguous(&self) -> Ipv4Network {
+        match self {
+            Self(net) => *net,
+        }
+    }
 }
 
 impl Contiguous<Ipv6Network> {
@@ -4256,6 +4340,48 @@ impl Contiguous<Ipv6Network> {
                 let ones = mask.leading_ones();
                 ones as u8
             }
+        }
+    }
+
+    /// Checks whether this network is a contiguous network.
+    ///
+    /// Always returns `true`: the wrapped network is guaranteed to be
+    /// contiguous by the [`Contiguous`] type invariant, so this overrides the
+    /// [`Ipv6Network::is_contiguous`] check with a constant result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, Ipv6Network};
+    ///
+    /// let net = Contiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
+    /// assert!(net.is_contiguous());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn is_contiguous(&self) -> bool {
+        true
+    }
+
+    /// Converts this network to a contiguous network.
+    ///
+    /// The wrapped network is already contiguous by the [`Contiguous`] type
+    /// invariant, so this overrides the [`Ipv6Network::to_contiguous`]
+    /// conversion by returning the wrapped network unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, Ipv6Network};
+    ///
+    /// let net = Contiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
+    /// assert_eq!(*net, net.to_contiguous());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn to_contiguous(&self) -> Ipv6Network {
+        match self {
+            Self(net) => *net,
         }
     }
 }
@@ -7312,12 +7438,144 @@ mod test {
         assert_eq!("2001:db8::/64", ip.to_string());
     }
 
+    // The following `contiguous_*_is_contiguous_override_*` and
+    // `contiguous_*_to_contiguous_override_*` tests pin down that the
+    // constant-time `Contiguous<T>` overrides return exactly what the
+    // `Deref`-ed inner type would compute. Method resolution picks the
+    // override for `net.is_contiguous()` / `net.to_contiguous()`, so the
+    // inner computation is reached explicitly via `(*net)`.
+
+    #[test]
+    fn contiguous_ipv4_is_contiguous_override_matches_inner() {
+        let net = Contiguous::<Ipv4Network>::parse("192.168.0.0/24").unwrap();
+        assert!(net.is_contiguous());
+        assert_eq!(net.is_contiguous(), (*net).is_contiguous());
+    }
+
+    #[test]
+    fn contiguous_ipv4_to_contiguous_override_matches_inner() {
+        let net = Contiguous::<Ipv4Network>::parse("192.168.0.0/24").unwrap();
+        assert_eq!(*net, net.to_contiguous());
+        assert_eq!(net.to_contiguous(), (*net).to_contiguous());
+    }
+
+    #[test]
+    fn contiguous_ipv4_overrides_hold_at_boundary_prefixes() {
+        let host = Contiguous::<Ipv4Network>::parse("10.0.0.1/32").unwrap();
+        let unspecified = Contiguous::<Ipv4Network>::parse("0.0.0.0/0").unwrap();
+
+        assert!(host.is_contiguous());
+        assert!(unspecified.is_contiguous());
+        assert_eq!(*host, host.to_contiguous());
+        assert_eq!(*unspecified, unspecified.to_contiguous());
+    }
+
+    #[test]
+    fn contiguous_ipv6_is_contiguous_override_matches_inner() {
+        let net = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        assert!(net.is_contiguous());
+        assert_eq!(net.is_contiguous(), (*net).is_contiguous());
+    }
+
+    #[test]
+    fn contiguous_ipv6_to_contiguous_override_matches_inner() {
+        let net = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        assert_eq!(*net, net.to_contiguous());
+        assert_eq!(net.to_contiguous(), (*net).to_contiguous());
+    }
+
+    #[test]
+    fn contiguous_ipv6_overrides_hold_at_boundary_prefixes() {
+        let host = Contiguous::<Ipv6Network>::parse("::1/128").unwrap();
+        let unspecified = Contiguous::<Ipv6Network>::parse("::/0").unwrap();
+
+        assert!(host.is_contiguous());
+        assert!(unspecified.is_contiguous());
+        assert_eq!(*host, host.to_contiguous());
+        assert_eq!(*unspecified, unspecified.to_contiguous());
+    }
+
+    #[test]
+    fn contiguous_ip_overrides_match_inner_v4() {
+        let v4 = Contiguous::<Ipv4Network>::parse("192.168.0.0/24").unwrap();
+        let net = Contiguous::<IpNetwork>::from(v4);
+
+        assert!(net.is_contiguous());
+        assert_eq!(net.is_contiguous(), (*net).is_contiguous());
+        assert_eq!(*net, net.to_contiguous());
+        assert_eq!(net.to_contiguous(), (*net).to_contiguous());
+    }
+
+    #[test]
+    fn contiguous_ip_overrides_match_inner_v6() {
+        let v6 = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let net = Contiguous::<IpNetwork>::from(v6);
+
+        assert!(net.is_contiguous());
+        assert_eq!(net.is_contiguous(), (*net).is_contiguous());
+        assert_eq!(*net, net.to_contiguous());
+        assert_eq!(net.to_contiguous(), (*net).to_contiguous());
+    }
+
     fn arb_ipv4_network() -> impl Strategy<Value = Ipv4Network> {
         (any::<u32>(), any::<u32>()).prop_map(|(a, m)| Ipv4Network::from_bits(a, m))
     }
 
     fn arb_ipv6_network() -> impl Strategy<Value = Ipv6Network> {
         (any::<u128>(), any::<u128>()).prop_map(|(a, m)| Ipv6Network::from_bits(a, m))
+    }
+
+    fn arb_contiguous_ipv4_network() -> impl Strategy<Value = Contiguous<Ipv4Network>> {
+        arb_ipv4_network().prop_map(|net| Contiguous(net.to_contiguous()))
+    }
+
+    fn arb_contiguous_ipv6_network() -> impl Strategy<Value = Contiguous<Ipv6Network>> {
+        arb_ipv6_network().prop_map(|net| Contiguous(net.to_contiguous()))
+    }
+
+    fn arb_contiguous_ip_network() -> impl Strategy<Value = Contiguous<IpNetwork>> {
+        prop_oneof![
+            arb_contiguous_ipv4_network().prop_map(Contiguous::<IpNetwork>::from),
+            arb_contiguous_ipv6_network().prop_map(Contiguous::<IpNetwork>::from),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn prop_contiguous_ipv4_is_contiguous_always_true(net in arb_contiguous_ipv4_network()) {
+            prop_assert!(net.is_contiguous());
+            prop_assert_eq!(net.is_contiguous(), (*net).is_contiguous());
+        }
+
+        #[test]
+        fn prop_contiguous_ipv4_to_contiguous_is_identity(net in arb_contiguous_ipv4_network()) {
+            prop_assert_eq!(net.to_contiguous(), *net);
+            prop_assert_eq!(net.to_contiguous(), (*net).to_contiguous());
+        }
+
+        #[test]
+        fn prop_contiguous_ipv6_is_contiguous_always_true(net in arb_contiguous_ipv6_network()) {
+            prop_assert!(net.is_contiguous());
+            prop_assert_eq!(net.is_contiguous(), (*net).is_contiguous());
+        }
+
+        #[test]
+        fn prop_contiguous_ipv6_to_contiguous_is_identity(net in arb_contiguous_ipv6_network()) {
+            prop_assert_eq!(net.to_contiguous(), *net);
+            prop_assert_eq!(net.to_contiguous(), (*net).to_contiguous());
+        }
+
+        #[test]
+        fn prop_contiguous_ip_is_contiguous_always_true(net in arb_contiguous_ip_network()) {
+            prop_assert!(net.is_contiguous());
+            prop_assert_eq!(net.is_contiguous(), (*net).is_contiguous());
+        }
+
+        #[test]
+        fn prop_contiguous_ip_to_contiguous_is_identity(net in arb_contiguous_ip_network()) {
+            prop_assert_eq!(net.to_contiguous(), *net);
+            prop_assert_eq!(net.to_contiguous(), (*net).to_contiguous());
+        }
     }
 
     proptest! {
