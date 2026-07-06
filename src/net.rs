@@ -2486,7 +2486,7 @@ impl Ipv6Network {
     ///
     /// // Two separate runs, one per 64-bit half.
     /// assert!(
-    ///     Ipv6Network::parse("2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0")
+    ///     Ipv6Network::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0")
     ///         .unwrap()
     ///         .is_bicontiguous()
     /// );
@@ -4996,14 +4996,14 @@ impl BiContiguous<Ipv6Network> {
     /// use netip::{BiContiguous, Ipv6Network};
     ///
     /// let net = BiContiguous::<Ipv6Network>::parse(
-    ///     "2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0",
+    ///     "2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0",
     /// )
     /// .unwrap();
     /// assert_eq!(40, net.hi_prefix());
     /// assert_eq!(32, net.lo_prefix());
     ///
     /// let net =
-    ///     BiContiguous::<Ipv6Network>::parse("2a02:1a1:c00::1234:0:0:0/ffff:ffff:ff00::ffff:0:0:0")
+    ///     BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0:0/ffff:ffff:ff00::ffff:0:0:0")
     ///         .unwrap();
     /// assert_eq!(40, net.hi_prefix());
     /// assert_eq!(16, net.lo_prefix());
@@ -5029,7 +5029,7 @@ impl BiContiguous<Ipv6Network> {
     /// use netip::{BiContiguous, Ipv6Network};
     ///
     /// let net = BiContiguous::<Ipv6Network>::parse(
-    ///     "2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0",
+    ///     "2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0",
     /// )
     /// .unwrap();
     /// assert_eq!(40, net.hi_prefix());
@@ -5054,7 +5054,7 @@ impl BiContiguous<Ipv6Network> {
     /// use netip::{BiContiguous, Ipv6Network};
     ///
     /// let net = BiContiguous::<Ipv6Network>::parse(
-    ///     "2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0",
+    ///     "2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0",
     /// )
     /// .unwrap();
     /// assert_eq!(32, net.lo_prefix());
@@ -7168,12 +7168,12 @@ mod test {
     #[test]
     fn test_net_ipv6_is_bicontiguous_motivating_masks() {
         assert!(
-            Ipv6Network::parse("2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0")
+            Ipv6Network::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0")
                 .unwrap()
                 .is_bicontiguous()
         );
         assert!(
-            Ipv6Network::parse("2a02:1a1:c00::1234:0:0:0/ffff:ffff:ff00::ffff:0:0:0")
+            Ipv6Network::parse("2a02:6b8:c00::1234:0:0:0/ffff:ffff:ff00::ffff:0:0:0")
                 .unwrap()
                 .is_bicontiguous()
         );
@@ -7182,11 +7182,11 @@ mod test {
     #[test]
     fn test_bicontiguous_ipv6_network_parse_motivating_masks() {
         let net =
-            BiContiguous::<Ipv6Network>::parse("2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
         assert_eq!(40, net.hi_prefix());
         assert_eq!(32, net.lo_prefix());
 
-        let net = BiContiguous::<Ipv6Network>::parse("2a02:1a1:c00::1234:0:0:0/ffff:ffff:ff00::ffff:0:0:0").unwrap();
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0:0/ffff:ffff:ff00::ffff:0:0:0").unwrap();
         assert_eq!(40, net.hi_prefix());
         assert_eq!(16, net.lo_prefix());
     }
@@ -7295,9 +7295,9 @@ mod test {
     #[test]
     fn bicontiguous_ipv6_network_display() {
         let net =
-            BiContiguous::<Ipv6Network>::parse("2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
         assert_eq!(
-            "2a02:1a1:c00:0:1234:abcd::/ffff:ffff:ff00:0:ffff:ffff::",
+            "2a02:6b8:c00:0:1234:abcd::/ffff:ffff:ff00:0:ffff:ffff::",
             net.to_string()
         );
     }
@@ -7305,8 +7305,8 @@ mod test {
     #[test]
     fn bicontiguous_ipv6_network_from_str() {
         let expected =
-            BiContiguous::<Ipv6Network>::parse("2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
-        let actual: BiContiguous<Ipv6Network> = "2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0"
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        let actual: BiContiguous<Ipv6Network> = "2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0"
             .parse()
             .unwrap();
         assert_eq!(expected, actual);
@@ -7513,7 +7513,7 @@ mod test {
     #[test]
     fn bicontiguous_ipv6_intersection_equal_networks_is_self() {
         let a =
-            BiContiguous::<Ipv6Network>::parse("2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
 
         assert_eq!(Some(a), a.intersection(&a));
     }
@@ -7536,9 +7536,9 @@ mod test {
     #[test]
     fn bicontiguous_ipv6_intersection_motivating_masks() {
         let example1 =
-            BiContiguous::<Ipv6Network>::parse("2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
         let example2 =
-            BiContiguous::<Ipv6Network>::parse("2a02:1a1:c00::1234:0:0:0/ffff:ffff:ff00::ffff:0:0:0").unwrap();
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0:0/ffff:ffff:ff00::ffff:0:0:0").unwrap();
 
         assert_eq!(Some(example1), example1.intersection(&example2));
         assert_eq!(Some(example1), example2.intersection(&example1));
