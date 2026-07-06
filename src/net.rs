@@ -2944,13 +2944,26 @@ impl Ipv6Network {
 // which agrees with the numeric order of the big-endian `u128` returned by
 // `to_bits()`, so comparing the bit patterns directly reaches the same
 // verdict without walking the segments one at a time.
+//
+// Branching on address equality instead of tupling `(addr, mask).cmp(&(..))`
+// avoids wasted work on the common "same address, mask decides" path:
+// `Ord`'s derived tuple comparison unconditionally computes the full scalar
+// ordering of `addr` before checking whether it was even equal, so that
+// result gets thrown away exactly when the address matches and the mask
+// comparison is about to overwrite it. Branching on the address's own SIMD
+// equality check first (`pcmpeqb`/`vptest`) and only falling through to the
+// mask comparison when needed skips that discarded computation entirely.
 impl Ord for Ipv6Network {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
         let (self_addr, self_mask) = self.to_bits();
         let (other_addr, other_mask) = other.to_bits();
 
-        (self_addr, self_mask).cmp(&(other_addr, other_mask))
+        if self_addr == other_addr {
+            self_mask.cmp(&other_mask)
+        } else {
+            self_addr.cmp(&other_addr)
+        }
     }
 }
 
