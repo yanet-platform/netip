@@ -5078,6 +5078,215 @@ impl BiContiguous<Ipv6Network> {
     pub const fn is_bicontiguous(&self) -> bool {
         true
     }
+
+    /// Returns a bidirectional iterator over all addresses in this network.
+    ///
+    /// The [`BiContiguous`] type invariant guarantees the mask splits into
+    /// exactly two contiguous runs, one per 64-bit half, so every host index
+    /// `i` maps to its address through a 5-op closed form instead of the
+    /// general [`Ipv6Network::addrs`]'s per-bit `pdep` loop:
+    ///
+    /// `addr(i) = base | (i & LO) | ((i >> s) << 64)`, where `s = 64 - q` and
+    /// `LO = (1 << s) - 1` for the low half's prefix length `q` -- both
+    /// precomputed once here, at construction.
+    ///
+    /// `pdep` is strictly increasing in its source, so this produces the
+    /// exact same sequence as the general iterator, in both directions: host
+    /// index order is row-major over the (high half, low half) plane, the
+    /// low half's `s` host bits cycling fastest and carrying into the high
+    /// half's host bits once they exhaust. This overrides
+    /// [`Ipv6Network::addrs`] with a pure acceleration -- same addresses,
+    /// same order, far fewer instructions per item; reach the general
+    /// iterator for a possibly non-bi-contiguous network through [`Deref`],
+    /// e.g. `(*net).addrs()`.
+    ///
+    /// The iterator implements [`DoubleEndedIterator`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::{BiContiguous, Ipv6Network};
+    ///
+    /// // Hi half /63 (1 host bit), lo half /62 (2 host bits).
+    /// let net = BiContiguous::<Ipv6Network>::parse(
+    ///     "2a02:6b8:c00::1234:0:0/ffff:ffff:ffff:fffe:ffff:ffff:ffff:fffc",
+    /// )
+    /// .unwrap();
+    /// let mut addrs = net.addrs();
+    ///
+    /// assert_eq!(
+    ///     Some(Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 0, 0, 0x1234, 0, 0)),
+    ///     addrs.next()
+    /// );
+    /// assert_eq!(
+    ///     Some(Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 0, 0, 0x1234, 0, 1)),
+    ///     addrs.next()
+    /// );
+    /// assert_eq!(
+    ///     Some(Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 0, 0, 0x1234, 0, 2)),
+    ///     addrs.next()
+    /// );
+    /// assert_eq!(
+    ///     Some(Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 0, 0, 0x1234, 0, 3)),
+    ///     addrs.next()
+    /// );
+    ///
+    /// // The lo half's 2 host bits are exhausted (0..=3); the next address
+    /// // carries into the hi half's single host bit instead of continuing
+    /// // numerically.
+    /// assert_eq!(
+    ///     Some(Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 1, 0, 0x1234, 0, 0)),
+    ///     addrs.next()
+    /// );
+    ///
+    /// assert_eq!(
+    ///     Some(Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 1, 0, 0x1234, 0, 3)),
+    ///     addrs.next_back()
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn addrs(self) -> BiContiguousIpv6Addrs {
+        match self {
+            Self(net) => {
+                let (addr, mask) = net.to_bits();
+                let host_bits = (!mask).count_ones();
+                let back = u128::MAX.checked_shr(128 - host_bits).unwrap_or(0);
+
+                // `q`, the low half's run of leading ones, fixes the split
+                // point `s` between the two host-index runs: the low `s`
+                // bits of the index address the lo half's host bits
+                // directly, the rest address the hi half's, shifted into
+                // position. `s` is always in `0..=64`, so `1u128 << s` never
+                // shifts by more than 64 and never overflows `u128`.
+                let lo_prefix = (mask as u64).leading_ones();
+                let split_shift = 64 - lo_prefix;
+                let lo_mask = (1u128 << split_shift) - 1;
+
+                BiContiguousIpv6Addrs {
+                    base: addr,
+                    split_shift,
+                    lo_mask,
+                    front: 0,
+                    back,
+                }
+            }
+        }
+    }
+}
+
+impl BiContiguousIpv6Addrs {
+    #[inline]
+    const fn index_to_addr(&self, index: u128) -> u128 {
+        self.base | (index & self.lo_mask) | ((index >> self.split_shift) << 64)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn enter_wraparound_sentinel(&mut self) {
+        self.front = 1;
+        self.back = 0;
+    }
+}
+
+/// Bidirectional iterator over [`Ipv6Addr`] in a [`BiContiguous<Ipv6Network>`].
+///
+/// Created by [`BiContiguous::<Ipv6Network>::addrs`].
+///
+/// The [`BiContiguous`] type invariant guarantees the mask splits into two
+/// contiguous runs, one per 64-bit half, so unlike [`Ipv6NetworkAddrs`] this
+/// iterator never runs `pdep`: each step maps its host index to an address
+/// through the 5-op closed form documented on
+/// [`BiContiguous::<Ipv6Network>::addrs`]. Unlike
+/// [`ContiguousIpv6NetworkAddrs`], the index cannot be folded into the
+/// bounds and advanced as a single packed address: the two host-bit runs
+/// live at different bit offsets (`0..s` and `64..64+hi host bits`), so
+/// consecutive indices can "carry" from the low run into the high run at a
+/// bit position other than the next one up. The host index is therefore
+/// kept as its own cursor, mirroring [`Ipv6NetworkAddrs`]'s `base`/`front`/
+/// `back` field protocol, with the per-step cost of the closed form instead
+/// of `pdep`.
+///
+/// When the iterator is exhausted it enters a sentinel state where
+/// `front > back`, so every subsequent call to [`next`](Iterator::next) or
+/// [`next_back`](DoubleEndedIterator::next_back) returns [`None`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BiContiguousIpv6Addrs {
+    base: u128,
+    split_shift: u32,
+    lo_mask: u128,
+    front: u128,
+    back: u128,
+}
+
+impl Iterator for BiContiguousIpv6Addrs {
+    type Item = Ipv6Addr;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.front > self.back {
+            return None;
+        }
+
+        let index = self.front;
+        self.front = self.front.wrapping_add(1);
+
+        // Wrap-around means front was u128::MAX — only possible for a /0
+        // network. Cold/never-inline so the common case compiles to a
+        // single predicted-away branch instead of an unconditional cmov
+        // chain.
+        if self.front == 0 {
+            self.enter_wraparound_sentinel();
+        }
+
+        Some(Ipv6Addr::from_bits(self.index_to_addr(index)))
+    }
+
+    #[inline]
+    fn count(self) -> usize {
+        let (n, ..) = self.size_hint();
+        n
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if self.front > self.back {
+            return (0, Some(0));
+        }
+
+        let rem = self.back.wrapping_sub(self.front).wrapping_add(1);
+
+        if rem == 0 {
+            (usize::MAX, None)
+        } else {
+            match usize::try_from(rem) {
+                Ok(n) => (n, Some(n)),
+                Err(..) => (usize::MAX, None),
+            }
+        }
+    }
+}
+
+impl DoubleEndedIterator for BiContiguousIpv6Addrs {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.front > self.back {
+            return None;
+        }
+
+        let addr = self.index_to_addr(self.back);
+
+        if self.front == self.back {
+            self.front = 1;
+            self.back = 0;
+        } else {
+            self.back = self.back.wrapping_sub(1);
+        }
+
+        Some(Ipv6Addr::from_bits(addr))
+    }
 }
 
 impl TryFrom<Ipv6Network> for BiContiguous<Ipv6Network> {
@@ -7041,6 +7250,139 @@ mod test {
         assert_eq!(0, unspecified.lo_prefix());
     }
 
+    // A bounded variant of the motivating masks: hi half /62 (2 host bits),
+    // lo half /60 (4 host bits), 6 host bits (64 addresses) total -- few
+    // enough to fully collect and compare.
+
+    #[test]
+    fn bicontiguous_ipv6_addrs_matches_deref_general() {
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ffff:fffc:ffff:ffff:ffff:fff0")
+            .unwrap();
+        let expected: Vec<_> = (*net).addrs().collect();
+        let actual: Vec<_> = net.addrs().collect();
+        assert_eq!(64, actual.len());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_addrs_row_major_order() {
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ffff:fffc:ffff:ffff:ffff:fff0")
+            .unwrap();
+        let (base, ..) = (*net).to_bits();
+
+        // The lo half's 4 host bits cycle fastest (inner loop); the hi
+        // half's 2 host bits only advance once the lo half wraps.
+        let mut expected = Vec::new();
+        for hi in 0u128..4 {
+            for lo in 0u128..16 {
+                expected.push(base | lo | (hi << 64));
+            }
+        }
+
+        let actual: Vec<u128> = net.addrs().map(|addr| addr.to_bits()).collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_addrs_len_matches_host_bits() {
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ffff:fffc:ffff:ffff:ffff:fff0")
+            .unwrap();
+        assert_eq!(64, net.addrs().count());
+        assert_eq!((64, Some(64)), net.addrs().size_hint());
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_addrs_interleaved_exhausts_uniquely() {
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ffff:fffc:ffff:ffff:ffff:fff0")
+            .unwrap();
+        let mut addrs = net.addrs();
+        let mut seen = Vec::new();
+
+        loop {
+            match (addrs.next(), addrs.next_back()) {
+                (Some(a), Some(b)) => {
+                    seen.push(a);
+                    seen.push(b);
+                }
+                (Some(a), None) => seen.push(a),
+                (None, Some(b)) => seen.push(b),
+                (None, None) => break,
+            }
+        }
+
+        assert_eq!(64, seen.len());
+        seen.sort();
+        seen.dedup();
+        assert_eq!(64, seen.len());
+    }
+
+    // The degenerate `p == 64` member of the class: host bits confined
+    // entirely to the lo half's tail, so the network is also plain CIDR
+    // contiguous. Bounded to 4 host bits so both sequences fully collect.
+    #[test]
+    fn bicontiguous_ipv6_addrs_pure_contiguous_p64() {
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0/124").unwrap();
+        assert_eq!(64, net.hi_prefix());
+        assert_eq!(60, net.lo_prefix());
+
+        let expected: Vec<_> = (*net).addrs().collect();
+        let actual: Vec<_> = net.addrs().collect();
+        assert_eq!(16, actual.len());
+        assert_eq!(expected, actual);
+    }
+
+    // The degenerate `q == 0` member of the class: the entire lo half (64
+    // bits) is host bits, so the network is also plain CIDR contiguous, but
+    // with far too many addresses (2^88) to fully collect. Only `size_hint`/
+    // `count` (both O(1)) and a bounded sample from each end are checked
+    // against the general iterator, mirroring how the `m = 0` case is
+    // handled elsewhere instead of enumerating it.
+    #[test]
+    fn bicontiguous_ipv6_addrs_pure_contiguous_q0_matches_deref_sample() {
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
+        assert_eq!(40, net.hi_prefix());
+        assert_eq!(0, net.lo_prefix());
+
+        assert_eq!((usize::MAX, None), net.addrs().size_hint());
+        assert_eq!(usize::MAX, net.addrs().count());
+
+        let expected_first: Vec<_> = (*net).addrs().take(8).collect();
+        let actual_first: Vec<_> = net.addrs().take(8).collect();
+        assert_eq!(expected_first, actual_first);
+
+        let expected_last: Vec<_> = (*net).addrs().rev().take(8).collect();
+        let actual_last: Vec<_> = net.addrs().rev().take(8).collect();
+        assert_eq!(expected_last, actual_last);
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_addrs_single_address_p_q_64() {
+        let net = BiContiguous::<Ipv6Network>::parse("::1/128").unwrap();
+        assert_eq!(64, net.hi_prefix());
+        assert_eq!(64, net.lo_prefix());
+        assert_eq!(net.addrs().next(), net.addrs().next_back());
+
+        let mut addrs = net.addrs();
+        assert_eq!(Some(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)), addrs.next());
+        assert_eq!(None, addrs.next());
+        assert_eq!(None, addrs.next_back());
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_addrs_mask_zero_unspecified_both_ends() {
+        let net = BiContiguous::<Ipv6Network>::parse("::/::").unwrap();
+        let mut addrs = net.addrs();
+
+        assert_eq!(Some(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)), addrs.next());
+        assert_eq!(
+            Some(Ipv6Addr::new(
+                0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff
+            )),
+            addrs.next_back()
+        );
+        assert_eq!((usize::MAX, None), net.addrs().size_hint());
+    }
+
     // The following `parse_pin_*` tests pin the exact `IpNetParseError` variant
     // returned for malformed input, so that the `splitn`-to-`split_once`
     // refactor of `Ipv4Network::parse` / `Ipv6Network::parse` / `IpNetwork::parse`
@@ -8708,6 +9050,20 @@ mod test {
         is_contiguous_u64((mask >> 64) as u64) && is_contiguous_u64(mask as u64)
     }
 
+    // Same construction as `arb_bicontiguous_ipv6_network`, but each half's
+    // prefix is drawn from its top 6 host bits only, so total host bits stay
+    // at most 12 (4096 addresses) and `addrs()` can be fully
+    // collected/brute-forced in a proptest case.
+    fn arb_small_bicontiguous_ipv6_network() -> impl Strategy<Value = BiContiguous<Ipv6Network>> {
+        (any::<u128>(), 58u8..=64, 58u8..=64).prop_map(|(addr, hi_prefix, lo_prefix)| {
+            let hi_mask = u64::MAX << (64 - hi_prefix);
+            let lo_mask = u64::MAX << (64 - lo_prefix);
+            let mask = ((hi_mask as u128) << 64) | (lo_mask as u128);
+
+            BiContiguous(Ipv6Network::from_bits(addr, mask))
+        })
+    }
+
     // Bounded to at most 8 host bits (256 addresses) so `addrs()` can be
     // fully collected/brute-forced in a proptest case without allocating an
     // unbounded amount of memory.
@@ -8973,6 +9329,94 @@ mod test {
         fn prop_bicontiguous_ipv6_from_contiguous_preserves_value(net in arb_contiguous_ipv6_network()) {
             let converted = BiContiguous::<Ipv6Network>::from(net);
             prop_assert_eq!(*converted, *net);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_bicontiguous_ipv6_addrs_matches_general_forward(net in arb_small_bicontiguous_ipv6_network()) {
+            let expected: Vec<_> = (*net).addrs().collect();
+            let actual: Vec<_> = net.addrs().collect();
+            prop_assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_addrs_matches_general_reverse(net in arb_small_bicontiguous_ipv6_network()) {
+            let expected: Vec<_> = (*net).addrs().rev().collect();
+            let actual: Vec<_> = net.addrs().rev().collect();
+            prop_assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_addrs_interleaved_matches_general_oracle(
+            net in arb_small_bicontiguous_ipv6_network(),
+            pattern in proptest::collection::vec(any::<bool>(), 0..80),
+        ) {
+            use std::collections::VecDeque;
+
+            let mut expected: VecDeque<_> = (*net).addrs().collect();
+            let actual = net.addrs();
+
+            prop_assert_eq!(actual.size_hint(), (*net).addrs().size_hint());
+            prop_assert_eq!(actual.count(), expected.len());
+
+            let mut actual = net.addrs();
+            for pop_front in pattern {
+                let expected_item = if pop_front { expected.pop_front() } else { expected.pop_back() };
+                let actual_item = if pop_front { actual.next() } else { actual.next_back() };
+                prop_assert_eq!(actual_item, expected_item, "pop_front={}", pop_front);
+
+                let (len, upper) = actual.size_hint();
+                prop_assert_eq!(len, expected.len());
+                prop_assert_eq!(upper, Some(expected.len()));
+            }
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_addrs_double_reverse_is_identity(net in arb_small_bicontiguous_ipv6_network()) {
+            let forward: Vec<_> = net.addrs().collect();
+            let mut double_reversed: Vec<_> = net.addrs().rev().collect();
+            double_reversed.reverse();
+            prop_assert_eq!(forward, double_reversed);
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_addrs_every_item_matches_mask(net in arb_small_bicontiguous_ipv6_network()) {
+            let (net_addr, mask) = (*net).to_bits();
+            for addr in net.addrs() {
+                prop_assert_eq!(addr.to_bits() & mask, net_addr);
+            }
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_addrs_len_matches_host_bits(net in arb_small_bicontiguous_ipv6_network()) {
+            let (.., mask) = (*net).to_bits();
+            let expected_len = 1usize << (!mask).count_ones();
+            prop_assert_eq!(net.addrs().count(), expected_len);
+        }
+
+        // Independent oracle: reconstructs the address grid from the two
+        // axes directly (hi host index x lo host index), bypassing both the
+        // closed-form override and the general `pdep` path, then checks set
+        // equality (order is checked separately by the `_matches_general_*`
+        // tests above).
+        #[test]
+        fn prop_bicontiguous_ipv6_addrs_matches_brute_force_grid(net in arb_small_bicontiguous_ipv6_network()) {
+            let (net_addr, mask) = (*net).to_bits();
+            let hi_host_bits = (!(mask >> 64) as u64).count_ones();
+            let lo_host_bits = (!mask as u64).count_ones();
+
+            let mut expected: Vec<u128> = (0u64..(1u64 << hi_host_bits))
+                .flat_map(|hi| (0u64..(1u64 << lo_host_bits)).map(move |lo| ((hi as u128) << 64) | lo as u128))
+                .map(|host| net_addr | host)
+                .collect();
+            let mut actual: Vec<u128> = net.addrs().map(|a| a.to_bits()).collect();
+            expected.sort_unstable();
+            expected.dedup();
+            actual.sort_unstable();
+            actual.dedup();
+
+            prop_assert_eq!(expected, actual);
         }
     }
 
