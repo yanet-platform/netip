@@ -262,6 +262,93 @@ fn bench_contains(c: &mut Criterion) {
     group.finish();
 }
 
+// `Contiguous<Ipv4Network>::contains` / `Contiguous<Ipv6Network>::contains`
+// override the general `contains` check: the general formula's mask subset test
+// (`mask & mask == mask`) becomes a plain unsigned integer comparison, valid
+// only because the `Contiguous` invariant guarantees both masks are contiguous.
+// Each override is benchmarked against the same values compared through `Deref`
+// (via an explicit `&Ipv4Network` / `&Ipv6Network` binding) to reach the
+// general `contains` check.
+fn bench_contiguous_contains(c: &mut Criterion) {
+    use netip::Contiguous;
+
+    let mut group = c.benchmark_group("netip");
+
+    group.bench_function("Contiguous<Ipv4Network>::contains true", |b| {
+        let n0 = Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap();
+        let n1 = Contiguous::<Ipv4Network>::parse("10.1.0.0/16").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).contains(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Contiguous<Ipv4Network>::contains false", |b| {
+        let n0 = Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap();
+        let n1 = Contiguous::<Ipv4Network>::parse("192.168.0.0/16").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).contains(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv4Network::contains via Deref true", |b| {
+        let n0 = Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap();
+        let n1 = Contiguous::<Ipv4Network>::parse("10.1.0.0/16").unwrap();
+        b.iter(|| {
+            let a: &Ipv4Network = core::hint::black_box(&n0);
+            let b: &Ipv4Network = core::hint::black_box(&n1);
+            core::hint::black_box(a.contains(b));
+        });
+    });
+
+    group.bench_function("Ipv4Network::contains via Deref false", |b| {
+        let n0 = Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap();
+        let n1 = Contiguous::<Ipv4Network>::parse("192.168.0.0/16").unwrap();
+        b.iter(|| {
+            let a: &Ipv4Network = core::hint::black_box(&n0);
+            let b: &Ipv4Network = core::hint::black_box(&n1);
+            core::hint::black_box(a.contains(b));
+        });
+    });
+
+    group.bench_function("Contiguous<Ipv6Network>::contains true", |b| {
+        let n0 = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let n1 = Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).contains(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Contiguous<Ipv6Network>::contains false", |b| {
+        let n0 = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let n1 = Contiguous::<Ipv6Network>::parse("fe80::/10").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).contains(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv6Network::contains via Deref true", |b| {
+        let n0 = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let n1 = Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap();
+        b.iter(|| {
+            let a: &Ipv6Network = core::hint::black_box(&n0);
+            let b: &Ipv6Network = core::hint::black_box(&n1);
+            core::hint::black_box(a.contains(b));
+        });
+    });
+
+    group.bench_function("Ipv6Network::contains via Deref false", |b| {
+        let n0 = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let n1 = Contiguous::<Ipv6Network>::parse("fe80::/10").unwrap();
+        b.iter(|| {
+            let a: &Ipv6Network = core::hint::black_box(&n0);
+            let b: &Ipv6Network = core::hint::black_box(&n1);
+            core::hint::black_box(a.contains(b));
+        });
+    });
+
+    group.finish();
+}
+
 fn bench_merge(c: &mut Criterion) {
     let mut group = c.benchmark_group("netip");
 
@@ -1224,6 +1311,7 @@ criterion_group!(
     bench_net_addrs_count,
     bench_intersection,
     bench_contains,
+    bench_contiguous_contains,
     bench_merge,
     bench_is_adjacent,
     bench_is_contiguous,
