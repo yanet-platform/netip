@@ -1981,9 +1981,9 @@ impl Iterator for Ipv4RangeNetworks {
         let first = self.first;
         let last = self.last;
 
-        // `size` is the interval length modulo 2^32. The only input that wraps
-        // to zero is the full range (first=0, last=MAX), and we encode that
-        // case as `size_log = 32`.
+        // Interval length modulo 2^32, stored in `size`. The only input that
+        // wraps to zero is the full range (first=0, last=MAX), and we encode
+        // that case as `size_log = 32`.
         let size = last.wrapping_sub(first).wrapping_add(1);
         let size_log: u32 = if size == 0 { 32 } else { 31 - size.leading_zeros() };
         let align: u32 = if first == 0 { 32 } else { first.trailing_zeros() };
@@ -4734,7 +4734,7 @@ impl Contiguous<Ipv6Network> {
                 let host_bits = (!mask).count_ones();
                 let back = u128::MAX.checked_shr(128 - host_bits).unwrap_or(0);
 
-                // `addr`'s host bits are already zero (the network is
+                // The address's host bits are already zero (`addr` is
                 // normalized), so `addr | index` and `addr + index` agree for
                 // every `index` in the valid `0 ..= back` range: no carry can
                 // cross from `index` into `addr`'s fixed bits. Folding `addr`
@@ -4966,8 +4966,9 @@ impl Error for BiContiguousIpNetParseError {}
 ///   [`lo_prefix`](Self::lo_prefix) instead.
 /// - [`Ipv6Network::is_contiguous`] is intentionally NOT overridden: it is only
 ///   `true` for the degenerate members of this class (`q == 0 || p == 64`), and
-///   computing `p`/`q` to check that costs more than the inner 3-op check, so
-///   it stays reachable unchanged through [`Deref`].
+///   computing the per-half prefix lengths `p`/`q` to check that costs more
+///   than the inner 3-op check, so it stays reachable unchanged through
+///   [`Deref`].
 /// - [`Ipv6Network::merge`] is intentionally NOT overridden either: the class
 ///   is not closed under merge (an equal-mask single-bit merge stays
 ///   bi-contiguous only when the bit is the bottom bit of its run), so merging
@@ -5099,15 +5100,16 @@ impl BiContiguous<Ipv6Network> {
     /// `i` maps to its address through a 5-op closed form instead of the
     /// general [`Ipv6Network::addrs`]'s per-bit `pdep` loop:
     ///
-    /// `addr(i) = base | (i & LO) | ((i >> s) << 64)`, where `s = 64 - q` and
-    /// `LO = (1 << s) - 1` for the low half's prefix length `q` -- both
-    /// precomputed once here, at construction.
+    /// `addr(i) = base | (i & lo_mask) | ((i >> split_shift) << 64)`, where
+    /// `split_shift = 64 - lo_prefix` and `lo_mask = (1 << split_shift) - 1`
+    /// for the low half's prefix length `lo_prefix` -- all three precomputed
+    /// once here, at construction.
     ///
-    /// `pdep` is strictly increasing in its source, so this produces the
+    /// Because `pdep` is strictly increasing in its source, this produces the
     /// exact same sequence as the general iterator, in both directions: host
     /// index order is row-major over the (high half, low half) plane, the
-    /// low half's `s` host bits cycling fastest and carrying into the high
-    /// half's host bits once they exhaust. This overrides
+    /// low half's `split_shift` host bits cycling fastest and carrying into
+    /// the high half's host bits once they exhaust. This overrides
     /// [`Ipv6Network::addrs`] with a pure acceleration -- same addresses,
     /// same order, far fewer instructions per item; reach the general
     /// iterator for a possibly non-bi-contiguous network through [`Deref`],
@@ -5168,12 +5170,13 @@ impl BiContiguous<Ipv6Network> {
                 let host_bits = (!mask).count_ones();
                 let back = u128::MAX.checked_shr(128 - host_bits).unwrap_or(0);
 
-                // `q`, the low half's run of leading ones, fixes the split
-                // point `s` between the two host-index runs: the low `s`
-                // bits of the index address the lo half's host bits
-                // directly, the rest address the hi half's, shifted into
-                // position. `s` is always in `0..=64`, so `1u128 << s` never
-                // shifts by more than 64 and never overflows `u128`.
+                // The low half's prefix length `lo_prefix` fixes the split
+                // point `split_shift` between the two host-index runs: the
+                // low `split_shift` bits of the index address the lo half's
+                // host bits directly, the rest address the hi half's,
+                // shifted into position. `split_shift` is always in
+                // `0..=64`, so `1u128 << split_shift` never shifts by more
+                // than 64 and never overflows `u128`.
                 let lo_prefix = (mask as u64).leading_ones();
                 let split_shift = 64 - lo_prefix;
                 let lo_mask = (1u128 << split_shift) - 1;
@@ -5246,10 +5249,10 @@ impl BiContiguous<Ipv6Network> {
         // NOTE: use `Option::map` when it becomes const.
         match (self, other) {
             (Self(a), Self(b)) => match a.intersection(b) {
-                // CLOSURE (T-CLOSE-∩): the mask-or of two bi-contiguous masks
-                // is itself bi-contiguous, so the result never leaves the
-                // class -- no re-validation needed, unlike a normalization
-                // check.
+                // The bi-contiguous class is closed under intersection: the
+                // mask-or of two bi-contiguous masks is itself bi-contiguous,
+                // so the result never leaves the class -- no re-validation
+                // needed, unlike a normalization check.
                 Some(net) => Some(Self(net)),
                 None => None,
             },
@@ -5282,7 +5285,8 @@ impl BiContiguousIpv6Addrs {
 /// [`BiContiguous::<Ipv6Network>::addrs`]. Unlike
 /// [`ContiguousIpv6NetworkAddrs`], the index cannot be folded into the
 /// bounds and advanced as a single packed address: the two host-bit runs
-/// live at different bit offsets (`0..s` and `64..64+hi host bits`), so
+/// live at different bit offsets (`0..split_shift` and `64..64+hi host
+/// bits`), so
 /// consecutive indices can "carry" from the low run into the high run at a
 /// bit position other than the next one up. The host index is therefore
 /// kept as its own cursor, mirroring [`Ipv6NetworkAddrs`]'s `base`/`front`/
@@ -6463,9 +6467,10 @@ mod test {
         let b = Ipv6Network::parse("2001::1/ffff::ff").unwrap();
 
         let mut diff = a.difference(&b);
-        // `d` is the lowest byte (`ffff::ff` adds only the low 8 bits over
-        // `ffff::`), so `next_back` must yield the lowest-bit item first,
-        // mirroring `ipv4_difference_next_back_non_contiguous`.
+        // The differing bits (`d`) are confined to the lowest byte
+        // (`ffff::ff` adds only the low 8 bits over `ffff::`), so
+        // `next_back` must yield the lowest-bit item first, mirroring
+        // `ipv4_difference_next_back_non_contiguous`.
         assert_eq!(
             Ipv6Network::parse("2001::/ffff::ff").unwrap(),
             diff.next_back().unwrap()
@@ -7055,7 +7060,7 @@ mod test {
             .collect()
     }
 
-    // `ipv4_binary_split` is `ip_binary_split`'s router; check it picks
+    // Checks that `ipv4_binary_split`, `ip_binary_split`'s router, picks
     // whichever implementation is correct on both sides of the threshold, not
     // just above it.
     #[test]
@@ -9494,10 +9499,11 @@ mod test {
     }
 
     proptest! {
-        // The load-bearing guard for T-CLOSE-∩: whenever the typed
-        // intersection is `Some`, its inner value equals the general
-        // `Ipv6Network::intersection` result exactly, and that result mask
-        // is itself always bi-contiguous -- i.e. the result never needs the
+        // The load-bearing guard for the intersection closure property:
+        // whenever the typed intersection is `Some`, its inner value equals
+        // the general `Ipv6Network::intersection` result exactly, and that
+        // result mask is itself always bi-contiguous (the class is closed
+        // under intersection) -- i.e. the result never needs the
         // re-validation the override skips.
         #[test]
         fn prop_bicontiguous_ipv6_intersection_closure_matches_general(
