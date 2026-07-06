@@ -14,7 +14,8 @@ mod net;
 
 pub use macaddr::{MacAddr, MacAddrParseError};
 pub use net::{
-    Contiguous, ContiguousIpNetParseError, IpNetParseError, IpNetwork, Ipv4Network, Ipv4NetworkAddrs, Ipv4NetworkDiff,
-    Ipv4RangeNetworks, Ipv6Network, Ipv6NetworkAddrs, Ipv6NetworkDiff, Ipv6RangeNetworks, ipv4_aggregate,
-    ipv4_binary_split, ipv4_range_to_networks, ipv6_aggregate, ipv6_binary_split, ipv6_range_to_networks,
+    BiContiguous, BiContiguousIpNetParseError, Contiguous, ContiguousIpNetParseError, IpNetParseError, IpNetwork,
+    Ipv4Network, Ipv4NetworkAddrs, Ipv4NetworkDiff, Ipv4RangeNetworks, Ipv6Network, Ipv6NetworkAddrs, Ipv6NetworkDiff,
+    Ipv6RangeNetworks, ipv4_aggregate, ipv4_binary_split, ipv4_range_to_networks, ipv6_aggregate, ipv6_binary_split,
+    ipv6_range_to_networks,
 };

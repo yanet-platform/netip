@@ -2455,6 +2455,57 @@ impl Ipv6Network {
         mask | mask.wrapping_sub(1) == u128::MAX
     }
 
+    /// Checks whether this network's mask is bi-contiguous, i.e. each 64-bit
+    /// half of the mask (the high half and the low half) is on its own a
+    /// contiguous run of leading one bits.
+    ///
+    /// A bi-contiguous mask describes an axis-aligned rectangle on the (high
+    /// 64 bits, low 64 bits) plane: `concat(1^p 0^(64-p), 1^q 0^(64-q))` for
+    /// some `p, q` in `0..=64`. Every contiguous mask is bi-contiguous (`q =
+    /// 0`, or `p = 64`), but not every bi-contiguous mask is contiguous. See
+    /// [`BiContiguous`] for the type that carries this guarantee.
+    ///
+    /// A mask is bi-contiguous exactly when every maximal run of one bits
+    /// ends either at bit 127 (the top of the address) or at bit 63 (the top
+    /// of the low half) -- checked here in 5 ops by clearing those two
+    /// allowed positions from the set of run-tops and requiring nothing
+    /// remains.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv6Network;
+    ///
+    /// // Contiguous masks are always bi-contiguous.
+    /// assert!(Ipv6Network::parse("::/0").unwrap().is_bicontiguous());
+    /// assert!(
+    ///     Ipv6Network::parse("2a02:6b8:c00::/40")
+    ///         .unwrap()
+    ///         .is_bicontiguous()
+    /// );
+    ///
+    /// // Two separate runs, one per 64-bit half.
+    /// assert!(
+    ///     Ipv6Network::parse("2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0")
+    ///         .unwrap()
+    ///         .is_bicontiguous()
+    /// );
+    ///
+    /// // An interior hole inside the low half breaks bi-contiguity.
+    /// assert!(
+    ///     !Ipv6Network::parse("2a02:6b8:0:0:1234:5678::/ffff:ffff:0:0:f0f0:f0f0:f0f0:f0f0")
+    ///         .unwrap()
+    ///         .is_bicontiguous()
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn is_bicontiguous(&self) -> bool {
+        const CLEAR: u128 = !((1u128 << 127) | (1u128 << 63));
+        let mask = self.mask().to_bits();
+        (mask & !(mask >> 1)) & CLEAR == 0
+    }
+
     /// Checks whether this network is an IPv4-mapped IPv6 network.
     ///
     /// # Examples
@@ -4860,6 +4911,259 @@ impl FromStr for Contiguous<Ipv6Network> {
     }
 }
 
+/// An error that occurs when parsing a bi-contiguous IP network.
+#[derive(Debug, PartialEq)]
+pub enum BiContiguousIpNetParseError {
+    /// The network's mask is not bi-contiguous.
+    NonBiContiguousNetwork,
+    /// An error occurred while parsing the IP network.
+    IpNetParseError(IpNetParseError),
+}
+
+impl From<IpNetParseError> for BiContiguousIpNetParseError {
+    #[inline]
+    fn from(err: IpNetParseError) -> Self {
+        BiContiguousIpNetParseError::IpNetParseError(err)
+    }
+}
+
+impl Display for BiContiguousIpNetParseError {
+    fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
+        match self {
+            Self::NonBiContiguousNetwork => write!(fmt, "non-bi-contiguous network"),
+            Self::IpNetParseError(err) => write!(fmt, "{}", err),
+        }
+    }
+}
+
+impl Error for BiContiguousIpNetParseError {}
+
+/// A bi-contiguous IP network.
+///
+/// Represents a wrapper around an [`Ipv6Network`] whose mask is **guaranteed
+/// to split into exactly two contiguous runs of leading one bits, one per
+/// 64-bit half of the address**: `mask = concat(1^p 0^(64-p), 1^q 0^(64-q))`
+/// for some `p, q` in `0..=64`. The address set it describes is an
+/// axis-aligned rectangle on the (high 64 bits, low 64 bits) plane -- the
+/// high half typically selects one hierarchy (e.g. provider/site), the low
+/// half another (e.g. service/customer field), and the middle gap plus the
+/// tail are "don't care".
+///
+/// [`Contiguous<Ipv6Network>`] is a special case of this class (`q = 0`, or
+/// `p = 64`), so upgrading from it is infallible -- see
+/// `From<Contiguous<Ipv6Network>>`.
+///
+/// Per the wrapper principle, only methods that run strictly faster given
+/// the bi-contiguous guarantee get a behavior-preserving override:
+/// - [`is_bicontiguous`](Self::is_bicontiguous) is overridden to a constant
+///   `true`.
+/// - There is no single-prefix accessor equivalent to
+///   [`Contiguous<Ipv6Network>::prefix`]: a bi-contiguous mask generally isn't
+///   describable by one prefix length, so use [`hi_prefix`](Self::hi_prefix) /
+///   [`lo_prefix`](Self::lo_prefix) instead.
+/// - [`Ipv6Network::is_contiguous`] is intentionally NOT overridden: it is only
+///   `true` for the degenerate members of this class (`q == 0 || p == 64`), and
+///   computing `p`/`q` to check that costs more than the inner 3-op check, so
+///   it stays reachable unchanged through [`Deref`].
+/// - [`Ipv6Network::merge`] is intentionally NOT overridden either: the class
+///   is not closed under merge (an equal-mask single-bit merge stays
+///   bi-contiguous only when the bit is the bottom bit of its run), so merging
+///   two bi-contiguous networks can leave the class -- it returns a plain
+///   [`Ipv6Network`] through [`Deref`], by design.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BiContiguous<T>(T);
+
+impl BiContiguous<Ipv6Network> {
+    /// Parses an IPv6 network from a string and returns a bi-contiguous
+    /// network.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{BiContiguous, Ipv6Network};
+    ///
+    /// let net = BiContiguous::<Ipv6Network>::parse(
+    ///     "2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0",
+    /// )
+    /// .unwrap();
+    /// assert_eq!(40, net.hi_prefix());
+    /// assert_eq!(32, net.lo_prefix());
+    ///
+    /// let net =
+    ///     BiContiguous::<Ipv6Network>::parse("2a02:1a1:c00::1234:0:0:0/ffff:ffff:ff00::ffff:0:0:0")
+    ///         .unwrap();
+    /// assert_eq!(40, net.hi_prefix());
+    /// assert_eq!(16, net.lo_prefix());
+    ///
+    /// // An interior hole inside the low half is not bi-contiguous.
+    /// assert!(
+    ///     BiContiguous::<Ipv6Network>::parse(
+    ///         "2a02:6b8:0:0:1234:5678::/ffff:ffff:0:0:f0f0:f0f0:f0f0:f0f0"
+    ///     )
+    ///     .is_err()
+    /// );
+    /// ```
+    pub fn parse(buf: &str) -> Result<Self, BiContiguousIpNetParseError> {
+        let net = Ipv6Network::parse(buf)?;
+        Self::try_from(net)
+    }
+
+    /// Returns the prefix length `p` of the high 64-bit half of the mask.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{BiContiguous, Ipv6Network};
+    ///
+    /// let net = BiContiguous::<Ipv6Network>::parse(
+    ///     "2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0",
+    /// )
+    /// .unwrap();
+    /// assert_eq!(40, net.hi_prefix());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn hi_prefix(&self) -> u8 {
+        match self {
+            Self(net) => {
+                let mask = net.mask().to_bits();
+                let hi = (mask >> 64) as u64;
+                hi.leading_ones() as u8
+            }
+        }
+    }
+
+    /// Returns the prefix length `q` of the low 64-bit half of the mask.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{BiContiguous, Ipv6Network};
+    ///
+    /// let net = BiContiguous::<Ipv6Network>::parse(
+    ///     "2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0",
+    /// )
+    /// .unwrap();
+    /// assert_eq!(32, net.lo_prefix());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn lo_prefix(&self) -> u8 {
+        match self {
+            Self(net) => {
+                let mask = net.mask().to_bits();
+                let lo = mask as u64;
+                lo.leading_ones() as u8
+            }
+        }
+    }
+
+    /// Checks whether this network is a bi-contiguous network.
+    ///
+    /// Always returns `true`: the wrapped network is guaranteed to be
+    /// bi-contiguous by the [`BiContiguous`] type invariant, so this
+    /// overrides the [`Ipv6Network::is_bicontiguous`] check with a constant
+    /// result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{BiContiguous, Ipv6Network};
+    ///
+    /// let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
+    /// assert!(net.is_bicontiguous());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn is_bicontiguous(&self) -> bool {
+        true
+    }
+}
+
+impl TryFrom<Ipv6Network> for BiContiguous<Ipv6Network> {
+    type Error = BiContiguousIpNetParseError;
+
+    /// Converts an [`Ipv6Network`] into a [`BiContiguous<Ipv6Network>`],
+    /// failing if the network's mask is not bi-contiguous.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{BiContiguous, Ipv6Network};
+    ///
+    /// let net = Ipv6Network::parse("2a02:6b8:c00::/40").unwrap();
+    /// assert!(BiContiguous::<Ipv6Network>::try_from(net).is_ok());
+    ///
+    /// let net =
+    ///     Ipv6Network::parse("2a02:6b8:0:0:1234:5678::/ffff:ffff:0:0:f0f0:f0f0:f0f0:f0f0").unwrap();
+    /// assert!(BiContiguous::<Ipv6Network>::try_from(net).is_err());
+    /// ```
+    #[inline]
+    fn try_from(net: Ipv6Network) -> Result<Self, Self::Error> {
+        if net.is_bicontiguous() {
+            Ok(Self(net))
+        } else {
+            Err(BiContiguousIpNetParseError::NonBiContiguousNetwork)
+        }
+    }
+}
+
+impl From<Contiguous<Ipv6Network>> for BiContiguous<Ipv6Network> {
+    /// Upgrades a [`Contiguous<Ipv6Network>`] into a
+    /// [`BiContiguous<Ipv6Network>`].
+    ///
+    /// Infallible: every contiguous mask is bi-contiguous (`q = 0`, or `p =
+    /// 64`), so this conversion never fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{BiContiguous, Contiguous, Ipv6Network};
+    ///
+    /// let net = Contiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
+    /// let net = BiContiguous::<Ipv6Network>::from(net);
+    /// assert_eq!(40, net.hi_prefix());
+    /// assert_eq!(0, net.lo_prefix());
+    /// ```
+    #[inline]
+    fn from(net: Contiguous<Ipv6Network>) -> Self {
+        let Contiguous(net) = net;
+        Self(net)
+    }
+}
+
+impl<T> Deref for BiContiguous<T> {
+    type Target = T;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self(net) => net,
+        }
+    }
+}
+
+impl<T> Display for BiContiguous<T>
+where
+    T: Display,
+{
+    #[inline]
+    fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
+        match self {
+            Self(net) => Display::fmt(net, fmt),
+        }
+    }
+}
+
+impl FromStr for BiContiguous<Ipv6Network> {
+    type Err = BiContiguousIpNetParseError;
+
+    #[inline]
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use core::cmp::Ordering;
@@ -6569,6 +6873,174 @@ mod test {
         );
     }
 
+    // The two motivating masks from the `BiContiguous` design (one hi/lo pair
+    // per 64-bit half of the address) accepted via every constructor.
+
+    #[test]
+    fn test_net_ipv6_is_bicontiguous_motivating_masks() {
+        assert!(
+            Ipv6Network::parse("2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0")
+                .unwrap()
+                .is_bicontiguous()
+        );
+        assert!(
+            Ipv6Network::parse("2a02:1a1:c00::1234:0:0:0/ffff:ffff:ff00::ffff:0:0:0")
+                .unwrap()
+                .is_bicontiguous()
+        );
+    }
+
+    #[test]
+    fn test_bicontiguous_ipv6_network_parse_motivating_masks() {
+        let net =
+            BiContiguous::<Ipv6Network>::parse("2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        assert_eq!(40, net.hi_prefix());
+        assert_eq!(32, net.lo_prefix());
+
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:1a1:c00::1234:0:0:0/ffff:ffff:ff00::ffff:0:0:0").unwrap();
+        assert_eq!(40, net.hi_prefix());
+        assert_eq!(16, net.lo_prefix());
+    }
+
+    // Boundary masks: m = 0 (all zero), m = MAX (all one), m = 1 << 63 (a
+    // single bit exactly at the hi/lo boundary) are all bi-contiguous.
+
+    #[test]
+    fn test_net_ipv6_is_bicontiguous_boundary_masks() {
+        assert!(Ipv6Network::parse("::/::").unwrap().is_bicontiguous());
+        assert!(Ipv6Network::parse("::1").unwrap().is_bicontiguous());
+        assert!(Ipv6Network::new(Ipv6Addr::UNSPECIFIED, Ipv6Addr::new(0, 0, 0, 0, 0x8000, 0, 0, 0)).is_bicontiguous());
+    }
+
+    #[test]
+    fn test_bicontiguous_ipv6_network_parse_boundary_masks() {
+        assert!(BiContiguous::<Ipv6Network>::parse("::/::").is_ok());
+        assert!(BiContiguous::<Ipv6Network>::parse("::1").is_ok());
+        assert!(
+            BiContiguous::<Ipv6Network>::try_from(Ipv6Network::new(
+                Ipv6Addr::UNSPECIFIED,
+                Ipv6Addr::new(0, 0, 0, 0, 0x8000, 0, 0, 0),
+            ))
+            .is_ok()
+        );
+    }
+
+    // Rejected shapes: a lone bit not at bit 127/63, an interior hole inside
+    // one half, and an interior hole inside the other half.
+
+    #[test]
+    fn test_net_ipv6_is_bicontiguous_rejects_non_bicontiguous_masks() {
+        // `m = 1`: a single bit at the very bottom, nowhere near a run-top at
+        // bit 127 or bit 63.
+        assert!(!Ipv6Network::parse("::/::1").unwrap().is_bicontiguous());
+
+        // Interior hole inside the low half.
+        assert!(
+            !Ipv6Network::parse("2a02:6b8:0:0:1234:5678::/ffff:ffff:0:0:f0f0:f0f0:f0f0:f0f0")
+                .unwrap()
+                .is_bicontiguous()
+        );
+
+        // Interior hole inside the high half.
+        assert!(
+            !Ipv6Network::new(
+                Ipv6Addr::UNSPECIFIED,
+                Ipv6Addr::new(0xf0f0, 0xf0f0, 0xf0f0, 0xf0f0, 0, 0, 0, 0)
+            )
+            .is_bicontiguous()
+        );
+    }
+
+    #[test]
+    fn test_bicontiguous_ipv6_network_parse_rejects_non_bicontiguous_masks() {
+        assert_eq!(
+            BiContiguousIpNetParseError::NonBiContiguousNetwork,
+            BiContiguous::<Ipv6Network>::parse("::/::1").unwrap_err(),
+        );
+        assert_eq!(
+            BiContiguousIpNetParseError::NonBiContiguousNetwork,
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:0:0:1234:5678::/ffff:ffff:0:0:f0f0:f0f0:f0f0:f0f0")
+                .unwrap_err(),
+        );
+        assert_eq!(
+            Err(BiContiguousIpNetParseError::NonBiContiguousNetwork),
+            BiContiguous::<Ipv6Network>::try_from(Ipv6Network::new(
+                Ipv6Addr::UNSPECIFIED,
+                Ipv6Addr::new(0xf0f0, 0xf0f0, 0xf0f0, 0xf0f0, 0, 0, 0, 0),
+            )),
+        );
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_network_parse_propagates_ip_net_parse_error() {
+        assert_eq!(
+            BiContiguousIpNetParseError::IpNetParseError(IpNetParseError::AddrParseError(
+                "".parse::<Ipv6Addr>().unwrap_err()
+            )),
+            BiContiguous::<Ipv6Network>::parse("").unwrap_err(),
+        );
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_network_from_contiguous() {
+        let net = Contiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
+        let net = BiContiguous::<Ipv6Network>::from(net);
+        assert_eq!(40, net.hi_prefix());
+        assert_eq!(0, net.lo_prefix());
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_network_from_contiguous_prefix_over_64() {
+        let net = Contiguous::<Ipv6Network>::parse("2001:db8::/96").unwrap();
+        let net = BiContiguous::<Ipv6Network>::from(net);
+        assert_eq!(64, net.hi_prefix());
+        assert_eq!(32, net.lo_prefix());
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_network_deref() {
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
+        assert_eq!(Ipv6Network::parse("2a02:6b8:c00::/40").unwrap(), *net);
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_network_display() {
+        let net =
+            BiContiguous::<Ipv6Network>::parse("2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        assert_eq!(
+            "2a02:1a1:c00:0:1234:abcd::/ffff:ffff:ff00:0:ffff:ffff::",
+            net.to_string()
+        );
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_network_from_str() {
+        let expected =
+            BiContiguous::<Ipv6Network>::parse("2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        let actual: BiContiguous<Ipv6Network> = "2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0"
+            .parse()
+            .unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_network_is_bicontiguous_override_matches_inner() {
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
+        assert!(net.is_bicontiguous());
+        assert_eq!(net.is_bicontiguous(), (*net).is_bicontiguous());
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_network_hi_lo_prefix_boundary_prefixes() {
+        let host = BiContiguous::<Ipv6Network>::parse("::1/128").unwrap();
+        let unspecified = BiContiguous::<Ipv6Network>::parse("::/0").unwrap();
+
+        assert_eq!(64, host.hi_prefix());
+        assert_eq!(64, host.lo_prefix());
+        assert_eq!(0, unspecified.hi_prefix());
+        assert_eq!(0, unspecified.lo_prefix());
+    }
+
     // The following `parse_pin_*` tests pin the exact `IpNetParseError` variant
     // returned for malformed input, so that the `splitn`-to-`split_once`
     // refactor of `Ipv4Network::parse` / `Ipv6Network::parse` / `IpNetwork::parse`
@@ -8203,6 +8675,39 @@ mod test {
         ]
     }
 
+    // Builds a bi-contiguous mask directly from independently chosen hi/lo
+    // prefixes `p, q in 0..=64`, so every generated value satisfies the class
+    // invariant by construction rather than by filtering/rejection.
+    fn arb_bicontiguous_ipv6_network() -> impl Strategy<Value = BiContiguous<Ipv6Network>> {
+        (any::<u128>(), 0u8..=64, 0u8..=64).prop_map(|(addr, hi_prefix, lo_prefix)| {
+            let hi_mask = if hi_prefix == 0 {
+                0u64
+            } else {
+                u64::MAX << (64 - hi_prefix)
+            };
+            let lo_mask = if lo_prefix == 0 {
+                0u64
+            } else {
+                u64::MAX << (64 - lo_prefix)
+            };
+            let mask = ((hi_mask as u128) << 64) | (lo_mask as u128);
+
+            BiContiguous(Ipv6Network::from_bits(addr, mask))
+        })
+    }
+
+    // Independent oracle for `Ipv6Network::is_bicontiguous`'s 5-op run-top
+    // formula: checks each 64-bit half for a contiguous run of leading ones
+    // using the same trick `Ipv6Network::is_contiguous` uses on the full 128
+    // bits, applied separately per half.
+    fn reference_is_bicontiguous(mask: u128) -> bool {
+        fn is_contiguous_u64(mask: u64) -> bool {
+            mask | mask.wrapping_sub(1) == u64::MAX
+        }
+
+        is_contiguous_u64((mask >> 64) as u64) && is_contiguous_u64(mask as u64)
+    }
+
     // Bounded to at most 8 host bits (256 addresses) so `addrs()` can be
     // fully collected/brute-forced in a proptest case without allocating an
     // unbounded amount of memory.
@@ -8416,6 +8921,58 @@ mod test {
             b in arb_contiguous_ip_network(),
         ) {
             prop_assert_eq!(a.contains(&b), (*a).contains(&b));
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_ipv6_is_bicontiguous_matches_reference(net in arb_ipv6_network()) {
+            let (.., mask) = net.to_bits();
+            prop_assert_eq!(net.is_bicontiguous(), reference_is_bicontiguous(mask));
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_tryfrom_matches_is_bicontiguous(net in arb_ipv6_network()) {
+            prop_assert_eq!(BiContiguous::<Ipv6Network>::try_from(net).is_ok(), net.is_bicontiguous());
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_is_bicontiguous_always_true(net in arb_bicontiguous_ipv6_network()) {
+            prop_assert!(net.is_bicontiguous());
+            prop_assert_eq!(net.is_bicontiguous(), (*net).is_bicontiguous());
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_addr_is_normalized(net in arb_bicontiguous_ipv6_network()) {
+            let (addr, mask) = (*net).to_bits();
+            prop_assert_eq!(addr & mask, addr);
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_hi_lo_prefix_matches_brute_force(net in arb_bicontiguous_ipv6_network()) {
+            let (.., mask) = (*net).to_bits();
+            let expected_hi = ((mask >> 64) as u64).leading_ones() as u8;
+            let expected_lo = (mask as u64).leading_ones() as u8;
+
+            prop_assert_eq!(net.hi_prefix(), expected_hi);
+            prop_assert_eq!(net.lo_prefix(), expected_lo);
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_tryfrom_roundtrip(net in arb_bicontiguous_ipv6_network()) {
+            prop_assert_eq!(BiContiguous::<Ipv6Network>::try_from(*net), Ok(net));
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_parse_display_roundtrip(net in arb_bicontiguous_ipv6_network()) {
+            let formatted = net.to_string();
+            prop_assert_eq!(BiContiguous::<Ipv6Network>::parse(&formatted), Ok(net));
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_from_contiguous_preserves_value(net in arb_contiguous_ipv6_network()) {
+            let converted = BiContiguous::<Ipv6Network>::from(net);
+            prop_assert_eq!(*converted, *net);
         }
     }
 
