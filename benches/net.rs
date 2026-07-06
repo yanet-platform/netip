@@ -713,6 +713,29 @@ fn bench_is_contiguous(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_is_bicontiguous(c: &mut Criterion) {
+    let mut group = c.benchmark_group("netip");
+
+    group.bench_function("Ipv6Network::is_bicontiguous bi-contiguous", |b| {
+        let net = Ipv6Network::parse("2a02:1a1:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&net).is_bicontiguous());
+        });
+    });
+
+    group.bench_function("Ipv6Network::is_bicontiguous non-bicontiguous", |b| {
+        let net = Ipv6Network::new(
+            Ipv6Addr::new(0xf0f0, 0xf0f0, 0xf0f0, 0xf0f0, 0, 0, 0, 0),
+            Ipv6Addr::new(0xf0f0, 0xf0f0, 0xf0f0, 0xf0f0, 0, 0, 0, 0),
+        );
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&net).is_bicontiguous());
+        });
+    });
+
+    group.finish();
+}
+
 fn bench_aggregate(c: &mut Criterion) {
     use netip::{ipv4_aggregate, ipv6_aggregate};
 
@@ -1483,6 +1506,7 @@ criterion_group!(
     bench_merge,
     bench_is_adjacent,
     bench_is_contiguous,
+    bench_is_bicontiguous,
     bench_aggregate,
     bench_binary_split,
     bench_supernet_for,
