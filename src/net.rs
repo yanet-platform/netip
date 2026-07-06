@@ -5457,6 +5457,343 @@ impl FromStr for BiContiguous<Ipv6Network> {
     }
 }
 
+// Below this many elements, `bicontiguous_containment_quadratic` is faster
+// than `bicontiguous_containment_probe`; at or above it, the probe path
+// wins. Both produce identical results, so this only affects speed.
+//
+// Measured directly (median of 21 runs each, release profile) on
+// never-contained fixtures with `S` distinct present shapes: for realistic
+// `S` (a handful to a few dozen on real feeds, per the type docs), the probe
+// path already wins at every size tested down to `N = 16`, since the
+// ancestor search finds nothing to probe against most present shapes and
+// degenerates close to a single linear pass. Only an adversarial `S = 64`
+// (every one of the 65 possible `hi_prefix` values in play at once) pushes
+// the crossover as late as `N` between 128 and 160. This value is a
+// deliberate trade-off: it favors the realistic case (already solidly won by
+// N = 96) over the adversarial one, where the quadratic path stays
+// measurably faster (roughly 1.3x-2x) for `N` in `[96, 160)`.
+const CONTAINMENT_THRESHOLD: usize = 96;
+
+// Sort key that orders `BiContiguous<Ipv6Network>` values ascending by
+// `(mask, address)` as 128-bit numbers. A bi-contiguous mask's numeric value
+// is itself monotonic in its `(hi_prefix, lo_prefix)` shape: widening either
+// half's prefix always increases the mask, and the high half dominates the
+// magnitude, so two masks compare the same way their `(hi_prefix,
+// lo_prefix)` pairs compare lexicographically. Sorting by this key therefore
+// also sorts networks by shape, without ever computing `hi_prefix` or
+// `lo_prefix`.
+#[inline]
+fn bicontiguous_sort_key(net: &BiContiguous<Ipv6Network>) -> (u128, u128) {
+    let (addr, mask) = net.to_bits();
+    (mask, addr)
+}
+
+// Returns the top `prefix` bits of a 64-bit half set to one, the rest zero.
+// Legal for every `prefix` in `0..=64`, including the boundary values a
+// plain `!0u64 << (64 - prefix)` cannot express (shifting a `u64` by 64 wraps
+// on some targets and panics with overflow checks on).
+#[inline]
+const fn bicontiguous_half_prefix_mask(prefix: u8) -> u64 {
+    let shifted = match u64::MAX.checked_shr(prefix as u32) {
+        Some(shifted) => shifted,
+        None => 0,
+    };
+    !shifted
+}
+
+// Returns the full 128-bit mask for a bi-contiguous shape `(hi_prefix,
+// lo_prefix)`.
+#[inline]
+const fn bicontiguous_shape_mask(hi_prefix: u8, lo_prefix: u8) -> u128 {
+    ((bicontiguous_half_prefix_mask(hi_prefix) as u128) << 64) | bicontiguous_half_prefix_mask(lo_prefix) as u128
+}
+
+// Small-N baseline for `ipv6_bicontiguous_find_containment`: for each
+// network, scans the whole slice for some other, strictly coarser network
+// that contains it. `O(N^2)`, but with a much smaller constant factor per
+// pair than the probe path below (no shape bitmap or binary search setup),
+// which wins out for small inputs.
+//
+// `nets` must already be sorted ascending by `bicontiguous_sort_key`, so
+// that an already-kept earlier copy of a duplicate always sits at
+// `nets[kept_len - 1]`. The containment scan itself is order-independent: it
+// tests the current multiset of values, and a swap only ever exchanges two
+// values, never drops one, so it stays correct regardless of which values
+// have already been moved into the kept prefix.
+fn bicontiguous_containment_quadratic(nets: &mut [BiContiguous<Ipv6Network>]) -> usize {
+    let mut kept_len = 0usize;
+
+    for index in 0..nets.len() {
+        let candidate = nets[index];
+        let is_duplicate = kept_len > 0 && nets[kept_len - 1] == candidate;
+
+        // A network with the same mask as `candidate` can only be an exact
+        // duplicate (already handled above) or a disjoint sibling, never a
+        // strict container, so distinct masks are required here.
+        let is_contained = !is_duplicate
+            && nets
+                .iter()
+                .any(|other| other.mask() != candidate.mask() && other.contains(&candidate));
+
+        if !is_duplicate && !is_contained {
+            nets.swap(kept_len, index);
+            kept_len += 1;
+        }
+    }
+
+    kept_len
+}
+
+// Large-N path for `ipv6_bicontiguous_find_containment`.
+//
+// A network's ancestors are not necessarily adjacent to it in sort order: a
+// third, unrelated shape can sit between a container and the network it
+// contains (see the fixed test
+// `bicontiguous_ipv6_find_containment_non_adjacent_ancestor`), so this
+// probes, for each network, every OTHER present `(hi_prefix, lo_prefix)`
+// shape that could contain it, via binary search restricted to the run of
+// already-classified, already-kept networks sharing that ancestor shape --
+// rather than scanning neighbors.
+//
+// `nets` must already be sorted ascending by `bicontiguous_sort_key`.
+//
+// Runs in `O(N * S * log N)`, where `S` is the number of distinct shapes
+// actually probed per network (bounded by the number of present shapes that
+// dominate it, typically far below the full `65 * 65` grid on real data).
+// Alloc-free: two fixed-size stack bitmaps track which shapes are present,
+// and one `u64` bitmask per chunk of up to 64 networks tracks which of them
+// have been dropped so far.
+fn bicontiguous_containment_probe(nets: &mut [BiContiguous<Ipv6Network>]) -> usize {
+    let len = nets.len();
+
+    // Bit `lo_prefix` of `lo_prefixes_by_hi_prefix[hi_prefix]` is set iff a
+    // network with that exact `(hi_prefix, lo_prefix)` shape is present in
+    // the input; bit `hi_prefix` of `hi_prefixes_present` is set iff that
+    // row is nonempty. Built in one `O(N)` pass, before any network is
+    // dropped.
+    let mut lo_prefixes_by_hi_prefix = [0u128; 65];
+    let mut hi_prefixes_present = 0u128;
+    for net in nets.iter() {
+        let hi_prefix = net.hi_prefix();
+        let lo_prefix = net.lo_prefix();
+        lo_prefixes_by_hi_prefix[hi_prefix as usize] |= 1u128 << lo_prefix;
+        hi_prefixes_present |= 1u128 << hi_prefix;
+    }
+
+    let mut kept_len = 0usize;
+    let mut chunk_start = 0usize;
+
+    while chunk_start < len {
+        let (.., chunk_mask) = nets[chunk_start].to_bits();
+        let chunk_hi_prefix = nets[chunk_start].hi_prefix();
+        let chunk_lo_prefix = nets[chunk_start].lo_prefix();
+
+        // A chunk is at most 64 consecutive elements sharing this exact
+        // mask (one run of identically-shaped networks). `dropped` below
+        // needs one bit per chunk element, so a run of more than 64
+        // networks is split across several chunks.
+        let mut chunk_end = chunk_start + 1;
+        while chunk_end < len && chunk_end - chunk_start < 64 {
+            let (.., next_mask) = nets[chunk_end].to_bits();
+            if next_mask != chunk_mask {
+                break;
+            }
+            chunk_end += 1;
+        }
+
+        let chunk_len = chunk_end - chunk_start;
+        let all_dropped = if chunk_len == 64 {
+            u64::MAX
+        } else {
+            (1u64 << chunk_len) - 1
+        };
+        let mut dropped = 0u64;
+
+        // Duplicate check: the chunk's first element can only twin with the
+        // last element kept so far -- the tail of the previous chunk, when a
+        // run of more than 64 identical networks was split across a chunk
+        // boundary. Every later element compares to its immediate
+        // predecessor, which compaction has not touched yet at this point.
+        for index in chunk_start..chunk_end {
+            let is_duplicate = if index == chunk_start {
+                kept_len > 0 && nets[kept_len - 1] == nets[index]
+            } else {
+                nets[index - 1] == nets[index]
+            };
+            if is_duplicate {
+                dropped |= 1u64 << (index - chunk_start);
+            }
+        }
+
+        if dropped != all_dropped {
+            // Ancestor shapes: every present `(hi_prefix, lo_prefix)` with
+            // `hi_prefix <= chunk_hi_prefix` and `lo_prefix <=
+            // chunk_lo_prefix`, excluding the chunk's own shape. The row at
+            // the chunk's own `hi_prefix` needs `lo_prefix` strictly less
+            // than `chunk_lo_prefix` (equal would be the chunk's own
+            // shape); any smaller `hi_prefix` allows `lo_prefix` up to and
+            // including `chunk_lo_prefix`.
+            let eligible_hi_prefixes = if chunk_hi_prefix == 64 {
+                hi_prefixes_present
+            } else {
+                hi_prefixes_present & ((1u128 << (chunk_hi_prefix + 1)) - 1)
+            };
+
+            // A strict ancestor shape's mask always sorts before the
+            // chunk's own mask (widening either prefix only ever increases
+            // the mask), so every ancestor's run of matching networks lies
+            // within the kept prefix built so far. Ancestor shapes are
+            // visited in ascending order below, so their masks are visited
+            // in ascending order too, and this cursor only ever needs to
+            // move forward across the whole chunk.
+            let mut ancestor_search_start = 0usize;
+            let mut remaining_hi_prefixes = eligible_hi_prefixes;
+
+            while remaining_hi_prefixes != 0 && dropped != all_dropped {
+                let ancestor_hi_prefix = remaining_hi_prefixes.trailing_zeros() as u8;
+                remaining_hi_prefixes &= remaining_hi_prefixes - 1;
+
+                let lo_prefixes = lo_prefixes_by_hi_prefix[ancestor_hi_prefix as usize];
+                let mut eligible_lo_prefixes = if ancestor_hi_prefix == chunk_hi_prefix {
+                    if chunk_lo_prefix == 0 {
+                        0
+                    } else {
+                        lo_prefixes & ((1u128 << chunk_lo_prefix) - 1)
+                    }
+                } else if chunk_lo_prefix == 64 {
+                    lo_prefixes
+                } else {
+                    lo_prefixes & ((1u128 << (chunk_lo_prefix + 1)) - 1)
+                };
+
+                while eligible_lo_prefixes != 0 && dropped != all_dropped {
+                    let ancestor_lo_prefix = eligible_lo_prefixes.trailing_zeros() as u8;
+                    eligible_lo_prefixes &= eligible_lo_prefixes - 1;
+
+                    let ancestor_mask = bicontiguous_shape_mask(ancestor_hi_prefix, ancestor_lo_prefix);
+
+                    // No ancestor shape reached here is `(64, 64)`: that
+                    // would force the chunk's own shape to be `(64, 64)`
+                    // too, but a shape is never its own ancestor. So
+                    // `ancestor_mask` is never `u128::MAX` and `+ 1` below
+                    // never overflows.
+                    let run_start = ancestor_search_start
+                        + nets[ancestor_search_start..kept_len]
+                            .partition_point(|net| bicontiguous_sort_key(net) < (ancestor_mask, 0));
+                    let run_end = run_start
+                        + nets[run_start..kept_len]
+                            .partition_point(|net| bicontiguous_sort_key(net) < (ancestor_mask + 1, 0));
+                    ancestor_search_start = run_end;
+
+                    if run_start == run_end {
+                        continue;
+                    }
+
+                    for index in chunk_start..chunk_end {
+                        let bit = 1u64 << (index - chunk_start);
+                        if dropped & bit != 0 {
+                            continue;
+                        }
+                        let (addr, ..) = nets[index].to_bits();
+                        let target = addr & ancestor_mask;
+                        let found = nets[run_start..run_end]
+                            .binary_search_by_key(&target, |net| net.to_bits().0)
+                            .is_ok();
+                        if found {
+                            dropped |= bit;
+                        }
+                    }
+                }
+            }
+        }
+
+        for index in chunk_start..chunk_end {
+            if dropped & (1u64 << (index - chunk_start)) == 0 {
+                nets.swap(kept_len, index);
+                kept_len += 1;
+            }
+        }
+
+        chunk_start = chunk_end;
+    }
+
+    kept_len
+}
+
+/// Partitions a slice of bi-contiguous IPv6 networks in place: drops exact
+/// duplicates and networks strictly contained in another network of the
+/// slice.
+///
+/// Returns `k`, the length of the surviving prefix. After the call:
+/// - `nets[..k]` holds the distinct, maximal input values: no value is strictly
+///   contained in another, and each distinct value appears exactly once, even
+///   if the input repeated it. This prefix is sorted in ascending order by
+///   `(mask, address)` as 128-bit numbers -- a canonical order that depends
+///   only on the input's values, not on their original order or on how the
+///   algorithm happened to process them.
+/// - `nets[k..]` holds the dropped elements, as a multiset in unspecified
+///   order.
+/// - The whole slice stays a permutation of the input (elements are only ever
+///   swapped, never overwritten), and the union of addresses in `nets[..k]`
+///   equals the union of addresses in the original input.
+///
+/// This finds only PAIRWISE containment: a network is dropped when some
+/// single other network in the slice already contains it. It does not find
+/// containment implied by several networks jointly -- three networks can
+/// combine to cover a fourth exactly, with no single one of them containing
+/// it, and that fourth network survives here. Removing it too needs
+/// aggregation, not this function.
+///
+/// # Complexity
+///
+/// `O(N log N)` for the initial sort, plus one of two routed passes chosen
+/// by input size: below a measured element-count threshold, an `O(N^2)`
+/// full-slice scan (a smaller constant factor per pair, which wins at small
+/// N); at or above it, an `O(N * S * log N)` pass that probes each network
+/// against every other present `(hi_prefix, lo_prefix)` mask shape that
+/// could contain it (`S` = number of distinct shapes present), using binary
+/// search restricted to the already-classified kept prefix. Both passes are
+/// alloc-free and produce bit-for-bit identical results -- the threshold
+/// only changes speed.
+///
+/// # Examples
+///
+/// ```
+/// use netip::{BiContiguous, Ipv6Network, ipv6_bicontiguous_find_containment};
+///
+/// let mut nets = [
+///     BiContiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap(),
+///     // Contained in the network above: same hi half, narrower lo half.
+///     BiContiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap(),
+///     BiContiguous::<Ipv6Network>::parse("2001:db9::/32").unwrap(),
+/// ];
+///
+/// let k = ipv6_bicontiguous_find_containment(&mut nets);
+/// assert_eq!(2, k);
+/// assert_eq!(
+///     BiContiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap(),
+///     nets[0]
+/// );
+/// assert_eq!(
+///     BiContiguous::<Ipv6Network>::parse("2001:db9::/32").unwrap(),
+///     nets[1]
+/// );
+/// ```
+#[must_use]
+pub fn ipv6_bicontiguous_find_containment(nets: &mut [BiContiguous<Ipv6Network>]) -> usize {
+    if nets.len() <= 1 {
+        return nets.len();
+    }
+
+    nets.sort_unstable_by_key(bicontiguous_sort_key);
+
+    if nets.len() < CONTAINMENT_THRESHOLD {
+        bicontiguous_containment_quadratic(nets)
+    } else {
+        bicontiguous_containment_probe(nets)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use core::cmp::Ordering;
@@ -7547,6 +7884,269 @@ mod test {
 
         assert_eq!(Some(example1), example1.intersection(&example2));
         assert_eq!(Some(example1), example2.intersection(&example1));
+    }
+
+    // Builds `count` distinct, pairwise-never-contained `BiContiguous<Ipv6Network>`
+    // values, all sharing the same deep `(40, 40)` shape. Fixing bit 63 of
+    // both halves to `1` and encoding `index` starting at bit 30 (well above
+    // the mask's bit-24 cutoff, and using enough bits that up to 128 distinct
+    // indices never collide after masking) guarantees distinctness and
+    // guarantees no cross-shape containment with the shallow fixtures these
+    // are mixed with below -- deterministically, not just with high
+    // probability.
+    fn bicontiguous_ipv6_never_contained_fixture(count: usize) -> Vec<BiContiguous<Ipv6Network>> {
+        let mask = bicontiguous_shape_mask(40, 40);
+        (0..count)
+            .map(|index| {
+                let half = 0x8000000000000000u64 | ((index as u64) << 30);
+                let addr = ((half as u128) << 64) | half as u128;
+                BiContiguous::try_from(Ipv6Network::from_bits(addr & mask, mask)).unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_find_containment_empty() {
+        let mut nets: Vec<BiContiguous<Ipv6Network>> = Vec::new();
+        assert_eq!(0, ipv6_bicontiguous_find_containment(&mut nets));
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_find_containment_single() {
+        let net = BiContiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let mut nets = [net];
+        assert_eq!(1, ipv6_bicontiguous_find_containment(&mut nets));
+        assert_eq!([net], nets);
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_find_containment_deduplicates() {
+        let net = BiContiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let mut nets = [net, net, net];
+        let k = ipv6_bicontiguous_find_containment(&mut nets);
+        assert_eq!(1, k);
+        assert_eq!(net, nets[0]);
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_find_containment_drops_contained() {
+        let container = BiContiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let first_child = BiContiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap();
+        let second_child = BiContiguous::<Ipv6Network>::parse("2001:db8:2::/48").unwrap();
+
+        let mut nets = [first_child, container, second_child];
+        let k = ipv6_bicontiguous_find_containment(&mut nets);
+
+        assert_eq!(1, k);
+        assert_eq!(container, nets[0]);
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_find_containment_preserves_disjoint() {
+        let first = BiContiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let second = BiContiguous::<Ipv6Network>::parse("2001:db9::/32").unwrap();
+        let third = BiContiguous::<Ipv6Network>::parse("2001:dba::/32").unwrap();
+
+        let mut nets = [third, first, second];
+        let k = ipv6_bicontiguous_find_containment(&mut nets);
+
+        assert_eq!(3, k);
+        // The kept prefix is sorted ascending by `(mask, address)`; all three
+        // share the same mask here, so this reduces to address order.
+        assert_eq!([first, second, third], nets);
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_find_containment_mask_zero_is_universal_container() {
+        let universal = BiContiguous::try_from(Ipv6Network::from_bits(0, 0)).unwrap();
+        let a = BiContiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let b = BiContiguous::<Ipv6Network>::parse("fe80::/10").unwrap();
+
+        let mut nets = [a, universal, b];
+        let k = ipv6_bicontiguous_find_containment(&mut nets);
+
+        assert_eq!(1, k);
+        assert_eq!(universal, nets[0]);
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_find_containment_shape_64_64_full_addresses() {
+        let a = BiContiguous::<Ipv6Network>::parse("::1/128").unwrap();
+        let b = BiContiguous::<Ipv6Network>::parse("::2/128").unwrap();
+        let c = BiContiguous::<Ipv6Network>::parse("::3/128").unwrap();
+
+        assert_eq!(64, a.hi_prefix());
+        assert_eq!(64, a.lo_prefix());
+
+        let mut nets = [c, a, b];
+        let k = ipv6_bicontiguous_find_containment(&mut nets);
+
+        assert_eq!(3, k);
+        assert_eq!([a, b, c], nets);
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_find_containment_all_equal_input() {
+        let net = BiContiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let mut nets = vec![net; 40];
+        let k = ipv6_bicontiguous_find_containment(&mut nets);
+        assert_eq!(1, k);
+        assert_eq!(net, nets[0]);
+    }
+
+    // A duplicate run longer than 64 elements forces the probe path's chunk
+    // splitting: the run cannot fit in a single `dropped` bitmask, so the
+    // duplicate check must correctly carry across the chunk boundary via
+    // `nets[kept_len - 1]`.
+    #[test]
+    fn bicontiguous_ipv6_find_containment_duplicate_run_longer_than_64() {
+        let net = BiContiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let mut nets = vec![net; CONTAINMENT_THRESHOLD + 10];
+        assert!(nets.len() > 64 && nets.len() >= CONTAINMENT_THRESHOLD);
+
+        let k = ipv6_bicontiguous_find_containment(&mut nets);
+        assert_eq!(1, k);
+        assert_eq!(net, nets[0]);
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_find_containment_chain() {
+        // `depth == 0` is `(addr = 0, mask = 0)`, the universal container;
+        // each deeper level reveals one more bit of `base` on both halves,
+        // nested inside the previous level.
+        let base = u128::MAX;
+        let mut nets: Vec<BiContiguous<Ipv6Network>> = (0u8..40)
+            .map(|depth| {
+                let mask = bicontiguous_shape_mask(depth, depth);
+                BiContiguous::try_from(Ipv6Network::from_bits(base & mask, mask)).unwrap()
+            })
+            .collect();
+        nets.reverse(); // Feed it in descending-depth order, not already sorted.
+
+        let k = ipv6_bicontiguous_find_containment(&mut nets);
+
+        assert_eq!(1, k);
+        assert_eq!(BiContiguous::try_from(Ipv6Network::from_bits(0, 0)).unwrap(), nets[0]);
+    }
+
+    // Neither shape dominates the other (`(60, 4)` has a deeper hi half but
+    // shallower lo half than `(4, 60)`), so no element of one shape can ever
+    // contain an element of the other, regardless of address bits -- only
+    // same-shape duplicates could be dropped, and this fixture has none.
+    #[test]
+    fn bicontiguous_ipv6_find_containment_shape_antichain_preserved() {
+        let mask_a = bicontiguous_shape_mask(60, 4);
+        let mask_b = bicontiguous_shape_mask(4, 60);
+
+        let mut nets: Vec<BiContiguous<Ipv6Network>> = (0u64..10)
+            .flat_map(|index| {
+                let half = 0x8000000000000000u64 | (index << 30);
+                let addr = ((half as u128) << 64) | half as u128;
+                [
+                    BiContiguous::try_from(Ipv6Network::from_bits(addr & mask_a, mask_a)).unwrap(),
+                    BiContiguous::try_from(Ipv6Network::from_bits(addr & mask_b, mask_b)).unwrap(),
+                ]
+            })
+            .collect();
+
+        let len = nets.len();
+        let k = ipv6_bicontiguous_find_containment(&mut nets);
+        assert_eq!(len, k);
+    }
+
+    // The overview's T-1D-ADJ counterexample: `a` (hi /1, lo /2) strictly
+    // contains `b` (hi /2, lo /4), but `c` (same shape as `b`, different lo
+    // bits) sorts between them by `(mask, address)`. A scan that only checks
+    // adjacent pairs in sort order would find neither `(a, c)` nor `(c, b)`
+    // containing and wrongly keep `b`; probing every dominated shape (not
+    // just the neighbor) is what makes this correct.
+    #[test]
+    fn bicontiguous_ipv6_find_containment_non_adjacent_ancestor() {
+        let a = BiContiguous::<Ipv6Network>::parse("0:0:0:0:4000:0:0:0/8000:0:0:0:c000:0:0:0").unwrap();
+        let b = BiContiguous::<Ipv6Network>::parse("0:0:0:0:4000:0:0:0/c000:0:0:0:f000:0:0:0").unwrap();
+        let c = BiContiguous::<Ipv6Network>::parse("::/c000:0:0:0:f000:0:0:0").unwrap();
+
+        assert_eq!((1, 2), (a.hi_prefix(), a.lo_prefix()));
+        assert_eq!((2, 4), (b.hi_prefix(), b.lo_prefix()));
+        assert_eq!((2, 4), (c.hi_prefix(), c.lo_prefix()));
+        assert!(a.contains(&b));
+        assert!(!a.contains(&c));
+
+        let mut nets = [b, a, c];
+        let k = ipv6_bicontiguous_find_containment(&mut nets);
+
+        assert_eq!(2, k);
+        assert_eq!([a, c], nets[..k]);
+    }
+
+    // Same counterexample as above, padded with a never-contained fixture up
+    // to `CONTAINMENT_THRESHOLD` elements to force the probe path (the test
+    // above only ever exercises the quadratic path).
+    #[test]
+    fn bicontiguous_ipv6_find_containment_non_adjacent_ancestor_probe_path() {
+        let a = BiContiguous::<Ipv6Network>::parse("0:0:0:0:4000:0:0:0/8000:0:0:0:c000:0:0:0").unwrap();
+        let b = BiContiguous::<Ipv6Network>::parse("0:0:0:0:4000:0:0:0/c000:0:0:0:f000:0:0:0").unwrap();
+        let c = BiContiguous::<Ipv6Network>::parse("::/c000:0:0:0:f000:0:0:0").unwrap();
+
+        let mut nets = vec![b, a, c];
+        nets.extend(bicontiguous_ipv6_never_contained_fixture(CONTAINMENT_THRESHOLD));
+        let len = nets.len();
+        assert!(len >= CONTAINMENT_THRESHOLD);
+
+        let k = ipv6_bicontiguous_find_containment(&mut nets);
+
+        assert_eq!(len - 1, k);
+        assert!(nets[..k].contains(&a));
+        assert!(nets[..k].contains(&c));
+        assert!(!nets[..k].contains(&b));
+    }
+
+    // Both algorithms must agree, element for element, right at the router's
+    // decision boundary -- the routing threshold is a pure speed choice, so
+    // this is part of the canonical contract, not just an implementation
+    // detail.
+    #[test]
+    fn bicontiguous_ipv6_find_containment_router_boundary_agrees() {
+        for &count in &[
+            CONTAINMENT_THRESHOLD - 1,
+            CONTAINMENT_THRESHOLD,
+            CONTAINMENT_THRESHOLD + 1,
+        ] {
+            let mut via_quadratic = bicontiguous_ipv6_never_contained_fixture(count);
+            via_quadratic.sort_unstable_by_key(bicontiguous_sort_key);
+            let mut via_probe = via_quadratic.clone();
+
+            let k_quadratic = bicontiguous_containment_quadratic(&mut via_quadratic);
+            let k_probe = bicontiguous_containment_probe(&mut via_probe);
+
+            assert_eq!(k_quadratic, k_probe, "count={count}");
+            assert_eq!(via_quadratic[..k_quadratic], via_probe[..k_probe], "count={count}");
+
+            let mut via_router = bicontiguous_ipv6_never_contained_fixture(count);
+            let k_router = ipv6_bicontiguous_find_containment(&mut via_router);
+            assert_eq!(k_quadratic, k_router, "count={count}");
+        }
+    }
+
+    // The two motivating masks from the `BiContiguous` design (see the type
+    // docs): `wider`'s lo half (/16) contains `narrower`'s (/32) since both
+    // share the same hi half (/40); `disjoint` differs in the hi half
+    // entirely, so despite its shape (/32, contiguous) numerically dominating
+    // both, its address does not match either and it survives untouched.
+    #[test]
+    fn bicontiguous_ipv6_find_containment_motivating_masks() {
+        let narrower =
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        let wider = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0:0/ffff:ffff:ff00::ffff:0:0:0").unwrap();
+        let disjoint = BiContiguous::<Ipv6Network>::parse("2a02:6b9::/32").unwrap();
+
+        let mut nets = [narrower, wider, disjoint];
+        let k = ipv6_bicontiguous_find_containment(&mut nets);
+
+        assert_eq!(2, k);
+        assert!(nets[..k].contains(&wider));
+        assert!(nets[..k].contains(&disjoint));
+        assert!(!nets[..k].contains(&narrower));
     }
 
     // The following `parse_pin_*` tests pin the exact `IpNetParseError` variant
@@ -9666,6 +10266,278 @@ mod test {
             actual.dedup();
 
             prop_assert_eq!(expected, actual);
+        }
+    }
+
+    // Independent brute-force oracle for `ipv6_bicontiguous_find_containment`:
+    // dedupes by value, then keeps a value only if no OTHER distinct-mask
+    // value in the deduped set contains it. Shares only `.contains()`/`.mask()`
+    // with the real implementation, none of its sort/chunk/probe machinery.
+    fn reference_bicontiguous_containment(nets: &[BiContiguous<Ipv6Network>]) -> Vec<BiContiguous<Ipv6Network>> {
+        let mut distinct: Vec<BiContiguous<Ipv6Network>> = Vec::new();
+        for &net in nets {
+            if !distinct.contains(&net) {
+                distinct.push(net);
+            }
+        }
+
+        let mut maximal: Vec<BiContiguous<Ipv6Network>> = distinct
+            .iter()
+            .copied()
+            .filter(|&candidate| {
+                !distinct
+                    .iter()
+                    .any(|other| other.mask() != candidate.mask() && other.contains(&candidate))
+            })
+            .collect();
+
+        maximal.sort_unstable_by_key(bicontiguous_sort_key);
+        maximal
+    }
+
+    // Runs both the direct quadratic/probe paths and the public router on
+    // `nets`, and checks every facet of the contract against each other and
+    // against the independent oracle above:
+    // - the two direct paths agree on the exact kept-prefix sequence and on the
+    //   dropped multiset (differential test);
+    // - the kept prefix is sorted by `bicontiguous_sort_key` (canonical order);
+    // - the kept prefix matches the brute-force oracle exactly (correctness);
+    // - the whole output is a permutation of the input (nothing added or lost);
+    // - the public router agrees with the direct quadratic path regardless of which
+    //   internal path it actually took.
+    fn assert_bicontiguous_containment_matches_oracle(nets: Vec<BiContiguous<Ipv6Network>>) {
+        let expected = reference_bicontiguous_containment(&nets);
+
+        let mut via_quadratic = nets.clone();
+        via_quadratic.sort_unstable_by_key(bicontiguous_sort_key);
+        let mut via_probe = via_quadratic.clone();
+
+        let k_quadratic = bicontiguous_containment_quadratic(&mut via_quadratic);
+        let k_probe = bicontiguous_containment_probe(&mut via_probe);
+
+        assert_eq!(
+            k_quadratic, k_probe,
+            "quadratic/probe kept-length mismatch for {nets:?}"
+        );
+        assert_eq!(
+            via_quadratic[..k_quadratic],
+            via_probe[..k_probe],
+            "quadratic/probe kept-prefix mismatch for {nets:?}"
+        );
+
+        let mut quadratic_tail = via_quadratic[k_quadratic..].to_vec();
+        let mut probe_tail = via_probe[k_probe..].to_vec();
+        quadratic_tail.sort_unstable_by_key(bicontiguous_sort_key);
+        probe_tail.sort_unstable_by_key(bicontiguous_sort_key);
+        assert_eq!(
+            quadratic_tail, probe_tail,
+            "dropped multiset mismatch between paths for {nets:?}"
+        );
+
+        assert!(
+            via_quadratic[..k_quadratic].is_sorted_by_key(bicontiguous_sort_key),
+            "kept prefix is not canonically sorted for {nets:?}"
+        );
+        assert_eq!(
+            expected,
+            via_quadratic[..k_quadratic],
+            "result does not match the brute-force oracle for {nets:?}"
+        );
+
+        let mut input_sorted = nets.clone();
+        input_sorted.sort_unstable_by_key(bicontiguous_sort_key);
+        let mut output_sorted = via_quadratic.clone();
+        output_sorted.sort_unstable_by_key(bicontiguous_sort_key);
+        assert_eq!(
+            input_sorted, output_sorted,
+            "output is not a permutation of the input for {nets:?}"
+        );
+
+        let mut via_router = nets;
+        let k_router = ipv6_bicontiguous_find_containment(&mut via_router);
+        assert_eq!(k_quadratic, k_router, "router disagrees with the direct quadratic path");
+        assert_eq!(
+            via_quadratic[..k_quadratic],
+            via_router[..k_router],
+            "router kept-prefix mismatch"
+        );
+    }
+
+    fn arb_bicontiguous_ipv6_networks() -> impl Strategy<Value = Vec<BiContiguous<Ipv6Network>>> {
+        (1usize..=40).prop_flat_map(|len| prop::collection::vec(arb_bicontiguous_ipv6_network(), len))
+    }
+
+    // A small pool of distinct networks, resampled with replacement well past
+    // 64 elements, so a single value's run of duplicates can span more than
+    // one probe-path chunk.
+    fn arb_bicontiguous_ipv6_networks_duplicate_heavy() -> impl Strategy<Value = Vec<BiContiguous<Ipv6Network>>> {
+        (2usize..=6, 1usize..=150).prop_flat_map(|(pool_size, len)| {
+            prop::collection::vec(arb_bicontiguous_ipv6_network(), pool_size).prop_flat_map(move |pool| {
+                prop::collection::vec(0..pool_size, len)
+                    .prop_map(move |picks| picks.iter().map(|&index| pool[index]).collect())
+            })
+        })
+    }
+
+    // A strict nesting chain: level 0 is `(addr = 0, mask = 0)`, the
+    // universal container; each deeper level reveals one more bit of `base`
+    // on both halves, so level `i` always contains every level `> i`.
+    fn arb_bicontiguous_ipv6_nesting_chain() -> impl Strategy<Value = Vec<BiContiguous<Ipv6Network>>> {
+        (any::<u128>(), 2u8..=40).prop_map(|(base, chain_len)| {
+            (0..chain_len)
+                .map(|depth| {
+                    let mask = bicontiguous_shape_mask(depth, depth);
+                    BiContiguous::try_from(Ipv6Network::from_bits(base & mask, mask)).unwrap()
+                })
+                .collect()
+        })
+    }
+
+    // Shapes `(60, 4)` and `(4, 60)`: neither dominates the other (one has a
+    // deeper hi half, the other a deeper lo half), so no element of one shape
+    // can ever contain an element of the other -- the only possible drops in
+    // this fixture are exact duplicates.
+    fn arb_bicontiguous_ipv6_shape_antichain_networks() -> impl Strategy<Value = Vec<BiContiguous<Ipv6Network>>> {
+        prop::collection::vec((any::<u128>(), any::<bool>()), 1..=30).prop_map(|picks| {
+            picks
+                .into_iter()
+                .map(|(addr, use_first_shape)| {
+                    let mask = if use_first_shape {
+                        bicontiguous_shape_mask(60, 4)
+                    } else {
+                        bicontiguous_shape_mask(4, 60)
+                    };
+                    BiContiguous::try_from(Ipv6Network::from_bits(addr & mask, mask)).unwrap()
+                })
+                .collect()
+        })
+    }
+
+    // Mirrors the maintainer's real-world shapes: hi half /40 (a "site"), lo
+    // half either /32 or /16 (shared across a small pool of sites, so
+    // same-site networks of different shapes can legitimately contain each
+    // other, unlike the antichain fixture above).
+    fn arb_bicontiguous_ipv6_geo_networks() -> impl Strategy<Value = Vec<BiContiguous<Ipv6Network>>> {
+        prop::collection::vec(any::<u64>(), 1..=4).prop_flat_map(|sites| {
+            let sites_len = sites.len();
+            prop::collection::vec((0..sites_len, any::<u64>(), any::<bool>()), 1..=40).prop_map(move |picks| {
+                picks
+                    .into_iter()
+                    .map(|(site_index, lo, use_narrow_lo)| {
+                        let hi = sites[site_index];
+                        let lo_prefix = if use_narrow_lo { 32 } else { 16 };
+                        let mask = bicontiguous_shape_mask(40, lo_prefix);
+                        let addr = ((hi as u128) << 64) | lo as u128;
+                        BiContiguous::try_from(Ipv6Network::from_bits(addr & mask, mask)).unwrap()
+                    })
+                    .collect()
+            })
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn prop_bicontiguous_ipv6_find_containment_matches_oracle_random(nets in arb_bicontiguous_ipv6_networks()) {
+            assert_bicontiguous_containment_matches_oracle(nets);
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_find_containment_matches_oracle_duplicate_heavy(
+            nets in arb_bicontiguous_ipv6_networks_duplicate_heavy()
+        ) {
+            assert_bicontiguous_containment_matches_oracle(nets);
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_find_containment_matches_oracle_nesting_chain(
+            nets in arb_bicontiguous_ipv6_nesting_chain()
+        ) {
+            assert_bicontiguous_containment_matches_oracle(nets);
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_find_containment_matches_oracle_shape_antichain(
+            nets in arb_bicontiguous_ipv6_shape_antichain_networks()
+        ) {
+            assert_bicontiguous_containment_matches_oracle(nets);
+        }
+
+        #[test]
+        fn prop_bicontiguous_ipv6_find_containment_matches_oracle_geo(nets in arb_bicontiguous_ipv6_geo_networks()) {
+            assert_bicontiguous_containment_matches_oracle(nets);
+        }
+
+        // Running the function again on its own output must be a no-op: the
+        // result is already maximal and duplicate-free.
+        #[test]
+        fn prop_bicontiguous_ipv6_find_containment_idempotent(nets in arb_bicontiguous_ipv6_networks()) {
+            let mut once = nets;
+            let k_once = ipv6_bicontiguous_find_containment(&mut once);
+            let mut twice = once[..k_once].to_vec();
+            let k_twice = ipv6_bicontiguous_find_containment(&mut twice);
+
+            prop_assert_eq!(k_once, k_twice);
+            prop_assert_eq!(&once[..k_once], &twice[..k_twice]);
+        }
+
+        // The result order does not depend on the input order: feeding the
+        // same multiset in reverse produces the same kept prefix.
+        #[test]
+        fn prop_bicontiguous_ipv6_find_containment_independent_of_input_order(
+            nets in arb_bicontiguous_ipv6_networks()
+        ) {
+            let mut forward = nets.clone();
+            let mut backward = nets;
+            backward.reverse();
+
+            let k_forward = ipv6_bicontiguous_find_containment(&mut forward);
+            let k_backward = ipv6_bicontiguous_find_containment(&mut backward);
+
+            prop_assert_eq!(k_forward, k_backward);
+            prop_assert_eq!(&forward[..k_forward], &backward[..k_backward]);
+        }
+
+        // Direct correctness check independent of the oracle helper above:
+        // no element of the kept prefix strictly contains another.
+        #[test]
+        fn prop_bicontiguous_ipv6_find_containment_result_has_no_containment(
+            nets in arb_bicontiguous_ipv6_networks()
+        ) {
+            let mut nets = nets;
+            let k = ipv6_bicontiguous_find_containment(&mut nets);
+
+            for i in 0..k {
+                for j in 0..k {
+                    if i != j {
+                        prop_assert!(!(nets[i].mask() != nets[j].mask() && nets[i].contains(&nets[j])));
+                    }
+                }
+            }
+        }
+
+        // Brute-force membership on a bounded address space: the union of
+        // addresses covered by the kept prefix equals the union covered by
+        // the original input.
+        #[test]
+        fn prop_bicontiguous_ipv6_find_containment_preserves_addresses(
+            nets in prop::collection::vec(arb_small_bicontiguous_ipv6_network(), 1..=6)
+        ) {
+            use std::collections::HashSet;
+
+            let mut before: HashSet<_> = HashSet::new();
+            for net in &nets {
+                before.extend(net.addrs());
+            }
+
+            let mut nets = nets;
+            let k = ipv6_bicontiguous_find_containment(&mut nets);
+
+            let mut after: HashSet<_> = HashSet::new();
+            for net in &nets[..k] {
+                after.extend(net.addrs());
+            }
+
+            prop_assert_eq!(before, after);
         }
     }
 
