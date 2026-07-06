@@ -349,6 +349,173 @@ fn bench_contiguous_contains(c: &mut Criterion) {
     group.finish();
 }
 
+// Consumes a boxed `dyn Iterator` from behind an `#[inline(never)]` boundary
+// so `iter.next()` is a genuine indirect call through the vtable rather than
+// something the optimizer can devirtualize back into a concrete, hoistable
+// loop -- this is the scenario where `Contiguous`'s hard-wired iterator has a
+// real, reproducible edge over the general one (unlike a plain `for` loop,
+// where LLVM already hoists the per-item mask-contiguity check).
+#[inline(never)]
+fn consume_boxed_v4(iter: Box<dyn Iterator<Item = Ipv4Addr>>) -> u32 {
+    let mut acc = 0u32;
+    for addr in iter {
+        acc ^= addr.to_bits();
+    }
+    acc
+}
+
+#[inline(never)]
+fn consume_boxed_v6(iter: Box<dyn Iterator<Item = Ipv6Addr>>) -> u128 {
+    let mut acc = 0u128;
+    for addr in iter {
+        acc ^= addr.to_bits();
+    }
+    acc
+}
+
+fn bench_contiguous_addrs(c: &mut Criterion) {
+    use netip::Contiguous;
+
+    let mut group = c.benchmark_group("netip");
+
+    // `net`/`other` are re-black-boxed on every `b.iter()` call (not just the
+    // yielded addresses) so the compiler can't prove the whole loop is
+    // invariant across the repeated outer benchmark loop and hoist/CSE it
+    // away entirely -- that hoisting is a real risk here since these loops
+    // are small enough to fully inline, unlike the bigger general iterator.
+
+    group.throughput(Throughput::Elements(65536));
+    group.bench_function("Contiguous<Ipv4Network>::addrs /16", |b| {
+        let net = Contiguous::<Ipv4Network>::parse("77.88.0.0/16").unwrap();
+        b.iter(|| {
+            for addr in core::hint::black_box(net).addrs() {
+                core::hint::black_box(addr);
+            }
+        });
+    });
+
+    group.bench_function("Ipv4Network::addrs via Deref /16", |b| {
+        let net = Contiguous::<Ipv4Network>::parse("77.88.0.0/16").unwrap();
+        b.iter(|| {
+            for addr in (*core::hint::black_box(net)).addrs() {
+                core::hint::black_box(addr);
+            }
+        });
+    });
+
+    group.bench_function("Contiguous<Ipv4Network>::addrs boxed dyn Iterator /16", |b| {
+        let net = Contiguous::<Ipv4Network>::parse("77.88.0.0/16").unwrap();
+        b.iter(|| {
+            let iter: Box<dyn Iterator<Item = Ipv4Addr>> = Box::new(core::hint::black_box(net).addrs());
+            core::hint::black_box(consume_boxed_v4(iter));
+        });
+    });
+
+    group.bench_function("Ipv4Network::addrs via Deref boxed dyn Iterator /16", |b| {
+        let net = Contiguous::<Ipv4Network>::parse("77.88.0.0/16").unwrap();
+        b.iter(|| {
+            let iter: Box<dyn Iterator<Item = Ipv4Addr>> = Box::new((*core::hint::black_box(net)).addrs());
+            core::hint::black_box(consume_boxed_v4(iter));
+        });
+    });
+
+    group.bench_function("Contiguous<Ipv4Network>::addrs zip /16", |b| {
+        let net = Contiguous::<Ipv4Network>::parse("77.88.0.0/16").unwrap();
+        let other = Contiguous::<Ipv4Network>::parse("77.89.0.0/16").unwrap();
+        b.iter(|| {
+            let mut acc = 0u32;
+            for (x, y) in core::hint::black_box(net)
+                .addrs()
+                .zip(core::hint::black_box(other).addrs())
+            {
+                acc ^= x.to_bits() ^ y.to_bits();
+            }
+            core::hint::black_box(acc);
+        });
+    });
+
+    group.bench_function("Ipv4Network::addrs via Deref zip /16", |b| {
+        let net = Contiguous::<Ipv4Network>::parse("77.88.0.0/16").unwrap();
+        let other = Contiguous::<Ipv4Network>::parse("77.89.0.0/16").unwrap();
+        b.iter(|| {
+            let mut acc = 0u32;
+            for (x, y) in (*core::hint::black_box(net))
+                .addrs()
+                .zip((*core::hint::black_box(other)).addrs())
+            {
+                acc ^= x.to_bits() ^ y.to_bits();
+            }
+            core::hint::black_box(acc);
+        });
+    });
+
+    group.bench_function("Contiguous<Ipv6Network>::addrs /112", |b| {
+        let net = Contiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0/112").unwrap();
+        b.iter(|| {
+            for addr in core::hint::black_box(net).addrs() {
+                core::hint::black_box(addr);
+            }
+        });
+    });
+
+    group.bench_function("Ipv6Network::addrs via Deref /112", |b| {
+        let net = Contiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0/112").unwrap();
+        b.iter(|| {
+            for addr in (*core::hint::black_box(net)).addrs() {
+                core::hint::black_box(addr);
+            }
+        });
+    });
+
+    group.bench_function("Contiguous<Ipv6Network>::addrs boxed dyn Iterator /112", |b| {
+        let net = Contiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0/112").unwrap();
+        b.iter(|| {
+            let iter: Box<dyn Iterator<Item = Ipv6Addr>> = Box::new(core::hint::black_box(net).addrs());
+            core::hint::black_box(consume_boxed_v6(iter));
+        });
+    });
+
+    group.bench_function("Ipv6Network::addrs via Deref boxed dyn Iterator /112", |b| {
+        let net = Contiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0/112").unwrap();
+        b.iter(|| {
+            let iter: Box<dyn Iterator<Item = Ipv6Addr>> = Box::new((*core::hint::black_box(net)).addrs());
+            core::hint::black_box(consume_boxed_v6(iter));
+        });
+    });
+
+    group.bench_function("Contiguous<Ipv6Network>::addrs zip /112", |b| {
+        let net = Contiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0/112").unwrap();
+        let other = Contiguous::<Ipv6Network>::parse("2a02:6b8:c00::1235:0:0/112").unwrap();
+        b.iter(|| {
+            let mut acc = 0u128;
+            for (x, y) in core::hint::black_box(net)
+                .addrs()
+                .zip(core::hint::black_box(other).addrs())
+            {
+                acc ^= x.to_bits() ^ y.to_bits();
+            }
+            core::hint::black_box(acc);
+        });
+    });
+
+    group.bench_function("Ipv6Network::addrs via Deref zip /112", |b| {
+        let net = Contiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:0:0/112").unwrap();
+        let other = Contiguous::<Ipv6Network>::parse("2a02:6b8:c00::1235:0:0/112").unwrap();
+        b.iter(|| {
+            let mut acc = 0u128;
+            for (x, y) in (*core::hint::black_box(net))
+                .addrs()
+                .zip((*core::hint::black_box(other)).addrs())
+            {
+                acc ^= x.to_bits() ^ y.to_bits();
+            }
+            core::hint::black_box(acc);
+        });
+    });
+
+    group.finish();
+}
+
 fn bench_merge(c: &mut Criterion) {
     let mut group = c.benchmark_group("netip");
 
@@ -1312,6 +1479,7 @@ criterion_group!(
     bench_intersection,
     bench_contains,
     bench_contiguous_contains,
+    bench_contiguous_addrs,
     bench_merge,
     bench_is_adjacent,
     bench_is_contiguous,
