@@ -20,7 +20,7 @@ use core::{
 mod bicontiguous;
 mod contiguous;
 
-pub use bicontiguous::{BiContiguous, BiContiguousIpNetParseError, ipv6_bicontiguous_find_containment};
+pub use bicontiguous::{BiContiguous, BiContiguousIpNetParseError};
 pub use contiguous::{Contiguous, ContiguousIpNetParseError};
 
 const IPV4_ALL_BITS: Ipv4Addr = Ipv4Addr::new(0xff, 0xff, 0xff, 0xff);
