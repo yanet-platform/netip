@@ -265,26 +265,16 @@ impl From<MacAddr> for [u8; 6] {
 
 impl Display for MacAddr {
     fn fmt(&self, fmt: &mut Formatter) -> Result<(), fmt::Error> {
-        let [a, b, c, d, e, f] = self.octets();
+        let octets = self.octets();
 
-        // Build the canonical `xx:xx:xx:xx:xx:xx` representation on the
-        // stack, then emit it through a single write_str instead of 11
-        // fragment writes (6 hex fields + 5 colons) into the Formatter.
-        let mut buf = [0u8; 17];
-        buf[0..2].copy_from_slice(&hex_octet(a));
-        buf[2] = b':';
-        buf[3..5].copy_from_slice(&hex_octet(b));
-        buf[5] = b':';
-        buf[6..8].copy_from_slice(&hex_octet(c));
-        buf[8] = b':';
-        buf[9..11].copy_from_slice(&hex_octet(d));
-        buf[11] = b':';
-        buf[12..14].copy_from_slice(&hex_octet(e));
-        buf[14] = b':';
-        buf[15..17].copy_from_slice(&hex_octet(f));
+        // Colon separators land at 2, 5, 8, 11, 14 by construction (every
+        // third byte) and are never overwritten by the loop below.
+        let mut buf = [b':'; 17];
+        for (i, &octet) in octets.iter().enumerate() {
+            buf[3 * i..3 * i + 2].copy_from_slice(&hex_octet(octet));
+        }
 
-        // SAFETY: every byte written above is an ASCII hex digit or `b':'`.
-        fmt.write_str(unsafe { str::from_utf8_unchecked(&buf) })
+        fmt.write_str(str::from_utf8(&buf).expect("buffer holds only ASCII hex digits and ':', always valid UTF-8"))
     }
 }
 
