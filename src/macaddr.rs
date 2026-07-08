@@ -271,7 +271,8 @@ impl Display for MacAddr {
         // third byte) and are never overwritten by the loop below.
         let mut buf = [b':'; 17];
         for (i, &octet) in octets.iter().enumerate() {
-            buf[3 * i..3 * i + 2].copy_from_slice(&hex_octet(octet));
+            buf[3 * i] = hex_nibble(octet >> 4);
+            buf[3 * i + 1] = hex_nibble(octet & 0x0f);
         }
 
         fmt.write_str(str::from_utf8(&buf).expect("buffer holds only ASCII hex digits and ':', always valid UTF-8"))
@@ -287,12 +288,6 @@ impl Display for MacAddr {
 const fn hex_nibble(nibble: u8) -> u8 {
     let is_letter = (nibble > 9) as u8;
     nibble + b'0' + is_letter * (b'a' - b'0' - 10)
-}
-
-/// Encodes a byte as its two-digit lowercase ASCII hex representation.
-#[inline]
-const fn hex_octet(byte: u8) -> [u8; 2] {
-    [hex_nibble(byte >> 4), hex_nibble(byte & 0x0f)]
 }
 
 impl FromStr for MacAddr {
@@ -426,21 +421,16 @@ mod test {
     }
 
     #[test]
-    fn hex_octet_boundaries() {
-        assert_eq!(*b"00", hex_octet(0x00));
-        assert_eq!(*b"ff", hex_octet(0xff));
-        assert_eq!(*b"0a", hex_octet(0x0a));
-        assert_eq!(*b"a0", hex_octet(0xa0));
-    }
-
-    #[test]
-    fn hex_octet_matches_format_spec_for_all_bytes() {
-        // The previous Display impl delegated to `{:02x}` per octet; every
-        // byte value must still encode identically under the new stack-buffer
-        // path.
+    fn hex_nibble_pair_matches_format_spec_for_all_bytes() {
+        // `MacAddr::fmt` encodes each byte as `hex_nibble(byte >> 4)` then
+        // `hex_nibble(byte & 0x0f)`; every byte value must match `{:02x}`.
         for byte in 0..=u8::MAX {
             let expected = format!("{byte:02x}");
-            assert_eq!(expected.as_bytes(), hex_octet(byte), "byte {byte:#04x}");
+            assert_eq!(
+                expected.as_bytes(),
+                [hex_nibble(byte >> 4), hex_nibble(byte & 0x0f)],
+                "byte {byte:#04x}"
+            );
         }
     }
 
