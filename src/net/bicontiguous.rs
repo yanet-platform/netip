@@ -58,37 +58,22 @@ impl Error for BiContiguousIpNetParseError {}
 /// `p = 64`), so upgrading from it is infallible -- see
 /// `From<Contiguous<Ipv6Network>>`.
 ///
-/// Per the wrapper principle, a method gets a behavior-preserving override
-/// either when it runs strictly faster given the bi-contiguous guarantee, or
-/// -- for [`intersection`](Self::intersection) -- when the class is provably
-/// closed under the operation, so the typed result can be returned with zero
-/// extra validation:
-/// - [`is_bicontiguous`](Self::is_bicontiguous) is overridden to a constant
-///   `true`.
-/// - There is no single-prefix accessor equivalent to
-///   [`Contiguous<Ipv6Network>::prefix`]: a bi-contiguous mask generally isn't
-///   describable by one prefix length, so use [`hi_prefix`](Self::hi_prefix) /
-///   [`lo_prefix`](Self::lo_prefix) instead.
-/// - [`Ipv6Network::is_contiguous`] is intentionally NOT overridden: it is only
-///   `true` for the degenerate members of this class (`q == 0 || p == 64`), and
-///   computing the per-half prefix lengths `p`/`q` to check that costs more
-///   than the inner 3-op check, so it stays reachable unchanged through
-///   [`Deref`].
-/// - [`Ipv6Network::merge`] is intentionally NOT overridden either: the class
-///   is not closed under merge (an equal-mask single-bit merge stays
-///   bi-contiguous only when the bit is the bottom bit of its run), so merging
-///   two bi-contiguous networks can leave the class -- it returns a plain
-///   [`Ipv6Network`] through [`Deref`], by design.
-/// - [`Ipv6Network::intersection`] IS overridden, but for closure, not speed:
-///   the class is closed under intersection (mask-or of two class masks is
-///   itself a class mask, each half's prefix becoming the max of the two
-///   inputs' prefixes for that half), so the general result never needs
-///   re-validating before being returned as `Option<Self>`. See
-///   [`intersection`](Self::intersection).
-/// - [`Ipv6Network::intersects`] / [`Ipv6Network::is_disjoint`] are
-///   intentionally NOT overridden: the general 3-op check already tests both
-///   halves of the address in one pass, so checking each half separately would
-///   cost more, not less.
+/// Each specialized method is either strictly faster than the inherited one,
+/// or returns a typed result because the class is closed under the operation;
+/// see each method's "Why overridden?" note for which and why.
+///
+/// Some methods are deliberately NOT specialized and are left to [`Deref`]:
+/// - [`Ipv6Network::merge`] -- the class is not closed under it: an equal-mask
+///   single-bit merge stays in-class only when it clears the bottom bit of a
+///   run, whereas an interior bit punches a hole, so merging returns a plain
+///   [`Ipv6Network`].
+/// - [`Ipv6Network::intersects`] / [`Ipv6Network::is_disjoint`] -- the general
+///   check already tests both halves in one pass, so a per-half version would
+///   cost more.
+/// - No single-prefix accessor equivalent to
+///   [`Contiguous<Ipv6Network>::prefix`] -- a bi-contiguous mask generally
+///   isn't one prefix length; use [`hi_prefix`](Self::hi_prefix) /
+///   [`lo_prefix`](Self::lo_prefix).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BiContiguous<T>(T);
 
@@ -179,10 +164,7 @@ impl BiContiguous<Ipv6Network> {
 
     /// Checks whether this network is a bi-contiguous network.
     ///
-    /// Always returns `true`: the wrapped network is guaranteed to be
-    /// bi-contiguous by the [`BiContiguous`] type invariant, so this
-    /// overrides the [`Ipv6Network::is_bicontiguous`] check with a constant
-    /// result.
+    /// Always returns `true`.
     ///
     /// # Examples
     ///
@@ -192,10 +174,69 @@ impl BiContiguous<Ipv6Network> {
     /// let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
     /// assert!(net.is_bicontiguous());
     /// ```
+    ///
+    /// # Why overridden?
+    ///
+    /// Every value of this type carries the bi-contiguity invariant, so the
+    /// answer is a constant `true`, with no need to inspect the mask.
     #[inline]
     #[must_use]
     pub const fn is_bicontiguous(&self) -> bool {
         true
+    }
+
+    /// Checks whether this network's mask is contiguous, i.e. a single run of
+    /// leading one bits (a plain CIDR mask).
+    ///
+    /// A bi-contiguous mask `concat(1^p 0^(64-p), 1^q 0^(64-q))` collapses to
+    /// one contiguous run exactly when its two halves abut with no interior
+    /// zero between them: either the low half is empty (`q = 0`, so the low
+    /// 64-bit word `lo` of the mask is `0`) or the high half is full (`p =
+    /// 64`, so the high 64-bit word `hi` is `u64::MAX`). If instead `p < 64`
+    /// and `q > 0`, a zero sits between the two runs and the mask is
+    /// bi-contiguous but not contiguous.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{BiContiguous, Ipv6Network};
+    ///
+    /// // `p = 40 < 64` and `q = 32 > 0`: an interior gap sits between the two
+    /// // runs, so the mask is bi-contiguous but not contiguous.
+    /// let net = BiContiguous::<Ipv6Network>::parse(
+    ///     "2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0",
+    /// )
+    /// .unwrap();
+    /// assert!(!net.is_contiguous());
+    ///
+    /// // `q = 0`: the low half is empty, so the lone high run is a plain CIDR
+    /// // mask.
+    /// let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
+    /// assert!(net.is_contiguous());
+    ///
+    /// // `p = 64`: the high half is all ones, so the two runs abut and the
+    /// // mask is contiguous.
+    /// let net = BiContiguous::<Ipv6Network>::parse("2001:db8::/96").unwrap();
+    /// assert!(net.is_contiguous());
+    /// ```
+    ///
+    /// # Why overridden?
+    ///
+    /// This overrides the general [`Ipv6Network::is_contiguous`], whose
+    /// whole-mask `mask | (mask - 1) == u128::MAX` test spans a 128-bit
+    /// borrow-subtract across both halves, with the cheaper per-half check
+    /// `lo == 0 || hi == u64::MAX`.
+    #[inline]
+    #[must_use]
+    pub const fn is_contiguous(&self) -> bool {
+        match self {
+            Self(net) => {
+                let mask = net.mask().to_bits();
+                let lo = mask as u64;
+                let hi = (mask >> 64) as u64;
+                lo == 0 || hi == u64::MAX
+            }
+        }
     }
 
     /// Returns a bidirectional iterator over all addresses in this network.
@@ -216,9 +257,7 @@ impl BiContiguous<Ipv6Network> {
     /// low half's `split_shift` host bits cycling fastest and carrying into
     /// the high half's host bits once they exhaust. This overrides
     /// [`Ipv6Network::addrs`] with a pure acceleration -- same addresses,
-    /// same order, far fewer instructions per item; reach the general
-    /// iterator for a possibly non-bi-contiguous network through [`Deref`],
-    /// e.g. `(*net).addrs()`.
+    /// same order, far fewer instructions per item.
     ///
     /// The iterator implements [`DoubleEndedIterator`].
     ///
@@ -300,21 +339,6 @@ impl BiContiguous<Ipv6Network> {
     /// Returns the intersection of this network with another bi-contiguous
     /// network, or [`None`] if they are disjoint.
     ///
-    /// This delegates to the general [`Ipv6Network::intersection`] verbatim
-    /// -- the win here is TYPE-level, not speed: the class is closed under
-    /// intersection (the mask-or of two class masks is itself a class mask,
-    /// each half's prefix becoming the max of the two inputs' prefixes for
-    /// that half), so the result never needs re-validating and is wrapped
-    /// straight back into [`BiContiguous`]. Callers building
-    /// rectangle-intersection pipelines stay in the typed world for free,
-    /// e.g. chaining directly into [`addrs`](Self::addrs) below, instead of
-    /// paying a `TryFrom` re-check per result.
-    ///
-    /// [`intersects`](Ipv6Network::intersects) and
-    /// [`is_disjoint`](Ipv6Network::is_disjoint) are intentionally NOT
-    /// overridden: reach them unchanged through [`Deref`], see the
-    /// type-level docs above for why.
-    ///
     /// # Examples
     ///
     /// ```
@@ -348,6 +372,18 @@ impl BiContiguous<Ipv6Network> {
     /// let c = BiContiguous::<Ipv6Network>::parse("2001:db9::/32").unwrap();
     /// assert_eq!(None, a.intersection(&c));
     /// ```
+    ///
+    /// # Why overridden?
+    ///
+    /// The bi-contiguous class is closed under intersection: OR-ing two class
+    /// masks yields a class mask, each half's prefix becoming the larger of
+    /// the two, so the result is itself bi-contiguous and is returned as
+    /// `Option<Self>` with no re-validation. This is a closure/type win, not a
+    /// speed win -- the op count matches the general
+    /// [`Ipv6Network::intersection`] it delegates to. Callers building
+    /// rectangle-intersection pipelines stay in the typed world for free, e.g.
+    /// chaining directly into [`addrs`](Self::addrs), instead of paying a
+    /// `TryFrom` re-check per result.
     #[inline]
     #[must_use]
     pub const fn intersection(&self, other: &Self) -> Option<Self> {
@@ -726,6 +762,49 @@ mod test {
         assert_eq!(net.is_bicontiguous(), (*net).is_bicontiguous());
     }
 
+    // The degenerate members of the class are exactly the contiguous ones: the
+    // low half is empty (`q == 0`) or the high half is full (`p == 64`), so the
+    // two runs abut with no interior zero. `::/0` (mask zero), `::/1` (a single
+    // top bit, low half empty), `::/40` (`q == 0`) and `::/64` (both `p == 64`
+    // and `q == 0`) are the `q == 0` side; `::/65`, `::/96` and `::/128` are the
+    // `p == 64` side.
+    #[test]
+    fn bicontiguous_ipv6_network_is_contiguous_accepts_degenerate_members() {
+        for spec in ["::/0", "::/1", "::/40", "::/64", "::/65", "::/96", "::/128"] {
+            let net = BiContiguous::<Ipv6Network>::parse(spec).unwrap();
+            assert!(net.is_contiguous(), "{spec} should be contiguous");
+        }
+    }
+
+    // The proper (non-degenerate) two-run members `p < 64, q > 0`: an interior
+    // zero sits between the high and low runs, so the mask is bi-contiguous but
+    // not contiguous. Covers a wide gap (`p=40, q=32`), a narrow gap
+    // (`p=56, q=16`) and the tightest possible single-zero gap at the hi/lo
+    // boundary (`p=63, q=1`).
+    #[test]
+    fn bicontiguous_ipv6_network_is_contiguous_rejects_two_run_masks() {
+        for spec in [
+            "2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0",
+            "::/ffff:ffff:ffff:ff00:ffff::",
+            "::/ffff:ffff:ffff:fffe:8000::",
+        ] {
+            let net = BiContiguous::<Ipv6Network>::parse(spec).unwrap();
+            assert!(!net.is_contiguous(), "{spec} should not be contiguous");
+        }
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_network_is_contiguous_override_matches_inner() {
+        let contiguous = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
+        assert!(contiguous.is_contiguous());
+        assert_eq!(contiguous.is_contiguous(), Ipv6Network::is_contiguous(&contiguous));
+
+        let two_run =
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        assert!(!two_run.is_contiguous());
+        assert_eq!(two_run.is_contiguous(), Ipv6Network::is_contiguous(&two_run));
+    }
+
     #[test]
     fn bicontiguous_ipv6_network_hi_lo_prefix_boundary_prefixes() {
         let host = BiContiguous::<Ipv6Network>::parse("::1/128").unwrap();
@@ -1014,6 +1093,16 @@ mod test {
         fn prop_bicontiguous_ipv6_is_bicontiguous_always_true(net in arb_bicontiguous_ipv6_network()) {
             prop_assert!(net.is_bicontiguous());
             prop_assert_eq!(net.is_bicontiguous(), (*net).is_bicontiguous());
+        }
+
+        // The per-half override must agree with the general whole-mask
+        // algorithm on every member of the class. The inherent override
+        // shadows the `Deref`'d method, so the general path is reached through
+        // the fully qualified `Ipv6Network::is_contiguous` on the inner value.
+        #[test]
+        fn prop_bicontiguous_ipv6_is_contiguous_matches_general(net in arb_bicontiguous_ipv6_network()) {
+            let inner: Ipv6Network = *net;
+            prop_assert_eq!(net.is_contiguous(), Ipv6Network::is_contiguous(&inner));
         }
 
         #[test]
