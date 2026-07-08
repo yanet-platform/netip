@@ -571,6 +571,50 @@ fn bench_bicontiguous_addrs(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_bicontiguous_is_contiguous(c: &mut Criterion) {
+    use netip::BiContiguous;
+
+    let mut group = c.benchmark_group("netip");
+
+    // A proper two-run bi-contiguous mask (`p = 40`, `q = 32`): not contiguous,
+    // so the override's per-half check inspects both 64-bit words before
+    // answering. `net` is re-black-boxed on every `b.iter()` call so the small
+    // kernel cannot be hoisted out of criterion's repeated-call structure.
+    group.bench_function("BiContiguous<Ipv6Network>::is_contiguous two-run", |b| {
+        let net =
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(net).is_contiguous());
+        });
+    });
+
+    group.bench_function("Ipv6Network::is_contiguous via Deref two-run", |b| {
+        let net =
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        b.iter(|| {
+            core::hint::black_box((*core::hint::black_box(net)).is_contiguous());
+        });
+    });
+
+    // A degenerate contiguous member (`q = 0`): a plain CIDR mask whose low
+    // 64-bit word is zero, so the override short-circuits on the first test.
+    group.bench_function("BiContiguous<Ipv6Network>::is_contiguous contiguous", |b| {
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(net).is_contiguous());
+        });
+    });
+
+    group.bench_function("Ipv6Network::is_contiguous via Deref contiguous", |b| {
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
+        b.iter(|| {
+            core::hint::black_box((*core::hint::black_box(net)).is_contiguous());
+        });
+    });
+
+    group.finish();
+}
+
 fn bench_merge(c: &mut Criterion) {
     let mut group = c.benchmark_group("netip");
 
@@ -1559,6 +1603,7 @@ criterion_group!(
     bench_contiguous_contains,
     bench_contiguous_addrs,
     bench_bicontiguous_addrs,
+    bench_bicontiguous_is_contiguous,
     bench_merge,
     bench_is_adjacent,
     bench_is_contiguous,
