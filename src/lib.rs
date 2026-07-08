@@ -7,6 +7,7 @@
 //! non-contiguous masks.
 
 #![deny(missing_docs)]
+#![forbid(unsafe_code)]
 
 pub mod fmt;
 mod macaddr;
