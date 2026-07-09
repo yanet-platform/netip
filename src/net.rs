@@ -659,6 +659,13 @@ impl IpNetwork {
     /// let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
     /// assert!(!v4.is_adjacent_by_lowest_mask_bit(&v6));
     /// ```
+    ///
+    /// # Complexity
+    ///
+    /// Runs in O(1) time and O(1) space: one family match plus a fixed, small
+    /// number of bitwise operations (mask equality, XOR, lowest-set-bit
+    /// isolation, and a compare) on the fixed-width address and mask; no
+    /// allocation.
     #[inline]
     #[must_use]
     pub const fn is_adjacent_by_lowest_mask_bit(&self, other: &Self) -> bool {
@@ -1502,6 +1509,12 @@ impl Ipv4Network {
     /// let y = Ipv4Network::parse("10.0.0.1/255.255.0.255").unwrap();
     /// assert!(x.is_adjacent_by_lowest_mask_bit(&y));
     /// ```
+    ///
+    /// # Complexity
+    ///
+    /// Runs in O(1) time and O(1) space: a fixed, small number of bitwise
+    /// operations (mask equality, XOR, lowest-set-bit isolation, and a compare)
+    /// on the fixed-width address and mask; no allocation.
     #[inline]
     #[must_use]
     pub const fn is_adjacent_by_lowest_mask_bit(&self, other: &Self) -> bool {
@@ -3150,6 +3163,12 @@ impl Ipv6Network {
     /// let y = Ipv6Network::parse("::1/ffff:ffff::ffff").unwrap();
     /// assert!(x.is_adjacent_by_lowest_mask_bit(&y));
     /// ```
+    ///
+    /// # Complexity
+    ///
+    /// Runs in O(1) time and O(1) space: a fixed, small number of bitwise
+    /// operations (mask equality, XOR, lowest-set-bit isolation, and a compare)
+    /// on the fixed-width address and mask; no allocation.
     #[inline]
     #[must_use]
     pub const fn is_adjacent_by_lowest_mask_bit(&self, other: &Self) -> bool {
