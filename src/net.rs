@@ -21,7 +21,7 @@ mod bicontiguous;
 mod contiguous;
 
 pub use bicontiguous::{BiContiguous, BiContiguousIpNetParseError};
-pub use contiguous::{Contiguous, ContiguousIpNetParseError};
+pub use contiguous::{Contiguous, ContiguousIpNetParseError, ipv4_aggregate_contiguous, ipv6_aggregate_contiguous};
 
 const IPV4_ALL_BITS: Ipv4Addr = Ipv4Addr::new(0xff, 0xff, 0xff, 0xff);
 const IPV6_ALL_BITS: Ipv6Addr = Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff);
