@@ -1344,6 +1344,237 @@ fn bench_aggregate_contiguous(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_bicontiguous_aggregate(c: &mut Criterion) {
+    use criterion::BenchmarkId;
+    use netip::{BiContiguous, ipv6_aggregate, ipv6_aggregate_bicontiguous};
+
+    // Top `prefix` bits of a 64-bit half set to one, the rest zero.
+    fn half_prefix_mask(prefix: u8) -> u64 {
+        !u64::MAX.checked_shr(prefix as u32).unwrap_or(0)
+    }
+
+    fn shape_mask(hi_prefix: u8, lo_prefix: u8) -> u128 {
+        ((half_prefix_mask(hi_prefix) as u128) << 64) | half_prefix_mask(lo_prefix) as u128
+    }
+
+    // Distinct networks spread across `shape_count` deep `(hi_prefix,
+    // lo_prefix)` shapes with a distinct address each. Nothing merges and
+    // nothing contains anything, so the level sweep only sorts and Phase C
+    // probes without dropping -- the honest worst case, on which the general
+    // `ipv6_aggregate` pays its quadratic full-stack scan.
+    fn never_merges(count: u64, shape_count: u64) -> Vec<BiContiguous<Ipv6Network>> {
+        (0..count)
+            .map(|index| {
+                let shape = index % shape_count;
+                let hi_prefix = (20 + (shape * 7) % 44) as u8;
+                let lo_prefix = (20 + (shape * 11) % 44) as u8;
+                let hi = index.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                let lo = index.wrapping_mul(0xBF58_476D_1CE4_E5B9) ^ 0xABCD_EF01_2345_6789;
+                let mask = shape_mask(hi_prefix, lo_prefix);
+                let addr = ((hi as u128) << 64) | lo as u128;
+                BiContiguous::try_from(Ipv6Network::from_bits(addr & mask, mask)).unwrap()
+            })
+            .collect()
+    }
+
+    // Realistic masks: hi half /40 (a "site"), lo half /32 or /16, shared
+    // across a small pool of sites. Every site's /32 low half nests in its /16
+    // low half, so the containment sweep does real work while the shape count
+    // stays tiny.
+    fn geo(count: u64) -> Vec<BiContiguous<Ipv6Network>> {
+        let site_count = (count / 50).clamp(4, 2000);
+        (0..count)
+            .map(|index| {
+                let site = index % site_count;
+                let hi = site.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                let lo = index.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                let lo_prefix: u8 = if index.is_multiple_of(2) { 32 } else { 16 };
+                let mask = shape_mask(40, lo_prefix);
+                let addr = ((hi as u128) << 64) | lo as u128;
+                BiContiguous::try_from(Ipv6Network::from_bits(addr & mask, mask)).unwrap()
+            })
+            .collect()
+    }
+
+    // A dense grid of `(48, 48)` rectangles tiling one parent: 64 consecutive
+    // low buddies under each of `count / 64` consecutive high buddies. Phase A
+    // collapses each high block's low buddies, then Phase B merges the high
+    // buddies -- the merge-heavy case that drives the sweep, not the
+    // containment sweep.
+    fn mergeable_grid(count: u64) -> Vec<BiContiguous<Ipv6Network>> {
+        let mask = shape_mask(48, 48);
+        (0..count)
+            .map(|index| {
+                let hi_index = index / 64;
+                let lo_index = index % 64;
+                let hi = 0x2001_0db8_0000_0000u64 | (hi_index << 16);
+                let lo = lo_index << 16;
+                let addr = ((hi as u128) << 64) | lo as u128;
+                BiContiguous::try_from(Ipv6Network::from_bits(addr & mask, mask)).unwrap()
+            })
+            .collect()
+    }
+
+    // A hi-buddy chain threading down through the high-half prefix levels 64
+    // to 9, alongside a large inert block of never-merging networks pinned to
+    // high-half prefix 4. The chain's top bit stays fixed at `1` throughout
+    // -- only lower bits change as it re-parents -- while the inert block's
+    // top bit is always `0`, so neither can ever contain the other. This is
+    // the case a localized re-sort accelerates: the pre-optimization
+    // full-slice re-sort ran once per re-parenting level, paying for the
+    // whole inert block every time, even though only the chain's own small
+    // neighborhood ever changes order.
+    fn resort_cascade(count: u64) -> Vec<BiContiguous<Ipv6Network>> {
+        const CASCADE_FLOOR: u8 = 8;
+        const MARKER: u64 = 1 << 63;
+
+        let mut nets = Vec::with_capacity(count as usize);
+
+        let finest_mask = shape_mask(64, 0);
+        nets.push(BiContiguous::try_from(Ipv6Network::from_bits((MARKER as u128) << 64, finest_mask)).unwrap());
+        nets.push(BiContiguous::try_from(Ipv6Network::from_bits(((MARKER | 1) as u128) << 64, finest_mask)).unwrap());
+        for p in (CASCADE_FLOOR + 1)..64 {
+            let buddy_bit = 1u64 << (64 - p);
+            let mask = shape_mask(p, 0);
+            let addr = ((MARKER | buddy_bit) as u128) << 64;
+            nets.push(BiContiguous::try_from(Ipv6Network::from_bits(addr, mask)).unwrap());
+        }
+
+        let inert_count = count.saturating_sub(nets.len() as u64);
+        let shape_count = 16u64.min(inert_count.max(1));
+        for index in 0..inert_count {
+            let shape = index % shape_count;
+            let lo_prefix = (20 + (shape * 11) % 44) as u8;
+            let mask = shape_mask(4, lo_prefix);
+            let lo = index.wrapping_mul(0xBF58_476D_1CE4_E5B9) ^ 0xABCD_EF01_2345_6789;
+            let addr = lo as u128;
+            nets.push(BiContiguous::try_from(Ipv6Network::from_bits(addr & mask, mask)).unwrap());
+        }
+
+        nets
+    }
+
+    // Many distinct shapes with real cross-shape containment, sized to keep
+    // post-sweep survivor counts in the low-hundreds -- the region the removed
+    // small-N routing threshold (`CONTAINMENT_THRESHOLD`, formerly 96; see
+    // `bicontiguous_find_containment`'s doc comment in
+    // `src/net/bicontiguous.rs`) used to switch paths in. One wildcard
+    // ancestor (`hi_prefix` 8, `lo_prefix` 0) contains every even-indexed
+    // descendant; every odd-indexed descendant gets its own distinct shape and
+    // survives, so Phase C's containment sweep does real work against a wide
+    // shape fan instead of trivially passing every network through.
+    fn containment_small(count: u64) -> Vec<BiContiguous<Ipv6Network>> {
+        let container_mask = shape_mask(8, 0);
+        let mut nets = Vec::with_capacity(count as usize);
+        nets.push(BiContiguous::try_from(Ipv6Network::from_bits(0, container_mask)).unwrap());
+
+        for index in 1..count {
+            let tag = if index.is_multiple_of(2) { 0u64 } else { index & 0xFF };
+            let hi_prefix = 9 + (index % 56) as u8;
+            let lo_prefix = (index % 65) as u8;
+            let mask = shape_mask(hi_prefix, lo_prefix);
+            let hi = (tag << 56) | (index.wrapping_mul(0x9E37_79B9_7F4A_7C15) & 0x00FF_FFFF_FFFF_FFFF);
+            let lo = index.wrapping_mul(0xBF58_476D_1CE4_E5B9) ^ 0xABCD_EF01_2345_6789;
+            let addr = ((hi as u128) << 64) | lo as u128;
+            nets.push(BiContiguous::try_from(Ipv6Network::from_bits(addr & mask, mask)).unwrap());
+        }
+
+        nets
+    }
+
+    let mut group = c.benchmark_group("netip");
+
+    // Small-N containment-heavy fixture only, kept out of the main size loop
+    // below so total bench time stays in check.
+    for &size in &[16u64, 64, 256] {
+        group.throughput(Throughput::Elements(size));
+
+        let template = containment_small(size);
+        group.bench_with_input(
+            BenchmarkId::new("ipv6_aggregate_bicontiguous containment-small", size),
+            &template,
+            |b, template| {
+                b.iter_batched(
+                    || template.clone(),
+                    |mut nets| core::hint::black_box(ipv6_aggregate_bicontiguous(&mut nets)).len(),
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+
+    for &size in &[1024u64, 4096, 16384] {
+        group.throughput(Throughput::Elements(size));
+
+        let template = never_merges(size, 16);
+        group.bench_with_input(
+            BenchmarkId::new("ipv6_aggregate_bicontiguous never-merges", size),
+            &template,
+            |b, template| {
+                b.iter_batched(
+                    || template.clone(),
+                    |mut nets| core::hint::black_box(ipv6_aggregate_bicontiguous(&mut nets)).len(),
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        let template: Vec<Ipv6Network> = never_merges(size, 16).iter().map(|net| **net).collect();
+        group.bench_with_input(
+            BenchmarkId::new("ipv6_aggregate never-merges", size),
+            &template,
+            |b, template| {
+                b.iter_batched(
+                    || template.clone(),
+                    |mut nets| core::hint::black_box(ipv6_aggregate(&mut nets)).len(),
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        let template = geo(size);
+        group.bench_with_input(
+            BenchmarkId::new("ipv6_aggregate_bicontiguous geo", size),
+            &template,
+            |b, template| {
+                b.iter_batched(
+                    || template.clone(),
+                    |mut nets| core::hint::black_box(ipv6_aggregate_bicontiguous(&mut nets)).len(),
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        let template = mergeable_grid(size);
+        group.bench_with_input(
+            BenchmarkId::new("ipv6_aggregate_bicontiguous mergeable-grid", size),
+            &template,
+            |b, template| {
+                b.iter_batched(
+                    || template.clone(),
+                    |mut nets| core::hint::black_box(ipv6_aggregate_bicontiguous(&mut nets)).len(),
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        let template = resort_cascade(size);
+        group.bench_with_input(
+            BenchmarkId::new("ipv6_aggregate_bicontiguous resort-cascade", size),
+            &template,
+            |b, template| {
+                b.iter_batched(
+                    || template.clone(),
+                    |mut nets| core::hint::black_box(ipv6_aggregate_bicontiguous(&mut nets)).len(),
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
 fn bench_binary_split(c: &mut Criterion) {
     use netip::{ipv4_binary_split, ipv6_binary_split};
 
@@ -1986,6 +2217,7 @@ criterion_group!(
     bench_is_bicontiguous,
     bench_aggregate,
     bench_aggregate_contiguous,
+    bench_bicontiguous_aggregate,
     bench_binary_split,
     bench_supernet_for,
     bench_difference,
