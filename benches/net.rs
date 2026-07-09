@@ -775,6 +775,97 @@ fn bench_is_adjacent(c: &mut Criterion) {
     group.finish();
 }
 
+// Paired with `is_adjacent` on identical inputs so the extra `bswap` the
+// lowest-bit test needs (its `m & -m` isolation is not byte-order-agnostic,
+// unlike `is_adjacent`'s power-of-two test) is directly visible.
+fn bench_is_adjacent_by_lowest_mask_bit(c: &mut Criterion) {
+    let mut group = c.benchmark_group("netip");
+
+    group.bench_function("Ipv4Network::is_adjacent CIDR siblings (A/B)", |b| {
+        let n0 = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        let n1 = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).is_adjacent(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv4Network::is_adjacent_by_lowest_mask_bit CIDR siblings", |b| {
+        let n0 = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        let n1 = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        b.iter(|| {
+            core::hint::black_box(
+                core::hint::black_box(&n0).is_adjacent_by_lowest_mask_bit(core::hint::black_box(&n1)),
+            );
+        });
+    });
+
+    group.bench_function(
+        "Ipv4Network::is_adjacent_by_lowest_mask_bit adjacent non-lowest bit",
+        |b| {
+            let n0 = Ipv4Network::parse("0.0.0.0/2").unwrap();
+            let n1 = Ipv4Network::parse("128.0.0.0/2").unwrap();
+            b.iter(|| {
+                core::hint::black_box(
+                    core::hint::black_box(&n0).is_adjacent_by_lowest_mask_bit(core::hint::black_box(&n1)),
+                );
+            });
+        },
+    );
+
+    group.bench_function("Ipv4Network::is_adjacent_by_lowest_mask_bit non-contiguous", |b| {
+        let n0 = Ipv4Network::parse("10.0.0.0/255.255.0.255").unwrap();
+        let n1 = Ipv4Network::parse("10.0.0.1/255.255.0.255").unwrap();
+        b.iter(|| {
+            core::hint::black_box(
+                core::hint::black_box(&n0).is_adjacent_by_lowest_mask_bit(core::hint::black_box(&n1)),
+            );
+        });
+    });
+
+    group.bench_function("Ipv6Network::is_adjacent CIDR siblings (A/B)", |b| {
+        let n0 = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let n1 = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&n0).is_adjacent(core::hint::black_box(&n1)));
+        });
+    });
+
+    group.bench_function("Ipv6Network::is_adjacent_by_lowest_mask_bit CIDR siblings", |b| {
+        let n0 = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let n1 = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        b.iter(|| {
+            core::hint::black_box(
+                core::hint::black_box(&n0).is_adjacent_by_lowest_mask_bit(core::hint::black_box(&n1)),
+            );
+        });
+    });
+
+    group.bench_function(
+        "Ipv6Network::is_adjacent_by_lowest_mask_bit adjacent non-lowest bit",
+        |b| {
+            let n0 = Ipv6Network::parse("::/2").unwrap();
+            let n1 = Ipv6Network::parse("8000::/2").unwrap();
+            b.iter(|| {
+                core::hint::black_box(
+                    core::hint::black_box(&n0).is_adjacent_by_lowest_mask_bit(core::hint::black_box(&n1)),
+                );
+            });
+        },
+    );
+
+    group.bench_function("Ipv6Network::is_adjacent_by_lowest_mask_bit non-contiguous", |b| {
+        let n0 = Ipv6Network::parse("::/ffff:ffff::ffff").unwrap();
+        let n1 = Ipv6Network::parse("::1/ffff:ffff::ffff").unwrap();
+        b.iter(|| {
+            core::hint::black_box(
+                core::hint::black_box(&n0).is_adjacent_by_lowest_mask_bit(core::hint::black_box(&n1)),
+            );
+        });
+    });
+
+    group.finish();
+}
+
 fn bench_is_contiguous(c: &mut Criterion) {
     let mut group = c.benchmark_group("netip");
 
@@ -1606,6 +1697,7 @@ criterion_group!(
     bench_bicontiguous_is_contiguous,
     bench_merge,
     bench_is_adjacent,
+    bench_is_adjacent_by_lowest_mask_bit,
     bench_is_contiguous,
     bench_is_bicontiguous,
     bench_aggregate,
