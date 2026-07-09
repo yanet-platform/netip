@@ -717,6 +717,84 @@ impl IpNetwork {
             _ => None,
         }
     }
+
+    /// Merges this IP network with another when one contains the other or they
+    /// are lowest-mask-bit siblings, returning the combined network.
+    ///
+    /// Returns `Some` in exactly two disjoint cases: **containment**, where the
+    /// larger (containing) network is returned exactly as
+    /// [`merge`](Self::merge) does, and **lowest-mask-bit sibling**, where
+    /// the two share a mask and their addresses differ in precisely its
+    /// lowest set bit, detected by
+    /// [`is_adjacent_by_lowest_mask_bit`](Self::is_adjacent_by_lowest_mask_bit).
+    ///
+    /// This is the class-closed subset of [`merge`](Self::merge) —
+    /// `{containment, lowest-mask-bit sibling}`. The result stays in the
+    /// inputs' structural class (a contiguous pair merges to a contiguous
+    /// parent, and so on), and whenever it returns `Some`, that value
+    /// equals [`merge`](Self::merge)'s. It differs from `merge` only by
+    /// refusing `merge`'s remaining case, a difference at a higher
+    /// (non-lowest) mask bit, which would combine the pair into a network
+    /// outside that class.
+    ///
+    /// Returns `None` for networks of different address families.
+    ///
+    /// See [`Ipv4Network::merge_by_lowest_mask_bit`] and
+    /// [`Ipv6Network::merge_by_lowest_mask_bit`] for details.
+    ///
+    /// # Complexity
+    ///
+    /// Runs in O(1) time and O(1) space — at most two `contains` checks plus
+    /// one `is_adjacent_by_lowest_mask_bit` check and one constant-time
+    /// construction, all on fixed-width integers; no allocation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::IpNetwork;
+    ///
+    /// // Lowest-bit siblings merge into their parent (agrees with `merge`).
+    /// let a = IpNetwork::parse("192.168.0.0/24").unwrap();
+    /// let b = IpNetwork::parse("192.168.1.0/24").unwrap();
+    /// assert_eq!(
+    ///     Some(IpNetwork::parse("192.168.0.0/23").unwrap()),
+    ///     a.merge_by_lowest_mask_bit(&b)
+    /// );
+    ///
+    /// // Containment: the larger (containing) network is returned, either way.
+    /// let outer = IpNetwork::parse("10.0.0.0/8").unwrap();
+    /// let inner = IpNetwork::parse("10.1.0.0/16").unwrap();
+    /// assert_eq!(Some(outer), outer.merge_by_lowest_mask_bit(&inner));
+    /// assert_eq!(Some(outer), inner.merge_by_lowest_mask_bit(&outer));
+    ///
+    /// // Adjacent at a higher mask bit: `merge` still combines them (into a
+    /// // non-contiguous block), but `merge_by_lowest_mask_bit` refuses.
+    /// let c = IpNetwork::parse("0.0.0.0/2").unwrap();
+    /// let d = IpNetwork::parse("128.0.0.0/2").unwrap();
+    /// assert!(c.merge(&d).is_some());
+    /// assert_eq!(None, c.merge_by_lowest_mask_bit(&d));
+    ///
+    /// // Mixed address families cannot be merged.
+    /// let v4 = IpNetwork::parse("10.0.0.0/8").unwrap();
+    /// let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
+    /// assert_eq!(None, v4.merge_by_lowest_mask_bit(&v6));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn merge_by_lowest_mask_bit(&self, other: &Self) -> Option<Self> {
+        // NOTE: use `Option::map` when it becomes const.
+        match (self, other) {
+            (Self::V4(a), Self::V4(b)) => match a.merge_by_lowest_mask_bit(b) {
+                Some(net) => Some(Self::V4(net)),
+                None => None,
+            },
+            (Self::V6(a), Self::V6(b)) => match a.merge_by_lowest_mask_bit(b) {
+                Some(net) => Some(Self::V6(net)),
+                None => None,
+            },
+            _ => None,
+        }
+    }
 }
 
 impl Display for IpNetwork {
@@ -1509,6 +1587,117 @@ impl Ipv4Network {
             return if a2 & m1 == a1 { Some(*self) } else { None };
         }
         None
+    }
+
+    /// Merges this IPv4 network with another when one contains the other or
+    /// they are lowest-mask-bit siblings, returning the combined network.
+    ///
+    /// Returns `Some` in exactly two disjoint cases:
+    ///
+    /// - **Containment**: one network is a subset of the other. The larger
+    ///   (containing) network is returned, exactly as [`merge`](Self::merge)
+    ///   does.
+    /// - **Lowest-mask-bit sibling**: the two share a mask and their addresses
+    ///   differ in precisely its lowest set bit — the boundary "buddy" bit,
+    ///   detected by
+    ///   [`is_adjacent_by_lowest_mask_bit`](Self::is_adjacent_by_lowest_mask_bit).
+    ///   The result is the common address `a1 & a2` (the differing lowest bit
+    ///   cleared) under the shared mask with its lowest set bit removed.
+    ///
+    /// These cases are disjoint: siblings have equal masks and distinct
+    /// addresses, so neither contains the other.
+    ///
+    /// This is the class-closed subset of [`merge`](Self::merge) —
+    /// `{containment, lowest-mask-bit sibling}`. It differs from `merge` only
+    /// by refusing `merge`'s remaining case, a difference at a higher
+    /// (non-lowest) mask bit, which would combine the pair into a network
+    /// outside the inputs' structural class. Refusing it keeps the result
+    /// in class: a contiguous (CIDR) pair merges to a contiguous parent, a
+    /// non-contiguous pair to a non-contiguous parent, and a containment
+    /// result is simply the larger input, already in class. Whenever it
+    /// returns `Some`, that value equals [`merge`](Self::merge)'s.
+    ///
+    /// For a mask made of two contiguous runs (a non-contiguous mask), sibling
+    /// merging happens only along the lower run's boundary — the mask's lowest
+    /// set bit. A sibling pair differing at the higher run's boundary is left
+    /// unmerged even though `merge` would combine it into another two-run mask;
+    /// doing that safely would require assuming the mask has that two-run
+    /// shape, which this general-purpose method does not.
+    ///
+    /// # Complexity
+    ///
+    /// Runs in O(1) time and O(1) space — at most two `contains` checks plus
+    /// one `is_adjacent_by_lowest_mask_bit` check and one constant-time
+    /// construction, all on fixed-width integers; no allocation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv4Network;
+    ///
+    /// // Lowest-bit (buddy) siblings merge into their contiguous parent, and
+    /// // `merge` agrees.
+    /// let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+    /// let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+    /// assert_eq!(
+    ///     Some(Ipv4Network::parse("192.168.0.0/23").unwrap()),
+    ///     a.merge_by_lowest_mask_bit(&b)
+    /// );
+    /// assert_eq!(a.merge(&b), a.merge_by_lowest_mask_bit(&b));
+    ///
+    /// // Containment: the larger (containing) network is returned, either way.
+    /// let outer = Ipv4Network::parse("10.0.0.0/8").unwrap();
+    /// let inner = Ipv4Network::parse("10.1.0.0/16").unwrap();
+    /// assert_eq!(Some(outer), outer.merge_by_lowest_mask_bit(&inner));
+    /// assert_eq!(Some(outer), inner.merge_by_lowest_mask_bit(&outer));
+    ///
+    /// // Adjacent at the *top* mask bit, not the lowest: `merge` combines the
+    /// // pair into a non-contiguous block, but `merge_by_lowest_mask_bit`
+    /// // returns `None` to keep the result in the contiguous class.
+    /// let c = Ipv4Network::parse("0.0.0.0/2").unwrap();
+    /// let d = Ipv4Network::parse("128.0.0.0/2").unwrap();
+    /// assert_eq!(
+    ///     Some(Ipv4Network::parse("0.0.0.0/64.0.0.0").unwrap()),
+    ///     c.merge(&d)
+    /// );
+    /// assert_eq!(None, c.merge_by_lowest_mask_bit(&d));
+    ///
+    /// // Disjoint networks with different masks never merge here.
+    /// let e = Ipv4Network::parse("172.16.0.0/16").unwrap();
+    /// assert_eq!(None, a.merge_by_lowest_mask_bit(&e));
+    ///
+    /// // Non-contiguous masks are supported: these differ in the lowest set bit
+    /// // of `255.255.0.255`, so they collapse to `/255.255.0.254`.
+    /// let x = Ipv4Network::parse("10.0.0.0/255.255.0.255").unwrap();
+    /// let y = Ipv4Network::parse("10.0.0.1/255.255.0.255").unwrap();
+    /// assert_eq!(
+    ///     Some(Ipv4Network::parse("10.0.0.0/255.255.0.254").unwrap()),
+    ///     x.merge_by_lowest_mask_bit(&y)
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn merge_by_lowest_mask_bit(&self, other: &Self) -> Option<Self> {
+        if self.contains(other) {
+            return Some(*self);
+        }
+        if other.contains(self) {
+            return Some(*other);
+        }
+        if !self.is_adjacent_by_lowest_mask_bit(other) {
+            return None;
+        }
+
+        let (a1, m1) = self.to_bits();
+        let (a2, ..) = other.to_bits();
+
+        // NOTE: the addresses differ only in the mask's lowest set bit, which the
+        // reduced mask clears, so `a1 & a2` is already normalized and needs no
+        // further `& mask`.
+        Some(Self(
+            Ipv4Addr::from_bits(a1 & a2),
+            Ipv4Addr::from_bits(m1 & m1.wrapping_sub(1)),
+        ))
     }
 
     /// Converts this network to an IPv4-mapped IPv6 network.
@@ -3062,6 +3251,119 @@ impl Ipv6Network {
             return if a2 & m1 == a1 { Some(*self) } else { None };
         }
         None
+    }
+
+    /// Merges this IPv6 network with another when one contains the other or
+    /// they are lowest-mask-bit siblings, returning the combined network.
+    ///
+    /// Returns `Some` in exactly two disjoint cases:
+    ///
+    /// - **Containment**: one network is a subset of the other. The larger
+    ///   (containing) network is returned, exactly as [`merge`](Self::merge)
+    ///   does.
+    /// - **Lowest-mask-bit sibling**: the two share a mask and their addresses
+    ///   differ in precisely its lowest set bit — the boundary "buddy" bit,
+    ///   detected by
+    ///   [`is_adjacent_by_lowest_mask_bit`](Self::is_adjacent_by_lowest_mask_bit).
+    ///   The result is the common address `a1 & a2` (the differing lowest bit
+    ///   cleared) under the shared mask with its lowest set bit removed.
+    ///
+    /// These cases are disjoint: siblings have equal masks and distinct
+    /// addresses, so neither contains the other.
+    ///
+    /// This is the class-closed subset of [`merge`](Self::merge) —
+    /// `{containment, lowest-mask-bit sibling}`. It differs from `merge` only
+    /// by refusing `merge`'s remaining case, a difference at a higher
+    /// (non-lowest) mask bit, which would combine the pair into a network
+    /// outside the inputs' structural class. Refusing it keeps the result
+    /// in class: a contiguous (CIDR) pair merges to a contiguous parent, a
+    /// bi-contiguous pair to a bi-contiguous parent, a general
+    /// non-contiguous pair to a non-contiguous parent, and a containment
+    /// result is simply the larger input, already in class. Whenever it
+    /// returns `Some`, that value equals [`merge`](Self::merge)'s.
+    ///
+    /// For a bi-contiguous mask (one carrying a top-aligned run in each 64-bit
+    /// half), sibling merging happens only along the finer low-half boundary —
+    /// the mask's lowest set bit. A sibling pair differing in the high-half
+    /// boundary is left unmerged even though their union would also be
+    /// bi-contiguous; performing that merge would require assuming the value is
+    /// bi-contiguous, which this general-purpose method does not.
+    ///
+    /// # Complexity
+    ///
+    /// Runs in O(1) time and O(1) space — at most two `contains` checks plus
+    /// one `is_adjacent_by_lowest_mask_bit` check and one constant-time
+    /// construction, all on fixed-width integers; no allocation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv6Network;
+    ///
+    /// // Adjacent /48 blocks (lowest-bit siblings) merge into a /47, and
+    /// // `merge` agrees.
+    /// let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+    /// let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+    /// assert_eq!(
+    ///     Some(Ipv6Network::parse("2001:db8::/47").unwrap()),
+    ///     a.merge_by_lowest_mask_bit(&b)
+    /// );
+    /// assert_eq!(a.merge(&b), a.merge_by_lowest_mask_bit(&b));
+    ///
+    /// // Containment: the larger (containing) network is returned, either way.
+    /// let outer = Ipv6Network::parse("2001:db8::/32").unwrap();
+    /// let inner = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+    /// assert_eq!(Some(outer), outer.merge_by_lowest_mask_bit(&inner));
+    /// assert_eq!(Some(outer), inner.merge_by_lowest_mask_bit(&outer));
+    ///
+    /// // Adjacent at a higher mask bit: `merge` combines the pair into a
+    /// // non-contiguous block, but `merge_by_lowest_mask_bit` refuses to leave
+    /// // the contiguous class.
+    /// let c = Ipv6Network::parse("2001:db8::/48").unwrap();
+    /// let d = Ipv6Network::parse("2001:db8:100::/48").unwrap();
+    /// assert_eq!(
+    ///     Some(Ipv6Network::parse("2001:db8::/ffff:ffff:feff::").unwrap()),
+    ///     c.merge(&d)
+    /// );
+    /// assert_eq!(None, c.merge_by_lowest_mask_bit(&d));
+    ///
+    /// // Disjoint networks with different masks never merge here.
+    /// let e = Ipv6Network::parse("2001:beef::/32").unwrap();
+    /// assert_eq!(None, a.merge_by_lowest_mask_bit(&e));
+    ///
+    /// // Bi-contiguous mask: siblings differing in the lowest set bit of
+    /// // `ffff::ffff:ffff:ffff:ffff` collapse to `ffff::ffff:ffff:ffff:fffe`,
+    /// // which is still bi-contiguous.
+    /// let x = Ipv6Network::parse("::/ffff::ffff:ffff:ffff:ffff").unwrap();
+    /// let y = Ipv6Network::parse("::1/ffff::ffff:ffff:ffff:ffff").unwrap();
+    /// assert_eq!(
+    ///     Some(Ipv6Network::parse("::/ffff::ffff:ffff:ffff:fffe").unwrap()),
+    ///     x.merge_by_lowest_mask_bit(&y)
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn merge_by_lowest_mask_bit(&self, other: &Self) -> Option<Self> {
+        if self.contains(other) {
+            return Some(*self);
+        }
+        if other.contains(self) {
+            return Some(*other);
+        }
+        if !self.is_adjacent_by_lowest_mask_bit(other) {
+            return None;
+        }
+
+        let (a1, m1) = self.to_bits();
+        let (a2, ..) = other.to_bits();
+
+        // NOTE: the addresses differ only in the mask's lowest set bit, which the
+        // reduced mask clears, so `a1 & a2` is already normalized and needs no
+        // further `& mask`.
+        Some(Self(
+            Ipv6Addr::from_bits(a1 & a2),
+            Ipv6Addr::from_bits(m1 & m1.wrapping_sub(1)),
+        ))
     }
 
     /// Returns the last address in this IPv6 network.
@@ -5795,6 +6097,43 @@ mod test {
         m1 == m2 && m1 != 0 && (a1 ^ a2) == 1u128 << m1.trailing_zeros()
     }
 
+    // Independent oracle for `Ipv4Network::merge_by_lowest_mask_bit`: containment
+    // returns the larger network, otherwise the reference predicate gates the
+    // sibling merge, where the reduced mask is built by masking out
+    // `1 << trailing_zeros` and the address is re-normalized through `from_bits`,
+    // rather than the implementation's `m & (m - 1)` plus skip-`&`-mask tuple.
+    fn ipv4_merge_by_lowest_mask_bit_reference(a: &Ipv4Network, b: &Ipv4Network) -> Option<Ipv4Network> {
+        if a.contains(b) {
+            return Some(*a);
+        }
+        if b.contains(a) {
+            return Some(*b);
+        }
+        if !ipv4_is_adjacent_by_lowest_mask_bit_reference(a, b) {
+            return None;
+        }
+        let (a1, m1) = a.to_bits();
+        let (a2, ..) = b.to_bits();
+        let lowest = 1u32 << m1.trailing_zeros();
+        Some(Ipv4Network::from_bits(a1 & a2, m1 & !lowest))
+    }
+
+    fn ipv6_merge_by_lowest_mask_bit_reference(a: &Ipv6Network, b: &Ipv6Network) -> Option<Ipv6Network> {
+        if a.contains(b) {
+            return Some(*a);
+        }
+        if b.contains(a) {
+            return Some(*b);
+        }
+        if !ipv6_is_adjacent_by_lowest_mask_bit_reference(a, b) {
+            return None;
+        }
+        let (a1, m1) = a.to_bits();
+        let (a2, ..) = b.to_bits();
+        let lowest = 1u128 << m1.trailing_zeros();
+        Some(Ipv6Network::from_bits(a1 & a2, m1 & !lowest))
+    }
+
     fn arb_sorted_ipv4_networks() -> impl Strategy<Value = Vec<Ipv4Network>> {
         (3usize..=64)
             .prop_flat_map(|len| prop::collection::vec(arb_ipv4_network(), len))
@@ -6996,6 +7335,37 @@ mod test {
                 a.is_adjacent_by_lowest_mask_bit(&b)
             );
         }
+
+        #[test]
+        fn prop_ip_merge_by_lowest_mask_bit_matches_inner_v4(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            prop_assert_eq!(
+                IpNetwork::V4(a).merge_by_lowest_mask_bit(&IpNetwork::V4(b)),
+                a.merge_by_lowest_mask_bit(&b).map(IpNetwork::V4)
+            );
+        }
+
+        #[test]
+        fn prop_ip_merge_by_lowest_mask_bit_matches_inner_v6(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            prop_assert_eq!(
+                IpNetwork::V6(a).merge_by_lowest_mask_bit(&IpNetwork::V6(b)),
+                a.merge_by_lowest_mask_bit(&b).map(IpNetwork::V6)
+            );
+        }
+
+        #[test]
+        fn prop_ip_merge_by_lowest_mask_bit_mixed_families_none(
+            a in arb_ipv4_network(),
+            b in arb_ipv6_network(),
+        ) {
+            prop_assert_eq!(IpNetwork::V4(a).merge_by_lowest_mask_bit(&IpNetwork::V6(b)), None);
+            prop_assert_eq!(IpNetwork::V6(b).merge_by_lowest_mask_bit(&IpNetwork::V4(a)), None);
+        }
     }
 
     #[test]
@@ -7220,6 +7590,318 @@ mod test {
         let v4 = IpNetwork::parse("10.0.0.0/8").unwrap();
         let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
         assert!(!v4.is_adjacent_by_lowest_mask_bit(&v6));
+    }
+
+    #[test]
+    fn ipv4_merge_by_lowest_mask_bit_cidr_siblings() {
+        // CIDR siblings differ in the mask's lowest (buddy) bit: they merge into
+        // their /23 parent, and `merge` agrees.
+        let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        let expected = Ipv4Network::parse("192.168.0.0/23").unwrap();
+        assert_eq!(Some(expected), a.merge_by_lowest_mask_bit(&b));
+        assert_eq!(Some(expected), b.merge_by_lowest_mask_bit(&a));
+        assert_eq!(a.merge(&b), a.merge_by_lowest_mask_bit(&b));
+    }
+
+    #[test]
+    fn ipv4_merge_by_lowest_mask_bit_host_routes() {
+        // Two hosts differing in the lowest address bit merge into their /31.
+        let a = Ipv4Network::parse("10.0.0.0/32").unwrap();
+        let b = Ipv4Network::parse("10.0.0.1/32").unwrap();
+        let expected = Ipv4Network::parse("10.0.0.0/255.255.255.254").unwrap();
+        assert_eq!(Some(expected), a.merge_by_lowest_mask_bit(&b));
+        assert_eq!(Some(expected), b.merge_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_by_lowest_mask_bit_adjacent_but_higher_bit() {
+        // Adjacent at the top mask bit, not the lowest: `merge` combines them
+        // into a non-contiguous block, but `merge_by_lowest_mask_bit` rejects.
+        let a = Ipv4Network::parse("0.0.0.0/2").unwrap();
+        let b = Ipv4Network::parse("128.0.0.0/2").unwrap();
+        assert_eq!(Some(Ipv4Network::parse("0.0.0.0/64.0.0.0").unwrap()), a.merge(&b));
+        assert_eq!(None, a.merge_by_lowest_mask_bit(&b));
+        assert_eq!(None, b.merge_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_by_lowest_mask_bit_identical() {
+        // Identical networks: `contains` is reflexive, so containment fires and
+        // the network is returned unchanged.
+        let a = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        assert_eq!(Some(a), a.merge_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_by_lowest_mask_bit_containment() {
+        // Containment fires in both directions and returns the larger network.
+        let outer = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        let inner = Ipv4Network::parse("10.1.0.0/16").unwrap();
+        assert_eq!(Some(outer), outer.merge_by_lowest_mask_bit(&inner));
+        assert_eq!(Some(outer), inner.merge_by_lowest_mask_bit(&outer));
+    }
+
+    #[test]
+    fn ipv4_merge_by_lowest_mask_bit_containment_non_contiguous() {
+        // Containment where both masks are non-contiguous: the containing
+        // (larger) network is still returned, in either order.
+        let outer = Ipv4Network::parse("10.0.0.0/255.0.0.255").unwrap();
+        let inner = Ipv4Network::parse("10.0.0.0/255.128.0.255").unwrap();
+        assert!(outer.contains(&inner));
+        assert_eq!(Some(outer), outer.merge_by_lowest_mask_bit(&inner));
+        assert_eq!(Some(outer), inner.merge_by_lowest_mask_bit(&outer));
+    }
+
+    #[test]
+    fn ipv4_merge_by_lowest_mask_bit_default_route() {
+        // A /0 has no lowest mask bit, so the sibling path is unreachable — but a
+        // /0 contains every network, itself included, so containment fires.
+        let a = Ipv4Network::parse("0.0.0.0/0").unwrap();
+        assert_eq!(Some(a), a.merge_by_lowest_mask_bit(&a));
+        let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        assert_eq!(Some(a), a.merge_by_lowest_mask_bit(&b));
+        assert_eq!(Some(a), b.merge_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_by_lowest_mask_bit_different_masks_no_containment() {
+        // Different masks with neither network containing the other: no merge.
+        let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        let b = Ipv4Network::parse("10.0.0.0/16").unwrap();
+        assert_eq!(None, a.merge_by_lowest_mask_bit(&b));
+        assert_eq!(None, b.merge_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_by_lowest_mask_bit_non_contiguous_lowest() {
+        // Non-contiguous mask, siblings differ in its lowest set bit (bit 0).
+        let a = Ipv4Network::parse("10.0.0.0/255.255.0.255").unwrap();
+        let b = Ipv4Network::parse("10.0.0.1/255.255.0.255").unwrap();
+        let expected = Ipv4Network::parse("10.0.0.0/255.255.0.254").unwrap();
+        assert_eq!(Some(expected), a.merge_by_lowest_mask_bit(&b));
+        assert_eq!(Some(expected), b.merge_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv4_merge_by_lowest_mask_bit_non_contiguous_higher_rejected() {
+        // Same non-contiguous mask, but the addresses differ at bit 16 (in the
+        // mask, but not its lowest set bit): `merge` combines, this rejects.
+        let a = Ipv4Network::parse("10.0.0.1/255.255.0.255").unwrap();
+        let b = Ipv4Network::parse("10.1.0.1/255.255.0.255").unwrap();
+        assert_eq!(Some(Ipv4Network::parse("10.0.0.1/255.254.0.255").unwrap()), a.merge(&b));
+        assert_eq!(None, a.merge_by_lowest_mask_bit(&b));
+    }
+
+    #[test]
+    fn ipv6_merge_by_lowest_mask_bit_cidr_siblings() {
+        // Adjacent /48 blocks differ in the mask's lowest bit: they merge into
+        // their /47 parent, and `merge` agrees.
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        let expected = Ipv6Network::parse("2001:db8::/47").unwrap();
+        assert_eq!(Some(expected), a.merge_by_lowest_mask_bit(&b));
+        assert_eq!(Some(expected), b.merge_by_lowest_mask_bit(&a));
+        assert_eq!(a.merge(&b), a.merge_by_lowest_mask_bit(&b));
+    }
+
+    #[test]
+    fn ipv6_merge_by_lowest_mask_bit_host_routes() {
+        // Two hosts differing in the lowest address bit merge into their /127.
+        let a = Ipv6Network::parse("2001:db8::/128").unwrap();
+        let b = Ipv6Network::parse("2001:db8::1/128").unwrap();
+        let expected = Ipv6Network::parse("2001:db8::/ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe").unwrap();
+        assert_eq!(Some(expected), a.merge_by_lowest_mask_bit(&b));
+        assert_eq!(Some(expected), b.merge_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv6_merge_by_lowest_mask_bit_adjacent_but_higher_bit() {
+        // Adjacent at the top mask bit, not the lowest: `merge` combines them
+        // into a non-contiguous block, but `merge_by_lowest_mask_bit` rejects.
+        let a = Ipv6Network::parse("::/2").unwrap();
+        let b = Ipv6Network::parse("8000::/2").unwrap();
+        assert_eq!(Some(Ipv6Network::parse("::/4000::").unwrap()), a.merge(&b));
+        assert_eq!(None, a.merge_by_lowest_mask_bit(&b));
+        assert_eq!(None, b.merge_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv6_merge_by_lowest_mask_bit_identical() {
+        // Identical networks: `contains` is reflexive, so containment fires and
+        // the network is returned unchanged.
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        assert_eq!(Some(a), a.merge_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv6_merge_by_lowest_mask_bit_containment() {
+        // Containment fires in both directions and returns the larger network.
+        let outer = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let inner = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        assert_eq!(Some(outer), outer.merge_by_lowest_mask_bit(&inner));
+        assert_eq!(Some(outer), inner.merge_by_lowest_mask_bit(&outer));
+    }
+
+    #[test]
+    fn ipv6_merge_by_lowest_mask_bit_containment_non_contiguous() {
+        // Containment where both masks are non-contiguous: the containing
+        // (larger) network is still returned, in either order.
+        let outer = Ipv6Network::parse("2001::/ffff:ff00::ffff").unwrap();
+        let inner = Ipv6Network::parse("2001::/ffff:ff80::ffff").unwrap();
+        assert!(outer.contains(&inner));
+        assert_eq!(Some(outer), outer.merge_by_lowest_mask_bit(&inner));
+        assert_eq!(Some(outer), inner.merge_by_lowest_mask_bit(&outer));
+    }
+
+    #[test]
+    fn ipv6_merge_by_lowest_mask_bit_default_route() {
+        // A /0 has no lowest mask bit, so the sibling path is unreachable — but a
+        // /0 contains every network, itself included, so containment fires.
+        let a = Ipv6Network::parse("::/0").unwrap();
+        assert_eq!(Some(a), a.merge_by_lowest_mask_bit(&a));
+        let b = Ipv6Network::parse("2001:db8::/48").unwrap();
+        assert_eq!(Some(a), a.merge_by_lowest_mask_bit(&b));
+        assert_eq!(Some(a), b.merge_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv6_merge_by_lowest_mask_bit_different_masks_no_containment() {
+        // Different masks with neither network containing the other: no merge.
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let b = Ipv6Network::parse("2001:beef::/32").unwrap();
+        assert_eq!(None, a.merge_by_lowest_mask_bit(&b));
+        assert_eq!(None, b.merge_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv6_merge_by_lowest_mask_bit_non_contiguous_lowest() {
+        // Non-contiguous mask, siblings differ in its lowest set bit (bit 0).
+        let a = Ipv6Network::parse("2001::/ffff:ff00::ffff").unwrap();
+        let b = Ipv6Network::parse("2001::1/ffff:ff00::ffff").unwrap();
+        let expected = Ipv6Network::parse("2001::/ffff:ff00::fffe").unwrap();
+        assert_eq!(Some(expected), a.merge_by_lowest_mask_bit(&b));
+        assert_eq!(Some(expected), b.merge_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv6_merge_by_lowest_mask_bit_non_contiguous_higher_rejected() {
+        // Same non-contiguous mask, but the addresses differ at bit 104 (in the
+        // mask, but not its lowest set bit): `merge` combines, this rejects.
+        let a = Ipv6Network::parse("2001::1/ffff:ff00::ffff").unwrap();
+        let b = Ipv6Network::parse("2001:100::1/ffff:ff00::ffff").unwrap();
+        assert_eq!(
+            Some(Ipv6Network::parse("2001::1/ffff:fe00::ffff").unwrap()),
+            a.merge(&b)
+        );
+        assert_eq!(None, a.merge_by_lowest_mask_bit(&b));
+    }
+
+    #[test]
+    fn ipv6_merge_by_lowest_mask_bit_bicontiguous_q1_degeneration() {
+        // Bi-contiguous mask whose low-half run is a single bit (q = 1): its
+        // lowest set bit is that lone low-half bit. Merging two siblings across
+        // it clears the whole low run, collapsing the 2-D block to a plain /32.
+        // The result leaves the strictly-2-D shape but stays in the bi-contiguous
+        // class, because a contiguous mask is bi-contiguous.
+        let a = Ipv6Network::parse("::/ffff:ffff:0:0:8000::").unwrap();
+        let b = Ipv6Network::parse("::8000:0:0:0/ffff:ffff:0:0:8000::").unwrap();
+        assert!(a.is_bicontiguous());
+        assert!(b.is_bicontiguous());
+        assert!(a.is_adjacent_by_lowest_mask_bit(&b));
+
+        let merged = a.merge_by_lowest_mask_bit(&b).unwrap();
+        assert_eq!(Ipv6Network::parse("::/ffff:ffff::").unwrap(), merged);
+        assert!(merged.is_contiguous());
+        assert!(merged.is_bicontiguous());
+    }
+
+    #[test]
+    fn ip_merge_by_lowest_mask_bit_v4() {
+        let a = IpNetwork::parse("192.168.0.0/24").unwrap();
+        let b = IpNetwork::parse("192.168.1.0/24").unwrap();
+        assert_eq!(
+            Some(IpNetwork::parse("192.168.0.0/23").unwrap()),
+            a.merge_by_lowest_mask_bit(&b)
+        );
+    }
+
+    #[test]
+    fn ip_merge_by_lowest_mask_bit_v6() {
+        let a = IpNetwork::parse("2001:db8::/48").unwrap();
+        let b = IpNetwork::parse("2001:db8:1::/48").unwrap();
+        assert_eq!(
+            Some(IpNetwork::parse("2001:db8::/47").unwrap()),
+            a.merge_by_lowest_mask_bit(&b)
+        );
+    }
+
+    #[test]
+    fn ip_merge_by_lowest_mask_bit_mixed_families() {
+        let v4 = IpNetwork::parse("10.0.0.0/8").unwrap();
+        let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
+        assert_eq!(None, v4.merge_by_lowest_mask_bit(&v6));
+        assert_eq!(None, v6.merge_by_lowest_mask_bit(&v4));
+    }
+
+    #[test]
+    fn ipv4_merge_by_lowest_mask_bit_matches_reference_fixed_cases() {
+        let cases = [
+            // Same mask, lowest-bit siblings (contiguous) -> merge.
+            ("192.168.0.0/24", "192.168.1.0/24"),
+            // Same mask, lowest-bit siblings (non-contiguous) -> merge.
+            ("10.0.0.0/255.255.0.255", "10.0.0.1/255.255.0.255"),
+            // Same mask, adjacent at a higher bit -> reject.
+            ("0.0.0.0/2", "128.0.0.0/2"),
+            // Same mask, identical -> self (containment).
+            ("192.168.1.0/24", "192.168.1.0/24"),
+            // Containment (different masks) -> larger.
+            ("10.0.0.0/8", "10.1.0.0/16"),
+            // Different masks, no containment -> reject.
+            ("10.0.0.0/8", "172.16.0.0/16"),
+            // /0 with itself -> self (containment; no lowest mask bit).
+            ("0.0.0.0/0", "0.0.0.0/0"),
+        ];
+
+        for (a, b) in cases {
+            let a = Ipv4Network::parse(a).unwrap();
+            let b = Ipv4Network::parse(b).unwrap();
+            assert_eq!(
+                ipv4_merge_by_lowest_mask_bit_reference(&a, &b),
+                a.merge_by_lowest_mask_bit(&b),
+                "mismatch: a={a}, b={b}"
+            );
+        }
+    }
+
+    #[test]
+    fn ipv6_merge_by_lowest_mask_bit_matches_reference_fixed_cases() {
+        let cases = [
+            // Same mask, lowest-bit siblings (contiguous) -> merge.
+            ("2001:db8::/48", "2001:db8:1::/48"),
+            // Same mask, lowest-bit siblings (non-contiguous) -> merge.
+            ("2001::/ffff:ff00::ffff", "2001::1/ffff:ff00::ffff"),
+            // Same mask, adjacent at a higher bit -> reject.
+            ("::/2", "8000::/2"),
+            // Same mask, identical -> self (containment).
+            ("2001:db8::/48", "2001:db8::/48"),
+            // Containment (different masks) -> larger.
+            ("2001:db8::/32", "2001:db8:1::/48"),
+            // Different masks, no containment -> reject.
+            ("2001:db8::/32", "2001:beef:1::/48"),
+            // /0 with itself -> self (containment; no lowest mask bit).
+            ("::/0", "::/0"),
+        ];
+
+        for (a, b) in cases {
+            let a = Ipv6Network::parse(a).unwrap();
+            let b = Ipv6Network::parse(b).unwrap();
+            assert_eq!(
+                ipv6_merge_by_lowest_mask_bit_reference(&a, &b),
+                a.merge_by_lowest_mask_bit(&b),
+                "mismatch: a={a}, b={b}"
+            );
+        }
     }
 
     #[test]
@@ -7573,6 +8255,85 @@ mod test {
         arb_ipv6_network().prop_map(|net| Contiguous(net.to_contiguous()))
     }
 
+    // A pair of IPv4 networks guaranteed to be lowest-mask-bit siblings: a shared
+    // non-zero (possibly non-contiguous) mask and addresses differing only in that
+    // mask's lowest set bit. `merge_by_lowest_mask_bit` always fires on such a
+    // pair.
+    fn arb_ipv4_lowest_bit_sibling_pair() -> impl Strategy<Value = (Ipv4Network, Ipv4Network)> {
+        (any::<u32>(), any::<u32>())
+            .prop_filter("mask must be non-zero", |(.., mask)| *mask != 0)
+            .prop_map(|(addr, mask)| {
+                let a = Ipv4Network::from_bits(addr, mask);
+                let (a_bits, ..) = a.to_bits();
+                let lowest = mask & mask.wrapping_neg();
+                let b = Ipv4Network::from_bits(a_bits ^ lowest, mask);
+                (a, b)
+            })
+    }
+
+    fn arb_ipv6_lowest_bit_sibling_pair() -> impl Strategy<Value = (Ipv6Network, Ipv6Network)> {
+        (any::<u128>(), any::<u128>())
+            .prop_filter("mask must be non-zero", |(.., mask)| *mask != 0)
+            .prop_map(|(addr, mask)| {
+                let a = Ipv6Network::from_bits(addr, mask);
+                let (a_bits, ..) = a.to_bits();
+                let lowest = mask & mask.wrapping_neg();
+                let b = Ipv6Network::from_bits(a_bits ^ lowest, mask);
+                (a, b)
+            })
+    }
+
+    // Same as `arb_ipv4_lowest_bit_sibling_pair`, but the shared mask is a
+    // contiguous /p (p >= 1), so the merged parent must stay contiguous.
+    fn arb_contiguous_ipv4_sibling_pair() -> impl Strategy<Value = (Ipv4Network, Ipv4Network)> {
+        (any::<u32>(), 1u32..=32).prop_map(|(addr, prefix)| {
+            let mask = u32::MAX << (32 - prefix);
+            let a = Ipv4Network::from_bits(addr, mask);
+            let (a_bits, ..) = a.to_bits();
+            let lowest = mask & mask.wrapping_neg();
+            let b = Ipv4Network::from_bits(a_bits ^ lowest, mask);
+            (a, b)
+        })
+    }
+
+    fn arb_contiguous_ipv6_sibling_pair() -> impl Strategy<Value = (Ipv6Network, Ipv6Network)> {
+        (any::<u128>(), 1u32..=128).prop_map(|(addr, prefix)| {
+            let mask = u128::MAX << (128 - prefix);
+            let a = Ipv6Network::from_bits(addr, mask);
+            let (a_bits, ..) = a.to_bits();
+            let lowest = mask & mask.wrapping_neg();
+            let b = Ipv6Network::from_bits(a_bits ^ lowest, mask);
+            (a, b)
+        })
+    }
+
+    // A pair of bi-contiguous IPv6 siblings: each 64-bit half carries a
+    // top-aligned run (prefixes `hi`, `lo`, not both zero), addresses differing
+    // only in the whole mask's lowest set bit. The merged parent must stay
+    // bi-contiguous (collapsing to contiguous when the low run degenerates).
+    fn arb_bicontiguous_ipv6_sibling_pair() -> impl Strategy<Value = (Ipv6Network, Ipv6Network)> {
+        (any::<u128>(), 0u32..=64, 0u32..=64)
+            .prop_filter("mask must be non-zero", |(.., hi, lo)| *hi != 0 || *lo != 0)
+            .prop_map(|(addr, hi_prefix, lo_prefix)| {
+                let hi_mask = if hi_prefix == 0 {
+                    0u64
+                } else {
+                    u64::MAX << (64 - hi_prefix)
+                };
+                let lo_mask = if lo_prefix == 0 {
+                    0u64
+                } else {
+                    u64::MAX << (64 - lo_prefix)
+                };
+                let mask = ((hi_mask as u128) << 64) | (lo_mask as u128);
+                let a = Ipv6Network::from_bits(addr, mask);
+                let (a_bits, ..) = a.to_bits();
+                let lowest = mask & mask.wrapping_neg();
+                let b = Ipv6Network::from_bits(a_bits ^ lowest, mask);
+                (a, b)
+            })
+    }
+
     proptest! {
         #[test]
         fn prop_ipv4_intersects_is_not_disjoint(
@@ -7669,6 +8430,112 @@ mod test {
             b in arb_ipv4_network(),
         ) {
             prop_assert_eq!(a.merge(&b), b.merge(&a));
+        }
+
+        #[test]
+        fn prop_ipv4_merge_by_lowest_mask_bit_matches_reference(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            prop_assert_eq!(
+                a.merge_by_lowest_mask_bit(&b),
+                ipv4_merge_by_lowest_mask_bit_reference(&a, &b),
+                "mismatch: a={}, b={}", a, b
+            );
+        }
+
+        #[test]
+        fn prop_ipv4_merge_by_lowest_mask_bit_some_iff_predicate(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            // Fires exactly on containment (either direction) or a lowest-mask-bit
+            // sibling pair.
+            prop_assert_eq!(
+                a.merge_by_lowest_mask_bit(&b).is_some(),
+                a.contains(&b) || b.contains(&a) || a.is_adjacent_by_lowest_mask_bit(&b),
+                "a={}, b={}", a, b
+            );
+        }
+
+        #[test]
+        fn prop_ipv4_merge_by_lowest_mask_bit_commutativity(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            prop_assert_eq!(a.merge_by_lowest_mask_bit(&b), b.merge_by_lowest_mask_bit(&a));
+        }
+
+        #[test]
+        fn prop_ipv4_merge_by_lowest_mask_bit_agrees_with_merge(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            // `merge_by_lowest_mask_bit` is a restriction of `merge`: whenever it
+            // fires, it returns exactly the same network.
+            if let Some(r) = a.merge_by_lowest_mask_bit(&b) {
+                prop_assert_eq!(a.merge(&b), Some(r), "a={}, b={}", a, b);
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_merge_by_lowest_mask_bit_siblings_merge_and_agree(
+            (a, b) in arb_ipv4_lowest_bit_sibling_pair(),
+        ) {
+            let r = a.merge_by_lowest_mask_bit(&b).expect("siblings must merge");
+            prop_assert_eq!(a.merge(&b), Some(r), "must agree with merge: a={}, b={}", a, b);
+            prop_assert_eq!(a.merge_by_lowest_mask_bit(&b), b.merge_by_lowest_mask_bit(&a));
+            prop_assert!(r.contains(&a), "merge result {} must contain {}", r, a);
+            prop_assert!(r.contains(&b), "merge result {} must contain {}", r, b);
+            let (addr, mask) = r.to_bits();
+            prop_assert_eq!(addr & mask, addr, "result not normalized: a={}, b={}, r={}", a, b, r);
+        }
+
+        #[test]
+        fn prop_ipv4_merge_by_lowest_mask_bit_closure_contiguous(
+            (a, b) in arb_contiguous_ipv4_sibling_pair(),
+        ) {
+            prop_assert!(a.is_contiguous());
+            prop_assert!(b.is_contiguous());
+            let r = a.merge_by_lowest_mask_bit(&b).expect("siblings must merge");
+            prop_assert!(r.is_contiguous(), "contiguous inputs must merge to contiguous: a={}, b={}, r={}", a, b, r);
+        }
+
+        #[test]
+        fn prop_ipv4_merge_by_lowest_mask_bit_membership_brute_force(
+            a_addr in 0u32..=255,
+            a_mask in 0u32..=255,
+            b_addr in 0u32..=255,
+            b_mask in 0u32..=255,
+        ) {
+            let a = Ipv4Network::from_bits((a_addr & a_mask) << 24, a_mask << 24);
+            let b = Ipv4Network::from_bits((b_addr & b_mask) << 24, b_mask << 24);
+            let result = a.merge_by_lowest_mask_bit(&b);
+
+            let (a_a, a_m) = a.to_bits();
+            let (b_a, b_m) = b.to_bits();
+
+            for x in 0u32..=255 {
+                let xaddr = x << 24;
+                let in_a = (xaddr & a_m) == a_a;
+                let in_b = (xaddr & b_m) == b_a;
+                let in_result = match result {
+                    Some(r) => {
+                        let (r_a, r_m) = r.to_bits();
+                        (xaddr & r_m) == r_a
+                    }
+                    None => false,
+                };
+
+                // Whenever it fires, the result is exactly the union of A and B.
+                if result.is_some() {
+                    prop_assert_eq!(
+                        in_a || in_b,
+                        in_result,
+                        "x={} not matching A∪B: a={}, b={}, result={:?}", x, a, b, result
+                    );
+                }
+            }
         }
 
         #[test]
@@ -8075,6 +8942,125 @@ mod test {
             b in arb_ipv6_network(),
         ) {
             prop_assert_eq!(a.merge(&b), b.merge(&a));
+        }
+
+        #[test]
+        fn prop_ipv6_merge_by_lowest_mask_bit_matches_reference(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            prop_assert_eq!(
+                a.merge_by_lowest_mask_bit(&b),
+                ipv6_merge_by_lowest_mask_bit_reference(&a, &b),
+                "mismatch: a={}, b={}", a, b
+            );
+        }
+
+        #[test]
+        fn prop_ipv6_merge_by_lowest_mask_bit_some_iff_predicate(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            // Fires exactly on containment (either direction) or a lowest-mask-bit
+            // sibling pair.
+            prop_assert_eq!(
+                a.merge_by_lowest_mask_bit(&b).is_some(),
+                a.contains(&b) || b.contains(&a) || a.is_adjacent_by_lowest_mask_bit(&b),
+                "a={}, b={}", a, b
+            );
+        }
+
+        #[test]
+        fn prop_ipv6_merge_by_lowest_mask_bit_commutativity(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            prop_assert_eq!(a.merge_by_lowest_mask_bit(&b), b.merge_by_lowest_mask_bit(&a));
+        }
+
+        #[test]
+        fn prop_ipv6_merge_by_lowest_mask_bit_agrees_with_merge(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            // `merge_by_lowest_mask_bit` is a restriction of `merge`: whenever it
+            // fires, it returns exactly the same network.
+            if let Some(r) = a.merge_by_lowest_mask_bit(&b) {
+                prop_assert_eq!(a.merge(&b), Some(r), "a={}, b={}", a, b);
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_merge_by_lowest_mask_bit_siblings_merge_and_agree(
+            (a, b) in arb_ipv6_lowest_bit_sibling_pair(),
+        ) {
+            let r = a.merge_by_lowest_mask_bit(&b).expect("siblings must merge");
+            prop_assert_eq!(a.merge(&b), Some(r), "must agree with merge: a={}, b={}", a, b);
+            prop_assert_eq!(a.merge_by_lowest_mask_bit(&b), b.merge_by_lowest_mask_bit(&a));
+            prop_assert!(r.contains(&a), "merge result {} must contain {}", r, a);
+            prop_assert!(r.contains(&b), "merge result {} must contain {}", r, b);
+            let (addr, mask) = r.to_bits();
+            prop_assert_eq!(addr & mask, addr, "result not normalized: a={}, b={}, r={}", a, b, r);
+        }
+
+        #[test]
+        fn prop_ipv6_merge_by_lowest_mask_bit_closure_contiguous(
+            (a, b) in arb_contiguous_ipv6_sibling_pair(),
+        ) {
+            prop_assert!(a.is_contiguous());
+            prop_assert!(b.is_contiguous());
+            let r = a.merge_by_lowest_mask_bit(&b).expect("siblings must merge");
+            prop_assert!(r.is_contiguous(), "contiguous inputs must merge to contiguous: a={}, b={}, r={}", a, b, r);
+        }
+
+        #[test]
+        fn prop_ipv6_merge_by_lowest_mask_bit_closure_bicontiguous(
+            (a, b) in arb_bicontiguous_ipv6_sibling_pair(),
+        ) {
+            prop_assert!(a.is_bicontiguous());
+            prop_assert!(b.is_bicontiguous());
+            let r = a.merge_by_lowest_mask_bit(&b).expect("siblings must merge");
+            prop_assert!(
+                r.is_bicontiguous(),
+                "bi-contiguous inputs must merge to bi-contiguous: a={}, b={}, r={}", a, b, r
+            );
+        }
+
+        #[test]
+        fn prop_ipv6_merge_by_lowest_mask_bit_membership_brute_force(
+            a_addr in 0u128..=255,
+            a_mask in 0u128..=255,
+            b_addr in 0u128..=255,
+            b_mask in 0u128..=255,
+        ) {
+            let a = Ipv6Network::from_bits((a_addr & a_mask) << 120, a_mask << 120);
+            let b = Ipv6Network::from_bits((b_addr & b_mask) << 120, b_mask << 120);
+            let result = a.merge_by_lowest_mask_bit(&b);
+
+            let (a_a, a_m) = a.to_bits();
+            let (b_a, b_m) = b.to_bits();
+
+            for x in 0u128..=255 {
+                let xaddr = x << 120;
+                let in_a = (xaddr & a_m) == a_a;
+                let in_b = (xaddr & b_m) == b_a;
+                let in_result = match result {
+                    Some(r) => {
+                        let (r_a, r_m) = r.to_bits();
+                        (xaddr & r_m) == r_a
+                    }
+                    None => false,
+                };
+
+                // Whenever it fires, the result is exactly the union of A and B.
+                if result.is_some() {
+                    prop_assert_eq!(
+                        in_a || in_b,
+                        in_result,
+                        "x={} not matching A∪B: a={}, b={}, result={:?}", x, a, b, result
+                    );
+                }
+            }
         }
 
         #[test]
