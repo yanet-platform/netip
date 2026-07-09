@@ -1152,6 +1152,198 @@ fn bench_aggregate(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_aggregate_contiguous(c: &mut Criterion) {
+    use criterion::BenchmarkId;
+    use netip::{Contiguous, ipv4_aggregate, ipv4_aggregate_contiguous, ipv6_aggregate, ipv6_aggregate_contiguous};
+
+    // Host route whose bit pattern always has an even popcount, so no two are
+    // single-bit (buddy) siblings and — sharing the same /32 mask — none
+    // contains another. The general aggregate pays its worst-case quadratic
+    // full-stack scan on these, while the contiguous pass stays O(N log N).
+    fn never_merges_host(i: u32) -> u32 {
+        let host = 2 * i;
+        if host.count_ones().is_multiple_of(2) {
+            host
+        } else {
+            host + 1
+        }
+    }
+
+    fn ipv4_never_merges_plain(count: u32) -> Vec<Ipv4Network> {
+        (0..count)
+            .map(|i| Ipv4Network::from_bits((10u32 << 24) | never_merges_host(i), 0xFFFFFFFF))
+            .collect()
+    }
+
+    fn ipv4_never_merges_contiguous(count: u32) -> Vec<Contiguous<Ipv4Network>> {
+        (0..count)
+            .map(|i| {
+                let addr = Ipv4Addr::from_bits((10u32 << 24) | never_merges_host(i));
+                Contiguous::<Ipv4Network>::parse(&format!("{addr}/32")).unwrap()
+            })
+            .collect()
+    }
+
+    // `count` consecutive aligned /24 blocks that tile a single parent and, for
+    // power-of-two counts, aggregate all the way down to it.
+    fn ipv4_cascade_plain(count: u32) -> Vec<Ipv4Network> {
+        (0..count)
+            .map(|i| Ipv4Network::from_bits((10u32 << 24) | (i << 8), 0xFFFFFF00))
+            .collect()
+    }
+
+    fn ipv4_cascade_contiguous(count: u32) -> Vec<Contiguous<Ipv4Network>> {
+        (0..count)
+            .map(|i| {
+                let addr = Ipv4Addr::from_bits((10u32 << 24) | (i << 8));
+                Contiguous::<Ipv4Network>::parse(&format!("{addr}/24")).unwrap()
+            })
+            .collect()
+    }
+
+    fn ipv6_never_merges_plain(count: u32) -> Vec<Ipv6Network> {
+        (0..count)
+            .map(|i| Ipv6Network::from_bits((0x2001_0db8u128 << 96) | never_merges_host(i) as u128, !0u128))
+            .collect()
+    }
+
+    fn ipv6_never_merges_contiguous(count: u32) -> Vec<Contiguous<Ipv6Network>> {
+        (0..count)
+            .map(|i| {
+                let addr = Ipv6Addr::from_bits((0x2001_0db8u128 << 96) | never_merges_host(i) as u128);
+                Contiguous::<Ipv6Network>::parse(&format!("{addr}/128")).unwrap()
+            })
+            .collect()
+    }
+
+    fn ipv6_cascade_plain(count: u32) -> Vec<Ipv6Network> {
+        (0..count)
+            .map(|i| Ipv6Network::from_bits((0x2001_0db8u128 << 96) | ((i as u128) << 8), !0u128 << 8))
+            .collect()
+    }
+
+    fn ipv6_cascade_contiguous(count: u32) -> Vec<Contiguous<Ipv6Network>> {
+        (0..count)
+            .map(|i| {
+                let addr = Ipv6Addr::from_bits((0x2001_0db8u128 << 96) | ((i as u128) << 8));
+                Contiguous::<Ipv6Network>::parse(&format!("{addr}/120")).unwrap()
+            })
+            .collect()
+    }
+
+    let mut group = c.benchmark_group("netip");
+
+    for &size in &[1024u32, 4096, 16384] {
+        group.throughput(Throughput::Elements(size as u64));
+
+        let template = ipv4_never_merges_plain(size);
+        group.bench_with_input(
+            BenchmarkId::new("ipv4_aggregate never-merges", size),
+            &template,
+            |b, template| {
+                b.iter_batched(
+                    || template.clone(),
+                    |mut nets| core::hint::black_box(ipv4_aggregate(&mut nets)).len(),
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        let template = ipv4_never_merges_contiguous(size);
+        group.bench_with_input(
+            BenchmarkId::new("ipv4_aggregate_contiguous never-merges", size),
+            &template,
+            |b, template| {
+                b.iter_batched(
+                    || template.clone(),
+                    |mut nets| core::hint::black_box(ipv4_aggregate_contiguous(&mut nets)).len(),
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        let template = ipv4_cascade_plain(size);
+        group.bench_with_input(
+            BenchmarkId::new("ipv4_aggregate cascade", size),
+            &template,
+            |b, template| {
+                b.iter_batched(
+                    || template.clone(),
+                    |mut nets| core::hint::black_box(ipv4_aggregate(&mut nets)).len(),
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        let template = ipv4_cascade_contiguous(size);
+        group.bench_with_input(
+            BenchmarkId::new("ipv4_aggregate_contiguous cascade", size),
+            &template,
+            |b, template| {
+                b.iter_batched(
+                    || template.clone(),
+                    |mut nets| core::hint::black_box(ipv4_aggregate_contiguous(&mut nets)).len(),
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        let template = ipv6_never_merges_plain(size);
+        group.bench_with_input(
+            BenchmarkId::new("ipv6_aggregate never-merges", size),
+            &template,
+            |b, template| {
+                b.iter_batched(
+                    || template.clone(),
+                    |mut nets| core::hint::black_box(ipv6_aggregate(&mut nets)).len(),
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        let template = ipv6_never_merges_contiguous(size);
+        group.bench_with_input(
+            BenchmarkId::new("ipv6_aggregate_contiguous never-merges", size),
+            &template,
+            |b, template| {
+                b.iter_batched(
+                    || template.clone(),
+                    |mut nets| core::hint::black_box(ipv6_aggregate_contiguous(&mut nets)).len(),
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        let template = ipv6_cascade_plain(size);
+        group.bench_with_input(
+            BenchmarkId::new("ipv6_aggregate cascade", size),
+            &template,
+            |b, template| {
+                b.iter_batched(
+                    || template.clone(),
+                    |mut nets| core::hint::black_box(ipv6_aggregate(&mut nets)).len(),
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        let template = ipv6_cascade_contiguous(size);
+        group.bench_with_input(
+            BenchmarkId::new("ipv6_aggregate_contiguous cascade", size),
+            &template,
+            |b, template| {
+                b.iter_batched(
+                    || template.clone(),
+                    |mut nets| core::hint::black_box(ipv6_aggregate_contiguous(&mut nets)).len(),
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
 fn bench_binary_split(c: &mut Criterion) {
     use netip::{ipv4_binary_split, ipv6_binary_split};
 
@@ -1793,6 +1985,7 @@ criterion_group!(
     bench_is_contiguous,
     bench_is_bicontiguous,
     bench_aggregate,
+    bench_aggregate_contiguous,
     bench_binary_split,
     bench_supernet_for,
     bench_difference,

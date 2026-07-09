@@ -749,6 +749,157 @@ impl FromStr for Contiguous<Ipv6Network> {
     }
 }
 
+/// Aggregates contiguous IPv4 networks in place into their minimal CIDR cover.
+///
+/// Returns the aggregated subslice: duplicates removed, contained networks
+/// eliminated, and adjacent CIDR buddies merged, down to the unique smallest
+/// set of contiguous blocks whose address union equals the input's.
+///
+/// Unlike [`crate::ipv4_aggregate`], every result stays contiguous
+/// (class-preserving) and the cover is minimal. This is possible because
+/// contiguous blocks form a laminar family — any two are nested or disjoint —
+/// so the single sorted pass only ever merges against the running stack top,
+/// giving `O(N log N)` instead of the general aggregate's worst-case quadratic
+/// full-stack scan.
+///
+/// Zero allocations — the algorithm operates entirely within the input slice.
+///
+/// # Examples
+///
+/// ```
+/// use netip::{Contiguous, Ipv4Network, ipv4_aggregate_contiguous};
+///
+/// let mut nets = [
+///     Contiguous::<Ipv4Network>::parse("192.168.0.0/24").unwrap(),
+///     Contiguous::<Ipv4Network>::parse("192.168.1.0/24").unwrap(),
+///     Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap(),
+///     Contiguous::<Ipv4Network>::parse("10.1.0.0/16").unwrap(),
+/// ];
+///
+/// let result = ipv4_aggregate_contiguous(&mut nets);
+/// assert_eq!(result.len(), 2);
+/// assert_eq!(
+///     result[0],
+///     Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap()
+/// );
+/// assert_eq!(
+///     result[1],
+///     Contiguous::<Ipv4Network>::parse("192.168.0.0/23").unwrap()
+/// );
+/// ```
+pub fn ipv4_aggregate_contiguous(nets: &mut [Contiguous<Ipv4Network>]) -> &mut [Contiguous<Ipv4Network>] {
+    let len = ip_aggregate(nets);
+    &mut nets[..len]
+}
+
+/// Aggregates contiguous IPv6 networks in place into their minimal CIDR cover.
+///
+/// Returns the aggregated subslice: duplicates removed, contained networks
+/// eliminated, and adjacent CIDR buddies merged, down to the unique smallest
+/// set of contiguous blocks whose address union equals the input's.
+///
+/// Unlike [`crate::ipv6_aggregate`], every result stays contiguous
+/// (class-preserving) and the cover is minimal. This is possible because
+/// contiguous blocks form a laminar family — any two are nested or disjoint —
+/// so the single sorted pass only ever merges against the running stack top,
+/// giving `O(N log N)` instead of the general aggregate's worst-case quadratic
+/// full-stack scan.
+///
+/// Zero allocations — the algorithm operates entirely within the input slice.
+///
+/// # Examples
+///
+/// ```
+/// use netip::{Contiguous, Ipv6Network, ipv6_aggregate_contiguous};
+///
+/// let mut nets = [
+///     Contiguous::<Ipv6Network>::parse("2001:db8::/48").unwrap(),
+///     Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap(),
+///     Contiguous::<Ipv6Network>::parse("fe80::/10").unwrap(),
+///     Contiguous::<Ipv6Network>::parse("fe80::/64").unwrap(),
+/// ];
+///
+/// let result = ipv6_aggregate_contiguous(&mut nets);
+/// assert_eq!(result.len(), 2);
+/// assert_eq!(
+///     result[0],
+///     Contiguous::<Ipv6Network>::parse("2001:db8::/47").unwrap()
+/// );
+/// assert_eq!(
+///     result[1],
+///     Contiguous::<Ipv6Network>::parse("fe80::/10").unwrap()
+/// );
+/// ```
+pub fn ipv6_aggregate_contiguous(nets: &mut [Contiguous<Ipv6Network>]) -> &mut [Contiguous<Ipv6Network>] {
+    let len = ip_aggregate(nets);
+    &mut nets[..len]
+}
+
+trait Aggregate: Ord + Copy {
+    fn merge(&self, other: &Self) -> Option<Self>;
+}
+
+impl Aggregate for Ipv4Network {
+    #[inline]
+    fn merge(&self, other: &Self) -> Option<Self> {
+        self.merge_by_lowest_mask_bit(other)
+    }
+}
+
+impl Aggregate for Ipv6Network {
+    #[inline]
+    fn merge(&self, other: &Self) -> Option<Self> {
+        self.merge_by_lowest_mask_bit(other)
+    }
+}
+
+fn ip_aggregate<T: Aggregate>(nets: &mut [Contiguous<T>]) -> usize {
+    if nets.len() <= 1 {
+        return nets.len();
+    }
+
+    // Sorting by (addr, mask) ascending places every container immediately
+    // before the blocks it contains and makes lowest-mask-bit buddies
+    // adjacent.
+    nets.sort_unstable();
+
+    // Top-only cascade over the family of contiguous blocks.
+    //
+    // Sorted, the stack `nets[..w]` holds pairwise-disjoint blocks in
+    // increasing address order, so the next candidate can only ever be
+    // contained in, contain, or be the CIDR buddy of the current top — never a
+    // deeper stack entry.
+    //
+    // Cascading against the top alone is therefore complete and runs in `O(N)`
+    // after the sort, versus the general aggregate's per-candidate full-stack
+    // scan.
+    let mut w = 1usize;
+    for r in 1..nets.len() {
+        let mut current: T = *nets[r];
+
+        while w > 0 {
+            let top: T = *nets[w - 1];
+            match top.merge(&current) {
+                Some(merged) => {
+                    current = merged;
+                    w -= 1;
+                }
+                None => break,
+            }
+        }
+
+        // NOTE: merging two contiguous networks yields a contiguous network —
+        // containment returns one of the inputs unchanged, and a lowest-mask-bit
+        // buddy merge only clears the mask's lowest set bit, leaving the
+        // leading-ones run intact — so the result is known contiguous and is
+        // re-wrapped without re-validating the invariant.
+        nets[w] = Contiguous(current);
+        w += 1;
+    }
+
+    w
+}
+
 #[cfg(test)]
 mod test {
     use proptest::prelude::*;
@@ -1140,6 +1291,387 @@ mod test {
         assert_eq!(net_v6.contains(&net_v4), (*net_v6).contains(&net_v4));
     }
 
+    // Classic fixpoint CIDR aggregation, used as an independent oracle for
+    // `ipv4_aggregate_contiguous`: repeatedly absorb containment and merge CIDR
+    // buddies until nothing merges, then sort the survivors. Deliberately a
+    // plain quadratic reference and kept byte-stable across changes to the fast
+    // implementation.
+    fn ipv4_aggregate_contiguous_reference(input: &[Contiguous<Ipv4Network>]) -> Vec<Ipv4Network> {
+        let mut nets: Vec<Ipv4Network> = input.iter().map(|net| **net).collect();
+        loop {
+            let mut merge = None;
+            'scan: for i in 0..nets.len() {
+                for j in (i + 1)..nets.len() {
+                    if let Some(parent) = nets[i].merge_by_lowest_mask_bit(&nets[j]) {
+                        merge = Some((i, j, parent));
+                        break 'scan;
+                    }
+                }
+            }
+            match merge {
+                Some((i, j, parent)) => {
+                    nets[i] = parent;
+                    nets.remove(j);
+                }
+                None => break,
+            }
+        }
+        nets.sort_unstable();
+        nets
+    }
+
+    fn ipv6_aggregate_contiguous_reference(input: &[Contiguous<Ipv6Network>]) -> Vec<Ipv6Network> {
+        let mut nets: Vec<Ipv6Network> = input.iter().map(|net| **net).collect();
+        loop {
+            let mut merge = None;
+            'scan: for i in 0..nets.len() {
+                for j in (i + 1)..nets.len() {
+                    if let Some(parent) = nets[i].merge_by_lowest_mask_bit(&nets[j]) {
+                        merge = Some((i, j, parent));
+                        break 'scan;
+                    }
+                }
+            }
+            match merge {
+                Some((i, j, parent)) => {
+                    nets[i] = parent;
+                    nets.remove(j);
+                }
+                None => break,
+            }
+        }
+        nets.sort_unstable();
+        nets
+    }
+
+    fn ipv4_contiguous_inner_sorted(nets: &[Contiguous<Ipv4Network>]) -> Vec<Ipv4Network> {
+        let mut inner: Vec<Ipv4Network> = nets.iter().map(|net| **net).collect();
+        inner.sort_unstable();
+        inner
+    }
+
+    fn ipv6_contiguous_inner_sorted(nets: &[Contiguous<Ipv6Network>]) -> Vec<Ipv6Network> {
+        let mut inner: Vec<Ipv6Network> = nets.iter().map(|net| **net).collect();
+        inner.sort_unstable();
+        inner
+    }
+
+    // Contiguous IPv4 CIDR blocks confined to 192.168.0.0/20 (a 4096-address
+    // window) with prefixes 24..=32. The tight window makes containment and
+    // buddy cascades frequent, while capping each block at 256 addresses keeps a
+    // whole collection's address union small enough to brute-force.
+    fn arb_clustered_contiguous_ipv4_network() -> impl Strategy<Value = Contiguous<Ipv4Network>> {
+        (any::<u32>(), 24u8..=32).prop_map(|(addr, prefix)| {
+            let addr = (192 << 24) | (168 << 16) | (addr & 0x0FFF);
+            Contiguous(Ipv4Network::try_from((Ipv4Addr::from_bits(addr), prefix)).unwrap())
+        })
+    }
+
+    fn arb_clustered_contiguous_ipv4_networks() -> impl Strategy<Value = Vec<Contiguous<Ipv4Network>>> {
+        prop::collection::vec(arb_clustered_contiguous_ipv4_network(), 0..=24)
+    }
+
+    // Contiguous IPv6 CIDR blocks confined to 2001:db8::/116 with prefixes
+    // 120..=128, mirroring the IPv4 clustering above.
+    fn arb_clustered_contiguous_ipv6_network() -> impl Strategy<Value = Contiguous<Ipv6Network>> {
+        (any::<u128>(), 120u8..=128).prop_map(|(addr, prefix)| {
+            let addr = 0x2001_0db8_0000_0000_0000_0000_0000_0000u128 | (addr & 0x0FFF);
+            Contiguous(Ipv6Network::try_from((Ipv6Addr::from_bits(addr), prefix)).unwrap())
+        })
+    }
+
+    fn arb_clustered_contiguous_ipv6_networks() -> impl Strategy<Value = Vec<Contiguous<Ipv6Network>>> {
+        prop::collection::vec(arb_clustered_contiguous_ipv6_network(), 0..=24)
+    }
+
+    #[test]
+    fn ipv4_aggregate_contiguous_empty() {
+        let result = ipv4_aggregate_contiguous(&mut []);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn ipv4_aggregate_contiguous_single() {
+        let net = Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap();
+        let mut nets = [net];
+        let result = ipv4_aggregate_contiguous(&mut nets);
+        assert_eq!(result, &[net]);
+    }
+
+    #[test]
+    fn ipv4_aggregate_contiguous_duplicates() {
+        let net = Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap();
+        let mut nets = [net, net, net];
+        let result = ipv4_aggregate_contiguous(&mut nets);
+        assert_eq!(result, &[net]);
+    }
+
+    #[test]
+    fn ipv4_aggregate_contiguous_containment() {
+        let mut nets = [
+            Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap(),
+            Contiguous::<Ipv4Network>::parse("10.1.0.0/16").unwrap(),
+            Contiguous::<Ipv4Network>::parse("10.1.1.0/24").unwrap(),
+        ];
+        let result = ipv4_aggregate_contiguous(&mut nets);
+        assert_eq!(result, &[Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap()]);
+    }
+
+    #[test]
+    fn ipv4_aggregate_contiguous_single_buddy_merge() {
+        let mut nets = [
+            Contiguous::<Ipv4Network>::parse("192.168.0.0/24").unwrap(),
+            Contiguous::<Ipv4Network>::parse("192.168.1.0/24").unwrap(),
+        ];
+        let result = ipv4_aggregate_contiguous(&mut nets);
+        assert_eq!(result, &[Contiguous::<Ipv4Network>::parse("192.168.0.0/23").unwrap()]);
+    }
+
+    #[test]
+    fn ipv4_aggregate_contiguous_multi_level_cascade() {
+        let mut nets = [
+            Contiguous::<Ipv4Network>::parse("192.168.0.0/24").unwrap(),
+            Contiguous::<Ipv4Network>::parse("192.168.1.0/24").unwrap(),
+            Contiguous::<Ipv4Network>::parse("192.168.2.0/24").unwrap(),
+            Contiguous::<Ipv4Network>::parse("192.168.3.0/24").unwrap(),
+        ];
+        let result = ipv4_aggregate_contiguous(&mut nets);
+        assert_eq!(result, &[Contiguous::<Ipv4Network>::parse("192.168.0.0/22").unwrap()]);
+    }
+
+    #[test]
+    fn ipv4_aggregate_contiguous_non_adjacent() {
+        let mut nets = [
+            Contiguous::<Ipv4Network>::parse("192.168.0.0/24").unwrap(),
+            Contiguous::<Ipv4Network>::parse("192.168.3.0/24").unwrap(),
+        ];
+        let result = ipv4_aggregate_contiguous(&mut nets);
+        assert_eq!(
+            result,
+            &[
+                Contiguous::<Ipv4Network>::parse("192.168.0.0/24").unwrap(),
+                Contiguous::<Ipv4Network>::parse("192.168.3.0/24").unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ipv4_aggregate_contiguous_already_minimal() {
+        let mut nets = [
+            Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap(),
+            Contiguous::<Ipv4Network>::parse("172.16.0.0/12").unwrap(),
+            Contiguous::<Ipv4Network>::parse("192.168.0.0/16").unwrap(),
+        ];
+        let result = ipv4_aggregate_contiguous(&mut nets);
+        assert_eq!(
+            result,
+            &[
+                Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap(),
+                Contiguous::<Ipv4Network>::parse("172.16.0.0/12").unwrap(),
+                Contiguous::<Ipv4Network>::parse("192.168.0.0/16").unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ipv4_aggregate_contiguous_mixed_containment_and_merge() {
+        let mut nets = [
+            Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap(),
+            Contiguous::<Ipv4Network>::parse("10.1.0.0/16").unwrap(),
+            Contiguous::<Ipv4Network>::parse("192.168.0.0/24").unwrap(),
+            Contiguous::<Ipv4Network>::parse("192.168.1.0/24").unwrap(),
+        ];
+        let result = ipv4_aggregate_contiguous(&mut nets);
+        assert_eq!(
+            result,
+            &[
+                Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap(),
+                Contiguous::<Ipv4Network>::parse("192.168.0.0/23").unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ipv4_aggregate_contiguous_default_route_absorbs_all() {
+        let mut nets = [
+            Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap(),
+            Contiguous::<Ipv4Network>::parse("0.0.0.0/0").unwrap(),
+            Contiguous::<Ipv4Network>::parse("192.168.1.0/24").unwrap(),
+        ];
+        let result = ipv4_aggregate_contiguous(&mut nets);
+        assert_eq!(result, &[Contiguous::<Ipv4Network>::parse("0.0.0.0/0").unwrap()]);
+    }
+
+    #[test]
+    fn ipv4_aggregate_contiguous_host_routes_merge() {
+        let mut nets = [
+            Contiguous::<Ipv4Network>::parse("10.0.0.0/32").unwrap(),
+            Contiguous::<Ipv4Network>::parse("10.0.0.1/32").unwrap(),
+        ];
+        let result = ipv4_aggregate_contiguous(&mut nets);
+        assert_eq!(result, &[Contiguous::<Ipv4Network>::parse("10.0.0.0/31").unwrap()]);
+    }
+
+    #[test]
+    fn ipv4_aggregate_contiguous_host_routes_non_adjacent() {
+        let mut nets = [
+            Contiguous::<Ipv4Network>::parse("10.0.0.0/32").unwrap(),
+            Contiguous::<Ipv4Network>::parse("10.0.0.2/32").unwrap(),
+        ];
+        let result = ipv4_aggregate_contiguous(&mut nets);
+        assert_eq!(
+            result,
+            &[
+                Contiguous::<Ipv4Network>::parse("10.0.0.0/32").unwrap(),
+                Contiguous::<Ipv4Network>::parse("10.0.0.2/32").unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ipv6_aggregate_contiguous_empty() {
+        let result = ipv6_aggregate_contiguous(&mut []);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn ipv6_aggregate_contiguous_single() {
+        let net = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let mut nets = [net];
+        let result = ipv6_aggregate_contiguous(&mut nets);
+        assert_eq!(result, &[net]);
+    }
+
+    #[test]
+    fn ipv6_aggregate_contiguous_duplicates() {
+        let net = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let mut nets = [net, net, net];
+        let result = ipv6_aggregate_contiguous(&mut nets);
+        assert_eq!(result, &[net]);
+    }
+
+    #[test]
+    fn ipv6_aggregate_contiguous_containment() {
+        let mut nets = [
+            Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap(),
+            Contiguous::<Ipv6Network>::parse("2001:db8::/48").unwrap(),
+            Contiguous::<Ipv6Network>::parse("2001:db8:0:1::/64").unwrap(),
+        ];
+        let result = ipv6_aggregate_contiguous(&mut nets);
+        assert_eq!(result, &[Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap()]);
+    }
+
+    #[test]
+    fn ipv6_aggregate_contiguous_single_buddy_merge() {
+        let mut nets = [
+            Contiguous::<Ipv6Network>::parse("2001:db8::/48").unwrap(),
+            Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap(),
+        ];
+        let result = ipv6_aggregate_contiguous(&mut nets);
+        assert_eq!(result, &[Contiguous::<Ipv6Network>::parse("2001:db8::/47").unwrap()]);
+    }
+
+    #[test]
+    fn ipv6_aggregate_contiguous_multi_level_cascade() {
+        let mut nets = [
+            Contiguous::<Ipv6Network>::parse("2001:db8:0:0::/64").unwrap(),
+            Contiguous::<Ipv6Network>::parse("2001:db8:0:1::/64").unwrap(),
+            Contiguous::<Ipv6Network>::parse("2001:db8:0:2::/64").unwrap(),
+            Contiguous::<Ipv6Network>::parse("2001:db8:0:3::/64").unwrap(),
+        ];
+        let result = ipv6_aggregate_contiguous(&mut nets);
+        assert_eq!(result, &[Contiguous::<Ipv6Network>::parse("2001:db8::/62").unwrap()]);
+    }
+
+    #[test]
+    fn ipv6_aggregate_contiguous_non_adjacent() {
+        let mut nets = [
+            Contiguous::<Ipv6Network>::parse("2001:db8:0:0::/64").unwrap(),
+            Contiguous::<Ipv6Network>::parse("2001:db8:0:3::/64").unwrap(),
+        ];
+        let result = ipv6_aggregate_contiguous(&mut nets);
+        assert_eq!(
+            result,
+            &[
+                Contiguous::<Ipv6Network>::parse("2001:db8:0:0::/64").unwrap(),
+                Contiguous::<Ipv6Network>::parse("2001:db8:0:3::/64").unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ipv6_aggregate_contiguous_already_minimal() {
+        let mut nets = [
+            Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap(),
+            Contiguous::<Ipv6Network>::parse("2001:dba::/32").unwrap(),
+            Contiguous::<Ipv6Network>::parse("fe80::/10").unwrap(),
+        ];
+        let result = ipv6_aggregate_contiguous(&mut nets);
+        assert_eq!(
+            result,
+            &[
+                Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap(),
+                Contiguous::<Ipv6Network>::parse("2001:dba::/32").unwrap(),
+                Contiguous::<Ipv6Network>::parse("fe80::/10").unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ipv6_aggregate_contiguous_mixed_containment_and_merge() {
+        let mut nets = [
+            Contiguous::<Ipv6Network>::parse("fe80::/10").unwrap(),
+            Contiguous::<Ipv6Network>::parse("fe80::/64").unwrap(),
+            Contiguous::<Ipv6Network>::parse("2001:db8::/48").unwrap(),
+            Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap(),
+        ];
+        let result = ipv6_aggregate_contiguous(&mut nets);
+        assert_eq!(
+            result,
+            &[
+                Contiguous::<Ipv6Network>::parse("2001:db8::/47").unwrap(),
+                Contiguous::<Ipv6Network>::parse("fe80::/10").unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ipv6_aggregate_contiguous_default_route_absorbs_all() {
+        let mut nets = [
+            Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap(),
+            Contiguous::<Ipv6Network>::parse("::/0").unwrap(),
+            Contiguous::<Ipv6Network>::parse("fe80::/10").unwrap(),
+        ];
+        let result = ipv6_aggregate_contiguous(&mut nets);
+        assert_eq!(result, &[Contiguous::<Ipv6Network>::parse("::/0").unwrap()]);
+    }
+
+    #[test]
+    fn ipv6_aggregate_contiguous_host_routes_merge() {
+        let mut nets = [
+            Contiguous::<Ipv6Network>::parse("2001:db8::/128").unwrap(),
+            Contiguous::<Ipv6Network>::parse("2001:db8::1/128").unwrap(),
+        ];
+        let result = ipv6_aggregate_contiguous(&mut nets);
+        assert_eq!(result, &[Contiguous::<Ipv6Network>::parse("2001:db8::/127").unwrap()]);
+    }
+
+    #[test]
+    fn ipv6_aggregate_contiguous_host_routes_non_adjacent() {
+        let mut nets = [
+            Contiguous::<Ipv6Network>::parse("2001:db8::/128").unwrap(),
+            Contiguous::<Ipv6Network>::parse("2001:db8::2/128").unwrap(),
+        ];
+        let result = ipv6_aggregate_contiguous(&mut nets);
+        assert_eq!(
+            result,
+            &[
+                Contiguous::<Ipv6Network>::parse("2001:db8::/128").unwrap(),
+                Contiguous::<Ipv6Network>::parse("2001:db8::2/128").unwrap(),
+            ]
+        );
+    }
+
     fn arb_contiguous_ipv4_network() -> impl Strategy<Value = Contiguous<Ipv4Network>> {
         arb_ipv4_network().prop_map(|net| Contiguous(net.to_contiguous()))
     }
@@ -1364,6 +1896,127 @@ mod test {
             b in arb_contiguous_ip_network(),
         ) {
             prop_assert_eq!(a.contains(&b), (*a).contains(&b));
+        }
+
+        #[test]
+        fn prop_ipv4_aggregate_contiguous_preserves_addresses(nets in arb_clustered_contiguous_ipv4_networks()) {
+            let mut before: Vec<u32> = nets.iter().flat_map(|net| (**net).addrs().map(|a| a.to_bits())).collect();
+            before.sort_unstable();
+            before.dedup();
+
+            let mut nets = nets;
+            let result = ipv4_aggregate_contiguous(&mut nets);
+
+            let mut after: Vec<u32> = result.iter().flat_map(|net| (**net).addrs().map(|a| a.to_bits())).collect();
+            after.sort_unstable();
+            after.dedup();
+
+            prop_assert_eq!(before, after);
+        }
+
+        #[test]
+        fn prop_ipv4_aggregate_contiguous_is_minimal(nets in arb_clustered_contiguous_ipv4_networks()) {
+            let mut nets = nets;
+            let result = ipv4_aggregate_contiguous(&mut nets);
+            for i in 0..result.len() {
+                for j in (i + 1)..result.len() {
+                    let a: Ipv4Network = *result[i];
+                    let b: Ipv4Network = *result[j];
+                    prop_assert_ne!(a, b);
+                    prop_assert!(a.merge_by_lowest_mask_bit(&b).is_none());
+                    prop_assert!(!a.contains(&b));
+                    prop_assert!(!b.contains(&a));
+                }
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_aggregate_contiguous_stays_contiguous(nets in arb_clustered_contiguous_ipv4_networks()) {
+            let mut nets = nets;
+            let result = ipv4_aggregate_contiguous(&mut nets);
+            for net in result.iter() {
+                // The wrapper asserts contiguity; confirm the unwrapped network's
+                // general check agrees, since the fast path re-wraps merge results
+                // without re-validating.
+                prop_assert!((**net).is_contiguous());
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_aggregate_contiguous_matches_reference(nets in arb_clustered_contiguous_ipv4_networks()) {
+            let expected = ipv4_aggregate_contiguous_reference(&nets);
+            let mut nets = nets;
+            let result = ipv4_aggregate_contiguous(&mut nets);
+            let actual = ipv4_contiguous_inner_sorted(result);
+            prop_assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn prop_ipv4_aggregate_contiguous_is_idempotent(nets in arb_clustered_contiguous_ipv4_networks()) {
+            let mut nets = nets;
+            let first: Vec<_> = ipv4_aggregate_contiguous(&mut nets).to_vec();
+            let mut again = first.clone();
+            let second: Vec<_> = ipv4_aggregate_contiguous(&mut again).to_vec();
+            prop_assert_eq!(first, second);
+        }
+
+        #[test]
+        fn prop_ipv6_aggregate_contiguous_preserves_addresses(nets in arb_clustered_contiguous_ipv6_networks()) {
+            let mut before: Vec<u128> = nets.iter().flat_map(|net| (**net).addrs().map(|a| a.to_bits())).collect();
+            before.sort_unstable();
+            before.dedup();
+
+            let mut nets = nets;
+            let result = ipv6_aggregate_contiguous(&mut nets);
+
+            let mut after: Vec<u128> = result.iter().flat_map(|net| (**net).addrs().map(|a| a.to_bits())).collect();
+            after.sort_unstable();
+            after.dedup();
+
+            prop_assert_eq!(before, after);
+        }
+
+        #[test]
+        fn prop_ipv6_aggregate_contiguous_is_minimal(nets in arb_clustered_contiguous_ipv6_networks()) {
+            let mut nets = nets;
+            let result = ipv6_aggregate_contiguous(&mut nets);
+            for i in 0..result.len() {
+                for j in (i + 1)..result.len() {
+                    let a: Ipv6Network = *result[i];
+                    let b: Ipv6Network = *result[j];
+                    prop_assert_ne!(a, b);
+                    prop_assert!(a.merge_by_lowest_mask_bit(&b).is_none());
+                    prop_assert!(!a.contains(&b));
+                    prop_assert!(!b.contains(&a));
+                }
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_aggregate_contiguous_stays_contiguous(nets in arb_clustered_contiguous_ipv6_networks()) {
+            let mut nets = nets;
+            let result = ipv6_aggregate_contiguous(&mut nets);
+            for net in result.iter() {
+                prop_assert!((**net).is_contiguous());
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_aggregate_contiguous_matches_reference(nets in arb_clustered_contiguous_ipv6_networks()) {
+            let expected = ipv6_aggregate_contiguous_reference(&nets);
+            let mut nets = nets;
+            let result = ipv6_aggregate_contiguous(&mut nets);
+            let actual = ipv6_contiguous_inner_sorted(result);
+            prop_assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn prop_ipv6_aggregate_contiguous_is_idempotent(nets in arb_clustered_contiguous_ipv6_networks()) {
+            let mut nets = nets;
+            let first: Vec<_> = ipv6_aggregate_contiguous(&mut nets).to_vec();
+            let mut again = first.clone();
+            let second: Vec<_> = ipv6_aggregate_contiguous(&mut again).to_vec();
+            prop_assert_eq!(first, second);
         }
     }
 }
