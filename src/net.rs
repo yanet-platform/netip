@@ -7376,7 +7376,7 @@ mod test {
     fn ipv4_aggregate_full_octet() {
         // 256 /24s covering 10.0.0.0/16.
         let mut nets: Vec<_> = (0..=255u32)
-            .map(|i| Ipv4Network::from_bits((10 << 24) | (0 << 16) | (i << 8), 0xFFFFFF00))
+            .map(|i| Ipv4Network::from_bits((10 << 24) | (i << 8), 0xFFFFFF00))
             .collect();
         let result = ipv4_aggregate(&mut nets);
         assert_eq!(result, &[Ipv4Network::parse("10.0.0.0/16").unwrap()]);
@@ -7737,14 +7737,13 @@ mod test {
                     None => false,
                 };
 
-                if in_a || in_b {
-                    if let Some(..) = result {
+                if (in_a || in_b)
+                    && result.is_some() {
                         prop_assert!(
                             in_result,
                             "x={x} in A∪B but not in merge result: a={a}, b={b}, result={result:?}"
                         );
                     }
-                }
                 if in_result {
                     prop_assert!(
                         in_a || in_b,
@@ -8144,14 +8143,13 @@ mod test {
                     None => false,
                 };
 
-                if in_a || in_b {
-                    if let Some(..) = result {
+                if (in_a || in_b)
+                    && result.is_some() {
                         prop_assert!(
                             in_result,
                             "x={x} in A∪B but not in merge result: a={a}, b={b}, result={result:?}"
                         );
                     }
-                }
                 if in_result {
                     prop_assert!(
                         in_a || in_b,
