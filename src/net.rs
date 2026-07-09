@@ -143,6 +143,16 @@ const fn ipv4_adjacent_bit(a1: u32, m1: u32, a2: u32, m2: u32) -> Option<u32> {
     if d != 0 && d & (d - 1) == 0 { Some(d) } else { None }
 }
 
+/// Returns `true` if two same-mask IPv4 networks differ in exactly the
+/// lowest set bit of that mask, `false` otherwise.
+///
+/// The `m1 != 0` clause excludes the `/0` mask, whose isolated lowest set bit
+/// is `0`; without it two identical `/0` networks would qualify.
+#[inline]
+const fn ipv4_adjacent_by_lowest_mask_bit(a1: u32, m1: u32, a2: u32, m2: u32) -> bool {
+    m1 == m2 && m1 != 0 && (a1 ^ a2) == (m1 & m1.wrapping_neg())
+}
+
 /// Returns the single differing bit if two same-mask IPv6 networks are
 /// adjacent (addresses differ by exactly one masked bit), `None` otherwise.
 #[inline]
@@ -152,6 +162,16 @@ const fn ipv6_adjacent_bit(a1: u128, m1: u128, a2: u128, m2: u128) -> Option<u12
     }
     let d = a1 ^ a2;
     if d != 0 && d & (d - 1) == 0 { Some(d) } else { None }
+}
+
+/// Returns `true` if two same-mask IPv6 networks differ in exactly the
+/// lowest set bit of that mask, `false` otherwise.
+///
+/// The `m1 != 0` clause excludes the `/0` mask, whose isolated lowest set bit
+/// is `0`; without it two identical `/0` networks would qualify.
+#[inline]
+const fn ipv6_adjacent_by_lowest_mask_bit(a1: u128, m1: u128, a2: u128, m2: u128) -> bool {
+    m1 == m2 && m1 != 0 && (a1 ^ a2) == (m1 & m1.wrapping_neg())
 }
 
 /// An IP network, either IPv4 or IPv6.
@@ -595,6 +615,56 @@ impl IpNetwork {
         match (self, other) {
             (Self::V4(a), Self::V4(b)) => a.is_adjacent(b),
             (Self::V6(a), Self::V6(b)) => a.is_adjacent(b),
+            _ => false,
+        }
+    }
+
+    /// Returns `true` if this network is adjacent to `other` at the lowest set
+    /// bit of their shared mask.
+    ///
+    /// This is the strict restriction of [`is_adjacent`](Self::is_adjacent) to
+    /// the mask's lowest set bit — the buddy/boundary bit that separates a
+    /// block from its immediate parent. Consequently
+    /// `is_adjacent_by_lowest_mask_bit` implies `is_adjacent`, but not
+    /// conversely: `is_adjacent` also accepts a difference in any other
+    /// single masked bit. This is precisely the adjacency whose merge
+    /// preserves the mask's structural class (a contiguous pair merges to a
+    /// contiguous parent, and so on).
+    ///
+    /// Returns `false` for networks of different address families.
+    ///
+    /// See [`Ipv4Network::is_adjacent_by_lowest_mask_bit`] and
+    /// [`Ipv6Network::is_adjacent_by_lowest_mask_bit`] for details.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::IpNetwork;
+    ///
+    /// // CIDR siblings differ in the lowest mask bit: both predicates hold.
+    /// let a = IpNetwork::parse("192.168.0.0/24").unwrap();
+    /// let b = IpNetwork::parse("192.168.1.0/24").unwrap();
+    /// assert!(a.is_adjacent(&b));
+    /// assert!(a.is_adjacent_by_lowest_mask_bit(&b));
+    ///
+    /// // Adjacent at the top mask bit, not the lowest: `is_adjacent` accepts
+    /// // it, `is_adjacent_by_lowest_mask_bit` rejects it.
+    /// let c = IpNetwork::parse("0.0.0.0/2").unwrap();
+    /// let d = IpNetwork::parse("128.0.0.0/2").unwrap();
+    /// assert!(c.is_adjacent(&d));
+    /// assert!(!c.is_adjacent_by_lowest_mask_bit(&d));
+    ///
+    /// // Mixed address families are never adjacent.
+    /// let v4 = IpNetwork::parse("10.0.0.0/8").unwrap();
+    /// let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
+    /// assert!(!v4.is_adjacent_by_lowest_mask_bit(&v6));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn is_adjacent_by_lowest_mask_bit(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::V4(a), Self::V4(b)) => a.is_adjacent_by_lowest_mask_bit(b),
+            (Self::V6(a), Self::V6(b)) => a.is_adjacent_by_lowest_mask_bit(b),
             _ => false,
         }
     }
@@ -1302,6 +1372,64 @@ impl Ipv4Network {
         let (a1, m1) = self.to_bits();
         let (a2, m2) = other.to_bits();
         ipv4_adjacent_bit(a1, m1, a2, m2).is_some()
+    }
+
+    /// Returns `true` if this network is adjacent to `other` at the lowest set
+    /// bit of their shared mask.
+    ///
+    /// This is the strict restriction of [`is_adjacent`](Self::is_adjacent) to
+    /// the mask's lowest set bit — the boundary ("buddy") bit that separates a
+    /// block from its immediate parent. The two networks must share the same
+    /// mask and their addresses must differ in exactly that single bit.
+    ///
+    /// Every pair accepted here is also accepted by
+    /// [`is_adjacent`](Self::is_adjacent), but not conversely: `is_adjacent`
+    /// additionally accepts a difference in any other single masked bit. This
+    /// is precisely the adjacency whose merge preserves the mask's structural
+    /// class — merging two contiguous (CIDR) blocks at their buddy bit yields a
+    /// contiguous parent, whereas merging at a higher bit would punch a hole
+    /// and leave the contiguous class.
+    ///
+    /// Identical networks are **not** adjacent, and a `/0` network is never
+    /// adjacent to anything. Works correctly with non-contiguous masks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv4Network;
+    ///
+    /// // CIDR siblings differ in the lowest mask bit: both predicates hold,
+    /// // and they would merge into a /23.
+    /// let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+    /// let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+    /// assert!(a.is_adjacent(&b));
+    /// assert!(a.is_adjacent_by_lowest_mask_bit(&b));
+    ///
+    /// // Adjacent at the *top* mask bit, not the lowest: `is_adjacent`
+    /// // accepts it, `is_adjacent_by_lowest_mask_bit` rejects it (merging there
+    /// // would leave the contiguous class).
+    /// let c = Ipv4Network::parse("0.0.0.0/2").unwrap();
+    /// let d = Ipv4Network::parse("128.0.0.0/2").unwrap();
+    /// assert!(c.is_adjacent(&d));
+    /// assert!(!c.is_adjacent_by_lowest_mask_bit(&d));
+    ///
+    /// // Identical or different-mask networks are never adjacent.
+    /// assert!(!a.is_adjacent_by_lowest_mask_bit(&a));
+    /// let e = Ipv4Network::parse("192.168.0.0/16").unwrap();
+    /// assert!(!a.is_adjacent_by_lowest_mask_bit(&e));
+    ///
+    /// // Non-contiguous masks are supported: these differ in the lowest set
+    /// // bit of `255.255.0.255` (bit 0 of the low byte).
+    /// let x = Ipv4Network::parse("10.0.0.0/255.255.0.255").unwrap();
+    /// let y = Ipv4Network::parse("10.0.0.1/255.255.0.255").unwrap();
+    /// assert!(x.is_adjacent_by_lowest_mask_bit(&y));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn is_adjacent_by_lowest_mask_bit(&self, other: &Self) -> bool {
+        let (a1, m1) = self.to_bits();
+        let (a2, m2) = other.to_bits();
+        ipv4_adjacent_by_lowest_mask_bit(a1, m1, a2, m2)
     }
 
     /// Merges this IPv4 network with another, returning `Some(N)` iff their
@@ -2781,6 +2909,64 @@ impl Ipv6Network {
         let (a1, m1) = self.to_bits();
         let (a2, m2) = other.to_bits();
         ipv6_adjacent_bit(a1, m1, a2, m2).is_some()
+    }
+
+    /// Returns `true` if this network is adjacent to `other` at the lowest set
+    /// bit of their shared mask.
+    ///
+    /// This is the strict restriction of [`is_adjacent`](Self::is_adjacent) to
+    /// the mask's lowest set bit — the boundary ("buddy") bit that separates a
+    /// block from its immediate parent. The two networks must share the same
+    /// mask and their addresses must differ in exactly that single bit.
+    ///
+    /// Every pair accepted here is also accepted by
+    /// [`is_adjacent`](Self::is_adjacent), but not conversely: `is_adjacent`
+    /// additionally accepts a difference in any other single masked bit. This
+    /// is precisely the adjacency whose merge preserves the mask's structural
+    /// class — merging two contiguous (CIDR) blocks at their buddy bit yields a
+    /// contiguous parent, whereas merging at a higher bit would punch a hole
+    /// and leave the contiguous class.
+    ///
+    /// Identical networks are **not** adjacent, and a `/0` network is never
+    /// adjacent to anything. Works correctly with non-contiguous masks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv6Network;
+    ///
+    /// // CIDR siblings differ in the lowest mask bit: both predicates hold,
+    /// // and they would merge into a /47.
+    /// let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+    /// let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+    /// assert!(a.is_adjacent(&b));
+    /// assert!(a.is_adjacent_by_lowest_mask_bit(&b));
+    ///
+    /// // Adjacent at the *top* mask bit, not the lowest: `is_adjacent`
+    /// // accepts it, `is_adjacent_by_lowest_mask_bit` rejects it (merging there
+    /// // would leave the contiguous class).
+    /// let c = Ipv6Network::parse("::/2").unwrap();
+    /// let d = Ipv6Network::parse("8000::/2").unwrap();
+    /// assert!(c.is_adjacent(&d));
+    /// assert!(!c.is_adjacent_by_lowest_mask_bit(&d));
+    ///
+    /// // Identical or different-mask networks are never adjacent.
+    /// assert!(!a.is_adjacent_by_lowest_mask_bit(&a));
+    /// let e = Ipv6Network::parse("2001:db8::/32").unwrap();
+    /// assert!(!a.is_adjacent_by_lowest_mask_bit(&e));
+    ///
+    /// // Non-contiguous masks are supported: these differ in the lowest set
+    /// // bit of `ffff:ffff::ffff` (bit 0 of the low group).
+    /// let x = Ipv6Network::parse("::/ffff:ffff::ffff").unwrap();
+    /// let y = Ipv6Network::parse("::1/ffff:ffff::ffff").unwrap();
+    /// assert!(x.is_adjacent_by_lowest_mask_bit(&y));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn is_adjacent_by_lowest_mask_bit(&self, other: &Self) -> bool {
+        let (a1, m1) = self.to_bits();
+        let (a2, m2) = other.to_bits();
+        ipv6_adjacent_by_lowest_mask_bit(a1, m1, a2, m2)
     }
 
     /// Merges this IPv6 network with another, returning `Some(N)` iff their
@@ -5593,6 +5779,22 @@ mod test {
         None
     }
 
+    // Independent oracle for `Ipv4Network::is_adjacent_by_lowest_mask_bit`: shared
+    // mask, non-`/0`, addresses differ in exactly the mask's lowest set bit,
+    // computed here via `trailing_zeros` rather than the `m & -m` isolation the
+    // implementation uses.
+    fn ipv4_is_adjacent_by_lowest_mask_bit_reference(a: &Ipv4Network, b: &Ipv4Network) -> bool {
+        let (a1, m1) = a.to_bits();
+        let (a2, m2) = b.to_bits();
+        m1 == m2 && m1 != 0 && (a1 ^ a2) == 1u32 << m1.trailing_zeros()
+    }
+
+    fn ipv6_is_adjacent_by_lowest_mask_bit_reference(a: &Ipv6Network, b: &Ipv6Network) -> bool {
+        let (a1, m1) = a.to_bits();
+        let (a2, m2) = b.to_bits();
+        m1 == m2 && m1 != 0 && (a1 ^ a2) == 1u128 << m1.trailing_zeros()
+    }
+
     fn arb_sorted_ipv4_networks() -> impl Strategy<Value = Vec<Ipv4Network>> {
         (3usize..=64)
             .prop_flat_map(|len| prop::collection::vec(arb_ipv4_network(), len))
@@ -6710,6 +6912,92 @@ mod test {
         }
     }
 
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2000))]
+
+        #[test]
+        fn prop_ipv4_is_adjacent_by_lowest_mask_bit_matches_reference(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            prop_assert_eq!(
+                a.is_adjacent_by_lowest_mask_bit(&b),
+                ipv4_is_adjacent_by_lowest_mask_bit_reference(&a, &b),
+                "mismatch: a={}, b={}", a, b
+            );
+        }
+
+        #[test]
+        fn prop_ipv4_is_adjacent_by_lowest_mask_bit_implies_is_adjacent(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            if a.is_adjacent_by_lowest_mask_bit(&b) {
+                prop_assert!(a.is_adjacent(&b));
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_is_adjacent_by_lowest_mask_bit_symmetry(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            prop_assert_eq!(a.is_adjacent_by_lowest_mask_bit(&b), b.is_adjacent_by_lowest_mask_bit(&a));
+        }
+
+        #[test]
+        fn prop_ip_is_adjacent_by_lowest_mask_bit_matches_inner_v4(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+        ) {
+            prop_assert_eq!(
+                IpNetwork::V4(a).is_adjacent_by_lowest_mask_bit(&IpNetwork::V4(b)),
+                a.is_adjacent_by_lowest_mask_bit(&b)
+            );
+        }
+
+        #[test]
+        fn prop_ipv6_is_adjacent_by_lowest_mask_bit_matches_reference(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            prop_assert_eq!(
+                a.is_adjacent_by_lowest_mask_bit(&b),
+                ipv6_is_adjacent_by_lowest_mask_bit_reference(&a, &b),
+                "mismatch: a={}, b={}", a, b
+            );
+        }
+
+        #[test]
+        fn prop_ipv6_is_adjacent_by_lowest_mask_bit_implies_is_adjacent(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            if a.is_adjacent_by_lowest_mask_bit(&b) {
+                prop_assert!(a.is_adjacent(&b));
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_is_adjacent_by_lowest_mask_bit_symmetry(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            prop_assert_eq!(a.is_adjacent_by_lowest_mask_bit(&b), b.is_adjacent_by_lowest_mask_bit(&a));
+        }
+
+        #[test]
+        fn prop_ip_is_adjacent_by_lowest_mask_bit_matches_inner_v6(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+        ) {
+            prop_assert_eq!(
+                IpNetwork::V6(a).is_adjacent_by_lowest_mask_bit(&IpNetwork::V6(b)),
+                a.is_adjacent_by_lowest_mask_bit(&b)
+            );
+        }
+    }
+
     #[test]
     fn ipv4_is_adjacent_contiguous() {
         let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
@@ -6787,6 +7075,151 @@ mod test {
         let v4 = IpNetwork::parse("10.0.0.0/8").unwrap();
         let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
         assert!(!v4.is_adjacent(&v6));
+    }
+
+    #[test]
+    fn ipv4_is_adjacent_by_lowest_mask_bit_cidr_siblings() {
+        let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        let b = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        assert!(a.is_adjacent_by_lowest_mask_bit(&b));
+        assert!(b.is_adjacent_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv4_is_adjacent_by_lowest_mask_bit_host_routes() {
+        let a = Ipv4Network::parse("192.168.0.0/32").unwrap();
+        let b = Ipv4Network::parse("192.168.0.1/32").unwrap();
+        assert!(a.is_adjacent_by_lowest_mask_bit(&b));
+        assert!(b.is_adjacent_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv4_is_adjacent_by_lowest_mask_bit_non_contiguous_lowest() {
+        let a = Ipv4Network::parse("10.0.0.0/255.255.0.255").unwrap();
+        let b = Ipv4Network::parse("10.0.0.1/255.255.0.255").unwrap();
+        assert!(a.is_adjacent_by_lowest_mask_bit(&b));
+        assert!(b.is_adjacent_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv4_is_adjacent_by_lowest_mask_bit_non_contiguous_higher_rejected() {
+        // Same non-contiguous mask, but the addresses differ in bit 16 (a
+        // higher set bit of the mask), not its lowest set bit (bit 0).
+        let a = Ipv4Network::parse("10.0.0.0/255.255.0.255").unwrap();
+        let b = Ipv4Network::parse("10.1.0.0/255.255.0.255").unwrap();
+        assert!(a.is_adjacent(&b));
+        assert!(!a.is_adjacent_by_lowest_mask_bit(&b));
+    }
+
+    #[test]
+    fn ipv4_is_adjacent_by_lowest_mask_bit_identical() {
+        let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        assert!(!a.is_adjacent_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv4_is_adjacent_by_lowest_mask_bit_different_masks() {
+        let a = Ipv4Network::parse("192.168.0.0/24").unwrap();
+        let b = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        assert!(!a.is_adjacent_by_lowest_mask_bit(&b));
+    }
+
+    #[test]
+    fn ipv4_is_adjacent_by_lowest_mask_bit_adjacent_but_not_lowest() {
+        // Adjacent at the top mask bit, not the lowest one.
+        let a = Ipv4Network::parse("0.0.0.0/2").unwrap();
+        let b = Ipv4Network::parse("128.0.0.0/2").unwrap();
+        assert!(a.is_adjacent(&b));
+        assert!(!a.is_adjacent_by_lowest_mask_bit(&b));
+    }
+
+    #[test]
+    fn ipv4_is_adjacent_by_lowest_mask_bit_default_route() {
+        let a = Ipv4Network::parse("0.0.0.0/0").unwrap();
+        assert!(!a.is_adjacent_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv6_is_adjacent_by_lowest_mask_bit_cidr_siblings() {
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let b = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        assert!(a.is_adjacent_by_lowest_mask_bit(&b));
+        assert!(b.is_adjacent_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv6_is_adjacent_by_lowest_mask_bit_host_routes() {
+        let a = Ipv6Network::parse("2001:db8::/128").unwrap();
+        let b = Ipv6Network::parse("2001:db8::1/128").unwrap();
+        assert!(a.is_adjacent_by_lowest_mask_bit(&b));
+        assert!(b.is_adjacent_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv6_is_adjacent_by_lowest_mask_bit_non_contiguous_lowest() {
+        let a = Ipv6Network::parse("::/ffff:ffff::ffff").unwrap();
+        let b = Ipv6Network::parse("::1/ffff:ffff::ffff").unwrap();
+        assert!(a.is_adjacent_by_lowest_mask_bit(&b));
+        assert!(b.is_adjacent_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv6_is_adjacent_by_lowest_mask_bit_non_contiguous_higher_rejected() {
+        // Same non-contiguous mask, but the addresses differ in bit 96 (the
+        // bottom of the mask's high run), not its lowest set bit (bit 0).
+        let a = Ipv6Network::parse("::/ffff:ffff::ffff").unwrap();
+        let b = Ipv6Network::parse("0:1::/ffff:ffff::ffff").unwrap();
+        assert!(a.is_adjacent(&b));
+        assert!(!a.is_adjacent_by_lowest_mask_bit(&b));
+    }
+
+    #[test]
+    fn ipv6_is_adjacent_by_lowest_mask_bit_identical() {
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        assert!(!a.is_adjacent_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ipv6_is_adjacent_by_lowest_mask_bit_different_masks() {
+        let a = Ipv6Network::parse("2001:db8::/48").unwrap();
+        let b = Ipv6Network::parse("2001:db8::/32").unwrap();
+        assert!(!a.is_adjacent_by_lowest_mask_bit(&b));
+    }
+
+    #[test]
+    fn ipv6_is_adjacent_by_lowest_mask_bit_adjacent_but_not_lowest() {
+        // Adjacent at the top mask bit, not the lowest one.
+        let a = Ipv6Network::parse("::/2").unwrap();
+        let b = Ipv6Network::parse("8000::/2").unwrap();
+        assert!(a.is_adjacent(&b));
+        assert!(!a.is_adjacent_by_lowest_mask_bit(&b));
+    }
+
+    #[test]
+    fn ipv6_is_adjacent_by_lowest_mask_bit_default_route() {
+        let a = Ipv6Network::parse("::/0").unwrap();
+        assert!(!a.is_adjacent_by_lowest_mask_bit(&a));
+    }
+
+    #[test]
+    fn ip_is_adjacent_by_lowest_mask_bit_v4() {
+        let a = IpNetwork::parse("192.168.0.0/24").unwrap();
+        let b = IpNetwork::parse("192.168.1.0/24").unwrap();
+        assert!(a.is_adjacent_by_lowest_mask_bit(&b));
+    }
+
+    #[test]
+    fn ip_is_adjacent_by_lowest_mask_bit_v6() {
+        let a = IpNetwork::parse("2001:db8::/48").unwrap();
+        let b = IpNetwork::parse("2001:db8:1::/48").unwrap();
+        assert!(a.is_adjacent_by_lowest_mask_bit(&b));
+    }
+
+    #[test]
+    fn ip_is_adjacent_by_lowest_mask_bit_mixed_families() {
+        let v4 = IpNetwork::parse("10.0.0.0/8").unwrap();
+        let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
+        assert!(!v4.is_adjacent_by_lowest_mask_bit(&v6));
     }
 
     #[test]
