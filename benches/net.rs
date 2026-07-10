@@ -1964,6 +1964,54 @@ fn bench_range_to_networks(c: &mut Criterion) {
         });
     });
 
+    // The textbook interior-of-a-/24 range: 14 blocks, a realistic small case.
+    group.throughput(Throughput::Elements(14));
+    group.bench_function("ipv4_range_to_networks classic misaligned", |b| {
+        let first = Ipv4Addr::new(0, 0, 0, 1);
+        let last = Ipv4Addr::new(0, 0, 0, 254);
+        b.iter(|| {
+            for net in ipv4_range_to_networks(core::hint::black_box(first), core::hint::black_box(last)) {
+                core::hint::black_box(net);
+            }
+        });
+    });
+
+    // Exactly one aligned CIDR block: measures construction plus a single step.
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("ipv4_range_to_networks aligned single block", |b| {
+        let first = Ipv4Addr::new(10, 0, 0, 0);
+        let last = Ipv4Addr::new(10, 255, 255, 255);
+        b.iter(|| {
+            for net in ipv4_range_to_networks(core::hint::black_box(first), core::hint::black_box(last)) {
+                core::hint::black_box(net);
+            }
+        });
+    });
+
+    // Misaligned range confined to the low 32 bits of a /96: 62 blocks.
+    group.throughput(Throughput::Elements(62));
+    group.bench_function("ipv6_range_to_networks low-bits misaligned", |b| {
+        let first: Ipv6Addr = "2001:db8::1".parse().unwrap();
+        let last: Ipv6Addr = "2001:db8::ffff:fffe".parse().unwrap();
+        b.iter(|| {
+            for net in ipv6_range_to_networks(core::hint::black_box(first), core::hint::black_box(last)) {
+                core::hint::black_box(net);
+            }
+        });
+    });
+
+    // Exactly one aligned CIDR block (a /64): construction plus a single step.
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("ipv6_range_to_networks aligned single block", |b| {
+        let first: Ipv6Addr = "2001:db8::".parse().unwrap();
+        let last: Ipv6Addr = "2001:db8::ffff:ffff:ffff:ffff".parse().unwrap();
+        b.iter(|| {
+            for net in ipv6_range_to_networks(core::hint::black_box(first), core::hint::black_box(last)) {
+                core::hint::black_box(net);
+            }
+        });
+    });
+
     group.finish();
 }
 
