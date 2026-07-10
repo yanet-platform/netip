@@ -13,7 +13,7 @@ use core::{
     fmt::{Debug, Display, Formatter},
     net::{AddrParseError, IpAddr, Ipv4Addr, Ipv6Addr},
     num::ParseIntError,
-    ops::Range,
+    ops::{BitAnd, BitOr, BitOrAssign, BitXor, Not, Range},
     str::FromStr,
 };
 
@@ -622,14 +622,9 @@ impl IpNetwork {
     /// Returns `true` if this network is adjacent to `other` at the lowest set
     /// bit of their shared mask.
     ///
-    /// This is the strict restriction of [`is_adjacent`](Self::is_adjacent) to
-    /// the mask's lowest set bit — the buddy/boundary bit that separates a
-    /// block from its immediate parent. Consequently
-    /// `is_adjacent_by_lowest_mask_bit` implies `is_adjacent`, but not
-    /// conversely: `is_adjacent` also accepts a difference in any other
-    /// single masked bit. This is precisely the adjacency whose merge
-    /// preserves the mask's structural class (a contiguous pair merges to a
-    /// contiguous parent, and so on).
+    /// This is the class-preserving restriction of
+    /// [`is_adjacent`](Self::is_adjacent) to the mask's lowest (buddy) bit, so
+    /// it implies `is_adjacent` but not conversely.
     ///
     /// Returns `false` for networks of different address families.
     ///
@@ -659,13 +654,6 @@ impl IpNetwork {
     /// let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
     /// assert!(!v4.is_adjacent_by_lowest_mask_bit(&v6));
     /// ```
-    ///
-    /// # Complexity
-    ///
-    /// Runs in O(1) time and O(1) space: one family match plus a fixed, small
-    /// number of bitwise operations (mask equality, XOR, lowest-set-bit
-    /// isolation, and a compare) on the fixed-width address and mask; no
-    /// allocation.
     #[inline]
     #[must_use]
     pub const fn is_adjacent_by_lowest_mask_bit(&self, other: &Self) -> bool {
@@ -728,32 +716,14 @@ impl IpNetwork {
     /// Merges this IP network with another when one contains the other or they
     /// are lowest-mask-bit siblings, returning the combined network.
     ///
-    /// Returns `Some` in exactly two disjoint cases: **containment**, where the
-    /// larger (containing) network is returned exactly as
-    /// [`merge`](Self::merge) does, and **lowest-mask-bit sibling**, where
-    /// the two share a mask and their addresses differ in precisely its
-    /// lowest set bit, detected by
-    /// [`is_adjacent_by_lowest_mask_bit`](Self::is_adjacent_by_lowest_mask_bit).
-    ///
-    /// This is the class-closed subset of [`merge`](Self::merge) —
-    /// `{containment, lowest-mask-bit sibling}`. The result stays in the
-    /// inputs' structural class (a contiguous pair merges to a contiguous
-    /// parent, and so on), and whenever it returns `Some`, that value
-    /// equals [`merge`](Self::merge)'s. It differs from `merge` only by
-    /// refusing `merge`'s remaining case, a difference at a higher
-    /// (non-lowest) mask bit, which would combine the pair into a network
-    /// outside that class.
+    /// This is the class-closed subset of [`merge`](Self::merge): it returns
+    /// `Some` only for containment or a difference in the mask's lowest set
+    /// bit, and whenever it does, that value equals [`merge`](Self::merge)'s.
     ///
     /// Returns `None` for networks of different address families.
     ///
     /// See [`Ipv4Network::merge_by_lowest_mask_bit`] and
     /// [`Ipv6Network::merge_by_lowest_mask_bit`] for details.
-    ///
-    /// # Complexity
-    ///
-    /// Runs in O(1) time and O(1) space — at most two `contains` checks plus
-    /// one `is_adjacent_by_lowest_mask_bit` check and one constant-time
-    /// construction, all on fixed-width integers; no allocation.
     ///
     /// # Examples
     ///
@@ -1410,8 +1380,8 @@ impl Ipv4Network {
     #[must_use]
     pub fn supernet_for(&self, nets: &[Ipv4Network]) -> Ipv4Network {
         // AND/XOR/NOT commute with byte order, so the fold runs on native-order words:
-        // this keeps LLVM's auto-vectorization free of the per-element big-endian byte
-        // swap it would otherwise expand into a chain of SSE2 shuffles.
+        // this drops the per-element big-endian byte swap the fold would otherwise
+        // need, keeping the inner loop auto-vectorizable.
         let addr = u32::from_ne_bytes(self.addr().octets());
         let mut mask = u32::from_ne_bytes(self.mask().octets());
 
@@ -1514,12 +1484,6 @@ impl Ipv4Network {
     /// let y = Ipv4Network::parse("10.0.0.1/255.255.0.255").unwrap();
     /// assert!(x.is_adjacent_by_lowest_mask_bit(&y));
     /// ```
-    ///
-    /// # Complexity
-    ///
-    /// Runs in O(1) time and O(1) space: a fixed, small number of bitwise
-    /// operations (mask equality, XOR, lowest-set-bit isolation, and a compare)
-    /// on the fixed-width address and mask; no allocation.
     #[inline]
     #[must_use]
     pub const fn is_adjacent_by_lowest_mask_bit(&self, other: &Self) -> bool {
@@ -1641,12 +1605,6 @@ impl Ipv4Network {
     /// unmerged even though `merge` would combine it into another two-run mask;
     /// doing that safely would require assuming the mask has that two-run
     /// shape, which this general-purpose method does not.
-    ///
-    /// # Complexity
-    ///
-    /// Runs in O(1) time and O(1) space — at most two `contains` checks plus
-    /// one `is_adjacent_by_lowest_mask_bit` check and one constant-time
-    /// construction, all on fixed-width integers; no allocation.
     ///
     /// # Examples
     ///
@@ -1799,66 +1757,14 @@ impl Ipv4Network {
     /// assert_eq!(Ipv4Addr::new(192, 168, 255, 1), net.last_addr());
     /// ```
     ///
-    /// # Formal Proof of Correctness
+    /// # Correctness
     ///
-    /// ## Given
-    /// - Network address: `addr`.
-    /// - Network mask: `mask` (may be non-contiguous).
-    /// - Algorithm: `last_addr = addr | !mask`.
-    ///
-    /// ## Definitions
-    /// Let:
-    /// - `N = addr & mask` (network address with host bits zeroed).
-    /// - `H = !mask` (bitmask of host positions).
-    /// - Address `X` belongs to the network iff `(X & mask) = N`.
-    ///
-    /// ## Lemma 1: Contiguous Mask Case
-    ///
-    /// For contiguous masks (standard CIDR), the algorithm is well-established:
-    /// - ` mask` format: `111...100...0`.
-    /// - `!mask` format: `000...011...1`.
-    /// - `addr | !mask` sets all host bits to 1, yielding the broadcast
-    ///   address.
-    ///
-    /// ## Lemma 2: Generalization to Non-Contiguous Masks
-    ///
-    /// **Theorem**: `X = addr | !mask` is the maximum address satisfying `(X &
-    /// mask) = N`.
-    ///
-    /// ### Proof:
-    ///
-    /// 1. **Membership**: ```(X & mask) = ((addr | !mask) & mask) = (addr &
-    ///    mask) | (!mask & mask) = N | 0 = N ```
-    ///
-    ///    Thus, `X` belongs to the network.
-    ///
-    /// 2. **Maximality**:
-    ///    - Any network address can be expressed as `X = N | H_val` where
-    ///      `H_val` has ones only in host positions
-    ///    - The maximum possible `H_val` is `H = !mask` (all host bits set to
-    ///      1)
-    ///    - Thus `X_max = N | H = (addr & mask) | !mask`
-    ///
-    /// 3. **Simplification**: since `addr & mask` zeros all host bits: ```
-    ///    (addr & mask) | !mask = addr | !mask ```
-    ///    - For mask bits = 1: `addr_bit | 0 = addr_bit`
-    ///    - For mask bits = 0: `0 | 1 = 1`
-    ///
-    /// ## Edge Case Verification
-    ///
-    /// - **Full mask** (255.255.255.255): `last_addr = addr | 0 = addr` (single
-    ///   address network).
-    ///
-    /// - **Zero mask** (0.0.0.0): `last_addr = addr | 0xFFFFFFFF =
-    ///   255.255.255.255` (entire address space).
-    ///
-    /// - **Non-contiguous mask** (e.g., 255.0.255.0): Correctly sets all host
-    ///   bits to 1 while preserving network bits.
-    ///
-    /// ## ∴
-    ///
-    /// The algorithm `addr | !mask` correctly computes the maximum address in
-    /// any IPv4 network, including those with non-contiguous masks.
+    /// `addr | !mask` is the greatest address in the network. Masking it
+    /// (`& mask`) maps it back to `addr`, since `!mask & mask == 0`, so it is a
+    /// member. Setting every host bit — the bits cleared in `mask` — is the
+    /// largest possible host pattern, so no member is larger. Both facts hold
+    /// for non-contiguous masks, where the host bits need not form a trailing
+    /// run.
     #[inline]
     #[must_use]
     pub const fn last_addr(&self) -> Ipv4Addr {
@@ -2126,8 +2032,8 @@ impl ExactSizeIterator for Ipv4NetworkAddrs {
 ///
 /// Created by [`Ipv4Network::difference`].
 ///
-/// Yields between 0 and 32 pairwise-disjoint networks whose union equals
-/// `S(A) \ S(B)`.
+/// Yields between 0 and 32 pairwise-disjoint networks whose union equals the
+/// address set of `A` minus the address set of `B`.
 ///
 /// Each call to [`next`](Iterator::next) computes one network by peeling the
 /// highest remaining bit from the difference mask; each call to
@@ -2887,9 +2793,8 @@ impl Ipv6Network {
     ///
     /// A mask is bi-contiguous exactly when every maximal run of one bits
     /// ends either at bit 127 (the top of the address) or at bit 63 (the top
-    /// of the low half) -- checked here in 5 ops by clearing those two
-    /// allowed positions from the set of run-tops and requiring nothing
-    /// remains.
+    /// of the low half) -- checked by clearing those two allowed positions
+    /// from the set of run-tops and requiring nothing remains.
     ///
     /// # Examples
     ///
@@ -3141,11 +3046,11 @@ impl Ipv6Network {
     pub fn supernet_for(&self, nets: &[Ipv6Network]) -> Ipv6Network {
         // AND/XOR/NOT commute with byte order, so the fold runs bytewise in memory
         // order: this removes four per-element byte swaps, and the fixed 16-byte
-        // inner loop is the shape LLVM auto-vectorizes into whole-address vector
-        // operations (`u128` arithmetic stays in scalar 64-bit halves instead).
+        // inner loop keeps an auto-vectorizable shape instead of emulated u128
+        // arithmetic.
         //
         // Folding four networks per step into `mask` plus three all-ones `lanes`
-        // breaks the loop-carried AND dependency chain; AND is associative and
+        // breaks the loop-carried AND dependency chain. AND is associative and
         // commutative, so combining the lanes afterwards is bit-identical to the
         // sequential fold.
         let addr = self.addr().octets();
@@ -3279,12 +3184,6 @@ impl Ipv6Network {
     /// let y = Ipv6Network::parse("::1/ffff:ffff::ffff").unwrap();
     /// assert!(x.is_adjacent_by_lowest_mask_bit(&y));
     /// ```
-    ///
-    /// # Complexity
-    ///
-    /// Runs in O(1) time and O(1) space: a fixed, small number of bitwise
-    /// operations (mask equality, XOR, lowest-set-bit isolation, and a compare)
-    /// on the fixed-width address and mask; no allocation.
     #[inline]
     #[must_use]
     pub const fn is_adjacent_by_lowest_mask_bit(&self, other: &Self) -> bool {
@@ -3424,12 +3323,6 @@ impl Ipv6Network {
     /// bi-contiguous; performing that merge would require assuming the value is
     /// bi-contiguous, which this general-purpose method does not.
     ///
-    /// # Complexity
-    ///
-    /// Runs in O(1) time and O(1) space — at most two `contains` checks plus
-    /// one `is_adjacent_by_lowest_mask_bit` check and one constant-time
-    /// construction, all on fixed-width integers; no allocation.
-    ///
     /// # Examples
     ///
     /// ```
@@ -3561,10 +3454,9 @@ impl Ipv6Network {
     /// );
     /// ```
     ///
-    /// # Formal Proof of Correctness
+    /// # Correctness
     ///
-    /// The algorithm follows the same logic as [`Ipv4Network::last_addr`].
-    /// See [`Ipv4Network::last_addr`] for the formal proof.
+    /// Same argument as [`Ipv4Network::last_addr`].
     #[inline]
     #[must_use]
     pub const fn last_addr(&self) -> Ipv6Addr {
@@ -3654,9 +3546,9 @@ impl Ipv6Network {
 // `Ord`'s derived tuple comparison unconditionally computes the full scalar
 // ordering of `addr` before checking whether it was even equal, so that
 // result gets thrown away exactly when the address matches and the mask
-// comparison is about to overwrite it. Branching on the address's own SIMD
-// equality check first (`pcmpeqb`/`vptest`) and only falling through to the
-// mask comparison when needed skips that discarded computation entirely.
+// comparison is about to overwrite it. Testing address equality first and
+// only falling through to the mask comparison when needed skips that
+// discarded computation entirely.
 impl Ord for Ipv6Network {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
@@ -3790,8 +3682,12 @@ impl DoubleEndedIterator for Ipv6NetworkAddrs {
     }
 }
 
-/// Yields between 0 and 128 pairwise-disjoint networks whose union equals
-/// `S(A) \ S(B)`.
+/// Lazy iterator over [`Ipv6Network`] parts of a set difference.
+///
+/// Created by [`Ipv6Network::difference`].
+///
+/// Yields between 0 and 128 pairwise-disjoint networks whose union equals the
+/// address set of `A` minus the address set of `B`.
 ///
 /// Each call to [`next`](Iterator::next) computes one network by peeling the
 /// highest remaining bit from the difference mask; each call to
@@ -4656,11 +4552,11 @@ trait Word:
     Copy
     + Eq
     + Ord
-    + core::ops::Not<Output = Self>
-    + core::ops::BitAnd<Output = Self>
-    + core::ops::BitOr<Output = Self>
-    + core::ops::BitXor<Output = Self>
-    + core::ops::BitOrAssign
+    + Not<Output = Self>
+    + BitAnd<Output = Self>
+    + BitOr<Output = Self>
+    + BitXor<Output = Self>
+    + BitOrAssign
 {
     const ZERO: Self;
 
@@ -4881,18 +4777,13 @@ fn ip_aggregate<T: Aggregate>(nets: &mut [T]) -> usize {
 
     nets.sort_unstable();
 
-    // Single-pass merge with full stack scan and collapse.
+    // Greedy in-place aggregation. Each candidate is merged against the entire
+    // stack rather than just its top: non-contiguous masks are not laminar, so
+    // a merge partner may sit below the top, unlike the contiguous aggregator.
     //
-    // For each candidate we scan the entire stack for a merge partner.
-    // Merge covers identical networks, containment in either direction,
-    // and same-mask one-bit-diff siblings.
-    //
-    // After a successful merge at position k the result may unlock new
-    // merge opportunities with other stack entries (e.g. two /24 sibling
-    // merges produce two /23s that are themselves siblings).
-    //
-    // We handle this by *collapsing*: repeatedly scanning the stack for
-    // anything that merges with nets[k] until no more matches are found.
+    // A merge at position `k` can expose new partners (two /24 siblings merge
+    // into /23 siblings), so the stack is rescanned against `nets[k]` until
+    // nothing more merges.
     let mut w = 0usize;
     for r in 1..nets.len() {
         let mut merged_at = None;

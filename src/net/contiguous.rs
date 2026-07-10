@@ -272,10 +272,10 @@ impl Contiguous<Ipv4Network> {
     /// the mask is zero) are always a trailing run, and `base | index`
     /// enumerates addresses `0 ..= 2^k - 1` directly, in ascending numeric
     /// order. This overrides the [`Ipv4Network::addrs`] iterator with a
-    /// leaner one that skips [`crate::Ipv4NetworkAddrs`]'s per-item check for
-    /// whether `pdep` is needed (and the `mask` field that check reads);
-    /// reach the general iterator for a possibly non-contiguous network
-    /// through [`Deref`], e.g. `(*net).addrs()`.
+    /// leaner one that drops the general iterator's per-item mask-shape
+    /// branch (and the `mask` field that branch reads), stepping a plain
+    /// index instead; reach the general iterator for a possibly
+    /// non-contiguous network through [`Deref`], e.g. `(*net).addrs()`.
     ///
     /// The iterator implements [`DoubleEndedIterator`] and
     /// [`ExactSizeIterator`].
@@ -318,11 +318,11 @@ impl Contiguous<Ipv4Network> {
 /// Created by [`Contiguous::<Ipv4Network>::addrs`].
 ///
 /// The [`Contiguous`] type invariant guarantees a contiguous mask, so unlike
-/// [`crate::Ipv4NetworkAddrs`] this iterator never needs `pdep`: the *k* host
-/// positions (bits where the mask is zero) are always a trailing run, and
-/// `base | index` enumerates addresses `0 ..= 2^k - 1` directly -- the same
-/// ascending numeric order [`crate::Ipv4NetworkAddrs`] produces for a
-/// contiguous mask.
+/// [`crate::Ipv4NetworkAddrs`] this iterator carries no per-item mask-shape
+/// branch: the *k* host positions (bits where the mask is zero) are always a
+/// trailing run, and `base | index` enumerates addresses `0 ..= 2^k - 1`
+/// directly -- the same ascending numeric order [`crate::Ipv4NetworkAddrs`]
+/// produces for a contiguous mask.
 ///
 /// When the iterator is exhausted it enters a sentinel state where
 /// `front > back`, so every subsequent call to [`next`](Iterator::next) or
@@ -528,10 +528,10 @@ impl Contiguous<Ipv6Network> {
     /// the mask is zero) are always a trailing run, and `base | index`
     /// enumerates addresses `0 ..= 2^k - 1` directly, in ascending numeric
     /// order. This overrides the [`Ipv6Network::addrs`] iterator with a
-    /// leaner one that skips [`crate::Ipv6NetworkAddrs`]'s per-item check for
-    /// whether `pdep` is needed (and the `mask` field that check reads);
-    /// reach the general iterator for a possibly non-contiguous network
-    /// through [`Deref`], e.g. `(*net).addrs()`.
+    /// leaner one that drops the general iterator's per-item mask-shape
+    /// branch (and the `mask` field that branch reads), stepping a plain
+    /// index instead; reach the general iterator for a possibly
+    /// non-contiguous network through [`Deref`], e.g. `(*net).addrs()`.
     ///
     /// The iterator implements [`DoubleEndedIterator`].
     ///
@@ -590,9 +590,10 @@ impl Contiguous<Ipv6Network> {
 /// Created by [`Contiguous::<Ipv6Network>::addrs`].
 ///
 /// The [`Contiguous`] type invariant guarantees a contiguous mask, so unlike
-/// [`crate::Ipv6NetworkAddrs`] this iterator never needs `pdep`, nor does it
-/// even need to re-derive each address from a separate base and host-index:
-/// `base | index` and `base + index` agree for every valid `index` (see
+/// [`crate::Ipv6NetworkAddrs`] this iterator carries no per-item mask-shape
+/// branch, and need not re-derive each address from a separate base and
+/// host-index: `base | index` and `base + index` agree for every valid
+/// `index` (see
 /// [`Contiguous::<Ipv6Network>::addrs`]), so the bounds are folded into
 /// already-packed addresses once at construction time, and each step is a
 /// plain integer increment/decrement -- the same ascending numeric order
