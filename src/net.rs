@@ -2283,6 +2283,9 @@ impl ExactSizeIterator for Ipv4NetworkDiff {
 pub struct Ipv4RangeNetworks {
     first: u32,
     last: u32,
+    /// Remaining ascending-phase block sizes, one per set bit, lowest first;
+    /// zero once the iterator enters the descending phase.
+    ascending: u32,
     done: bool,
 }
 
@@ -2312,7 +2315,32 @@ pub const fn ipv4_range_to_networks(first: Ipv4Addr, last: Ipv4Addr) -> Ipv4Rang
     let first = first.to_bits();
     let last = last.to_bits();
 
-    Ipv4RangeNetworks { first, last, done: first > last }
+    if first > last {
+        return Ipv4RangeNetworks {
+            first,
+            last,
+            ascending: 0,
+            done: true,
+        };
+    }
+
+    // The greedy covering crosses the highest differing bit `p` of `first` and
+    // `last` only when the whole range is one CIDR block (`differing` is an
+    // all-ones suffix and `first` is aligned to it). Otherwise the blocks
+    // below the boundary — `last` with the bits below `p` cleared — are
+    // exactly the set bits of `boundary - first`, yielded lowest-first, and
+    // the remaining blocks are derived from `last` on the fly. A zero
+    // `ascending` therefore encodes "descending phase only".
+    let differing = first ^ last;
+    let single_block = differing & differing.wrapping_add(1) == 0 && first & differing == 0;
+    let ascending = if single_block {
+        0
+    } else {
+        let bit = 1u32 << (31 - differing.leading_zeros());
+        (last & bit.wrapping_neg()) - first
+    };
+
+    Ipv4RangeNetworks { first, last, ascending, done: false }
 }
 
 impl Iterator for Ipv4RangeNetworks {
@@ -2325,30 +2353,38 @@ impl Iterator for Ipv4RangeNetworks {
         }
 
         let first = self.first;
-        let last = self.last;
+        let ascending = self.ascending;
 
-        // Interval length modulo 2^32, stored in `size`. The only input that
-        // wraps to zero is the full range (first=0, last=MAX), and we encode
-        // that case as `size_log = 32`.
-        let size = last.wrapping_sub(first).wrapping_add(1);
-        let size_log: u32 = if size == 0 { 32 } else { 31 - size.leading_zeros() };
-        let align: u32 = if first == 0 { 32 } else { first.trailing_zeros() };
-        let n = if size_log < align { size_log } else { align };
-
-        let block_max: u32 = if n == 32 { u32::MAX } else { (1u32 << n) - 1 };
-        let end = first.wrapping_add(block_max);
-        let mask = !block_max;
-        // NOTE: address is already normalized: n <= trailing_zeros(first), so the low
-        // bits are zero.
-        let net = Contiguous(Ipv4Network(Ipv4Addr::from_bits(first), Ipv4Addr::from_bits(mask)));
-
-        if end == last {
-            self.done = true;
-        } else {
-            self.first = end + 1;
+        if ascending != 0 {
+            // Ascending phase: the block size is the lowest set bit of
+            // `ascending` and `first` is aligned to it, so `x | -x` — all bits
+            // from that bit upwards — is the block's netmask. The phase never
+            // exhausts the range: at least one descending block follows.
+            let negated = ascending.wrapping_neg();
+            let block = ascending & negated;
+            let mask = ascending | negated;
+            self.ascending = ascending ^ block;
+            self.first = first + block;
+            // NOTE: address is already normalized: `first` is aligned to `block`.
+            return Some(Contiguous(Ipv4Network(
+                Ipv4Addr::from_bits(first),
+                Ipv4Addr::from_bits(mask),
+            )));
         }
 
-        Some(net)
+        // Descending phase: `first` is aligned beyond the remaining size, so
+        // the block is the largest power of two not exceeding `size`. Widening
+        // to u64 keeps the full-range (2^32 addresses) case branchless.
+        let size = u64::from(self.last) - u64::from(first) + 1;
+        let block_max = ((u64::MAX >> 1) >> size.leading_zeros()) as u32;
+        let end = first + block_max;
+        self.done = end == self.last;
+        self.first = end.wrapping_add(1);
+        // NOTE: address is already normalized: `first` is aligned beyond `block_max`.
+        Some(Contiguous(Ipv4Network(
+            Ipv4Addr::from_bits(first),
+            Ipv4Addr::from_bits(!block_max),
+        )))
     }
 
     #[inline]
@@ -3869,6 +3905,9 @@ impl ExactSizeIterator for Ipv6NetworkDiff {
 pub struct Ipv6RangeNetworks {
     first: u128,
     last: u128,
+    /// Remaining ascending-phase block sizes, one per set bit, lowest first;
+    /// zero once the iterator enters the descending phase.
+    ascending: u128,
     done: bool,
 }
 
@@ -3899,7 +3938,28 @@ pub const fn ipv6_range_to_networks(first: Ipv6Addr, last: Ipv6Addr) -> Ipv6Rang
     let first = first.to_bits();
     let last = last.to_bits();
 
-    Ipv6RangeNetworks { first, last, done: first > last }
+    if first > last {
+        return Ipv6RangeNetworks {
+            first,
+            last,
+            ascending: 0,
+            done: true,
+        };
+    }
+
+    // Same phase decomposition as `ipv4_range_to_networks`: the set bits of
+    // `boundary - first` are the ascending-phase block sizes unless the whole
+    // range is one CIDR block, encoded as a zero `ascending`.
+    let differing = first ^ last;
+    let single_block = differing & differing.wrapping_add(1) == 0 && first & differing == 0;
+    let ascending = if single_block {
+        0
+    } else {
+        let bit = 1u128 << (127 - differing.leading_zeros());
+        (last & bit.wrapping_neg()) - first
+    };
+
+    Ipv6RangeNetworks { first, last, ascending, done: false }
 }
 
 impl Iterator for Ipv6RangeNetworks {
@@ -3912,27 +3972,50 @@ impl Iterator for Ipv6RangeNetworks {
         }
 
         let first = self.first;
-        let last = self.last;
+        let ascending = self.ascending;
 
-        let size = last.wrapping_sub(first).wrapping_add(1);
-        let size_log: u32 = if size == 0 { 128 } else { 127 - size.leading_zeros() };
-        let align: u32 = if first == 0 { 128 } else { first.trailing_zeros() };
-        let n = if size_log < align { size_log } else { align };
-
-        let block_max: u128 = if n == 128 { u128::MAX } else { (1u128 << n) - 1 };
-        let end = first.wrapping_add(block_max);
-        let mask = !block_max;
-        // NOTE: address is already normalized: n <= trailing_zeros(first), so the low
-        // bits are zero.
-        let net = Contiguous(Ipv6Network(Ipv6Addr::from_bits(first), Ipv6Addr::from_bits(mask)));
-
-        if end == last {
-            self.done = true;
-        } else {
-            self.first = end + 1;
+        if ascending != 0 {
+            // Ascending phase: the block size is the lowest set bit of
+            // `ascending` and `first` is aligned to it, so `x | -x` — all bits
+            // from that bit upwards — is the block's netmask. The phase never
+            // exhausts the range: at least one descending block follows.
+            let negated = ascending.wrapping_neg();
+            let block = ascending & negated;
+            let mask = ascending | negated;
+            self.ascending = ascending ^ block;
+            self.first = first + block;
+            // NOTE: address is already normalized: `first` is aligned to `block`.
+            return Some(Contiguous(Ipv6Network(
+                Ipv6Addr::from_bits(first),
+                Ipv6Addr::from_bits(mask),
+            )));
         }
 
-        Some(net)
+        // Descending phase: `first` is aligned beyond the remaining size, so
+        // the block is the largest power of two not exceeding `size`. The size
+        // wraps to zero only for the full address range, covered by `::/0`.
+        // Splitting into 64-bit words keeps the leading-zeros scan and the
+        // shift on native words instead of two-word emulated u128 forms.
+        let size = self.last.wrapping_sub(first).wrapping_add(1);
+        let high = (size >> 64) as u64;
+        let block_max = if high != 0 {
+            u128::from((u64::MAX >> 1) >> high.leading_zeros()) << 64 | u128::from(u64::MAX)
+        } else {
+            let low = size as u64;
+            if low == 0 {
+                u128::MAX
+            } else {
+                u128::from((u64::MAX >> 1) >> low.leading_zeros())
+            }
+        };
+        let end = first + block_max;
+        self.done = end == self.last;
+        self.first = end.wrapping_add(1);
+        // NOTE: address is already normalized: `first` is aligned beyond `block_max`.
+        Some(Contiguous(Ipv6Network(
+            Ipv6Addr::from_bits(first),
+            Ipv6Addr::from_bits(!block_max),
+        )))
     }
 
     #[inline]
@@ -10927,6 +11010,160 @@ mod test {
                 let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
                 assert_eq!(addr & mask, addr, "first={first}, last={last}, net={net}");
             }
+        }
+    }
+
+    // Reference oracle for `Ipv4RangeNetworks`: a byte-for-byte port of the
+    // original greedy `next()` loop (pick the largest block aligned at `first`
+    // and not exceeding `last`), kept to pin the yielded sequence across
+    // implementation rewrites.
+    fn ipv4_range_to_networks_reference(first: u32, last: u32) -> Vec<(u32, u32)> {
+        let mut first = first;
+        let mut out = Vec::new();
+        if first > last {
+            return out;
+        }
+        loop {
+            let size = last.wrapping_sub(first).wrapping_add(1);
+            let size_log: u32 = if size == 0 { 32 } else { 31 - size.leading_zeros() };
+            let align: u32 = if first == 0 { 32 } else { first.trailing_zeros() };
+            let n = if size_log < align { size_log } else { align };
+
+            let block_max: u32 = if n == 32 { u32::MAX } else { (1u32 << n) - 1 };
+            let end = first.wrapping_add(block_max);
+            out.push((first, !block_max));
+            if end == last {
+                return out;
+            }
+            first = end + 1;
+        }
+    }
+
+    // Reference oracle for `Ipv6RangeNetworks`, same construction as
+    // `ipv4_range_to_networks_reference`.
+    fn ipv6_range_to_networks_reference(first: u128, last: u128) -> Vec<(u128, u128)> {
+        let mut first = first;
+        let mut out = Vec::new();
+        if first > last {
+            return out;
+        }
+        loop {
+            let size = last.wrapping_sub(first).wrapping_add(1);
+            let size_log: u32 = if size == 0 { 128 } else { 127 - size.leading_zeros() };
+            let align: u32 = if first == 0 { 128 } else { first.trailing_zeros() };
+            let n = if size_log < align { size_log } else { align };
+
+            let block_max: u128 = if n == 128 { u128::MAX } else { (1u128 << n) - 1 };
+            let end = first.wrapping_add(block_max);
+            out.push((first, !block_max));
+            if end == last {
+                return out;
+            }
+            first = end + 1;
+        }
+    }
+
+    fn assert_ipv4_range_matches_reference(first: u32, last: u32) {
+        let got: Vec<(u32, u32)> = ipv4_range_to_networks(Ipv4Addr::from_bits(first), Ipv4Addr::from_bits(last))
+            .map(|net| net.to_bits())
+            .collect();
+        let want = ipv4_range_to_networks_reference(first, last);
+        assert_eq!(want, got, "first={first:#x}, last={last:#x}");
+    }
+
+    fn assert_ipv6_range_matches_reference(first: u128, last: u128) {
+        let got: Vec<(u128, u128)> = ipv6_range_to_networks(Ipv6Addr::from_bits(first), Ipv6Addr::from_bits(last))
+            .map(|net| net.to_bits())
+            .collect();
+        let want = ipv6_range_to_networks_reference(first, last);
+        assert_eq!(want, got, "first={first:#x}, last={last:#x}");
+    }
+
+    // Exhaustive pin test over windows chosen to hit every phase shape: ranges
+    // touching zero, ranges crossing the top-bit boundary, and ranges touching
+    // the address-space maximum. Includes reversed (empty) pairs.
+    #[test]
+    fn ipv4_range_to_networks_matches_reference_exhaustive_windows() {
+        let windows: &[(u32, u32)] = &[(0, 300), (0x7fff_ff80, 0x8000_007f), (u32::MAX - 300, u32::MAX)];
+        for &(low, high) in windows {
+            for first in low..=high {
+                for last in low..=high {
+                    assert_ipv4_range_matches_reference(first, last);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ipv6_range_to_networks_matches_reference_exhaustive_windows() {
+        let windows: &[(u128, u128)] = &[
+            (0, 130),
+            ((1u128 << 64) - 65, (1u128 << 64) + 65),
+            ((1u128 << 127) - 65, (1u128 << 127) + 65),
+            (u128::MAX - 130, u128::MAX),
+        ];
+        for &(low, high) in windows {
+            for first in low..=high {
+                for last in low..=high {
+                    assert_ipv6_range_matches_reference(first, last);
+                }
+            }
+        }
+    }
+
+    proptest! {
+        // Raw pairs in both orders: pins the yielded sequence and the empty
+        // reversed-range behavior against the reference oracle.
+        #[test]
+        fn prop_ipv4_range_to_networks_matches_reference(a in any::<u32>(), b in any::<u32>()) {
+            assert_ipv4_range_matches_reference(a, b);
+        }
+
+        #[test]
+        fn prop_ipv6_range_to_networks_matches_reference(a in any::<u128>(), b in any::<u128>()) {
+            assert_ipv6_range_matches_reference(a, b);
+        }
+
+        // Exact CIDR blocks of every size: targets the single-block ranges
+        // (including the full address space) that greedy covers in one step.
+        #[test]
+        fn prop_ipv4_range_to_networks_matches_reference_single_block(a in any::<u32>(), k in 0..=32u32) {
+            let mask = if k == 0 { 0 } else { u32::MAX << (32 - k) };
+            let first = a & mask;
+            let last = first | !mask;
+            assert_ipv4_range_matches_reference(first, last);
+        }
+
+        #[test]
+        fn prop_ipv6_range_to_networks_matches_reference_single_block(a in any::<u128>(), k in 0..=128u32) {
+            let mask = if k == 0 { 0 } else { u128::MAX << (128 - k) };
+            let first = a & mask;
+            let last = first | !mask;
+            assert_ipv6_range_matches_reference(first, last);
+        }
+
+        // One aligned endpoint and one arbitrary endpoint: exercises coverings
+        // dominated by a single phase (descending-only and ascending-heavy).
+        #[test]
+        fn prop_ipv4_range_to_networks_matches_reference_aligned_edge(
+            a in any::<u32>(),
+            b in any::<u32>(),
+            k in 0..=32u32,
+        ) {
+            let mask = if k == 0 { 0 } else { u32::MAX << (32 - k) };
+            assert_ipv4_range_matches_reference(a & mask, b);
+            assert_ipv4_range_matches_reference(a, b | !mask);
+        }
+
+        #[test]
+        fn prop_ipv6_range_to_networks_matches_reference_aligned_edge(
+            a in any::<u128>(),
+            b in any::<u128>(),
+            k in 0..=128u32,
+        ) {
+            let mask = if k == 0 { 0 } else { u128::MAX << (128 - k) };
+            assert_ipv6_range_matches_reference(a & mask, b);
+            assert_ipv6_range_matches_reference(a, b | !mask);
         }
     }
 }
