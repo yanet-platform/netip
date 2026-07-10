@@ -1968,6 +1968,70 @@ fn bench_display(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_prefix(c: &mut Criterion) {
+    let mut group = c.benchmark_group("netip");
+
+    group.bench_function("Ipv4Network::prefix contiguous", |b| {
+        let net = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&net).prefix());
+        });
+    });
+
+    group.bench_function("Ipv4Network::prefix non-contiguous", |b| {
+        let net = Ipv4Network::parse("192.168.0.1/255.255.0.255").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&net).prefix());
+        });
+    });
+
+    // A 50/50 contiguous/non-contiguous input mix exercises both outcomes of
+    // the contiguity check within one measurement.
+    group.bench_function("Ipv4Network::prefix mixed", |b| {
+        let nets = [
+            Ipv4Network::parse("192.168.0.0/16").unwrap(),
+            Ipv4Network::parse("192.168.0.1/255.255.0.255").unwrap(),
+            Ipv4Network::parse("10.0.0.0/8").unwrap(),
+            Ipv4Network::parse("10.0.0.1/255.0.0.255").unwrap(),
+        ];
+        b.iter(|| {
+            for net in core::hint::black_box(&nets) {
+                core::hint::black_box(net.prefix());
+            }
+        });
+    });
+
+    group.bench_function("Ipv6Network::prefix contiguous", |b| {
+        let net = Ipv6Network::parse("2001:db8::/32").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&net).prefix());
+        });
+    });
+
+    group.bench_function("Ipv6Network::prefix non-contiguous", |b| {
+        let net = Ipv6Network::parse("2001:db8::1/ffff:ffff::ffff").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(&net).prefix());
+        });
+    });
+
+    group.bench_function("Ipv6Network::prefix mixed", |b| {
+        let nets = [
+            Ipv6Network::parse("2001:db8::/32").unwrap(),
+            Ipv6Network::parse("2001:db8::1/ffff:ffff::ffff").unwrap(),
+            Ipv6Network::parse("2a02:6b8::/48").unwrap(),
+            Ipv6Network::parse("2a02:6b8::1/ffff:0:0:0:ffff::").unwrap(),
+        ];
+        b.iter(|| {
+            for net in core::hint::black_box(&nets) {
+                core::hint::black_box(net.prefix());
+            }
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_net_addrs,
@@ -1995,6 +2059,7 @@ criterion_group!(
     bench_range_to_networks,
     bench_to_ipv4_mapped,
     bench_to_contiguous,
+    bench_prefix,
     bench_parse,
     bench_ord,
     bench_display

@@ -1325,11 +1325,11 @@ impl Ipv4Network {
     #[inline]
     #[must_use]
     pub const fn prefix(&self) -> Option<u8> {
-        let mask = self.mask().to_bits();
-        let ones = mask.leading_ones();
-
-        if mask.count_ones() == ones {
-            Some(ones as u8)
+        // For a contiguous mask every set bit is in the leading run, so its
+        // popcount equals `leading_ones`; the dedicated contiguity check is
+        // cheaper than recomputing the popcount here.
+        if self.is_contiguous() {
+            Some(self.mask().to_bits().leading_ones() as u8)
         } else {
             None
         }
@@ -2991,11 +2991,11 @@ impl Ipv6Network {
     #[inline]
     #[must_use]
     pub const fn prefix(&self) -> Option<u8> {
-        let mask = self.mask().to_bits();
-        let ones = mask.leading_ones();
-
-        if mask.count_ones() == ones {
-            Some(ones as u8)
+        // For a contiguous mask every set bit is in the leading run, so its
+        // popcount equals `leading_ones`; the dedicated contiguity check is
+        // cheaper than recomputing the popcount here.
+        if self.is_contiguous() {
+            Some(self.mask().to_bits().leading_ones() as u8)
         } else {
             None
         }
@@ -8252,6 +8252,38 @@ mod test {
         assert_eq!(NET.to_contiguous(), CONTIGUOUS);
     }
 
+    #[test]
+    fn ipv4_prefix_edge_masks() {
+        assert_eq!(Some(0), Ipv4Network::parse("0.0.0.0/0").unwrap().prefix());
+        assert_eq!(Some(1), Ipv4Network::parse("128.0.0.0/1").unwrap().prefix());
+        assert_eq!(Some(31), Ipv4Network::parse("10.0.0.2/31").unwrap().prefix());
+        assert_eq!(Some(32), Ipv4Network::parse("10.0.0.1/32").unwrap().prefix());
+        assert_eq!(None, Ipv4Network::parse("10.0.0.1/255.0.0.255").unwrap().prefix());
+        // Masks with no leading run at all but bits set elsewhere.
+        assert_eq!(None, Ipv4Network::parse("0.0.0.1/0.0.0.255").unwrap().prefix());
+        assert_eq!(None, Ipv4Network::parse("0.0.0.0/127.255.255.255").unwrap().prefix());
+    }
+
+    #[test]
+    fn ipv6_prefix_edge_masks() {
+        assert_eq!(Some(0), Ipv6Network::parse("::/0").unwrap().prefix());
+        assert_eq!(Some(1), Ipv6Network::parse("8000::/1").unwrap().prefix());
+        assert_eq!(Some(127), Ipv6Network::parse("2001:db8::2/127").unwrap().prefix());
+        assert_eq!(Some(128), Ipv6Network::parse("2001:db8::1/128").unwrap().prefix());
+        assert_eq!(
+            None,
+            Ipv6Network::parse("2001:db8::1/ffff:ffff::ffff").unwrap().prefix()
+        );
+        // Masks with no leading run at all but bits set elsewhere.
+        assert_eq!(None, Ipv6Network::parse("::1/::ffff").unwrap().prefix());
+        assert_eq!(
+            None,
+            Ipv6Network::parse("::/7fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")
+                .unwrap()
+                .prefix()
+        );
+    }
+
     // Shared with `net::contiguous`'s test module: `arb_contiguous_ipv4_network`
     // there calls this directly.
     pub(crate) fn arb_ipv4_network() -> impl Strategy<Value = Ipv4Network> {
@@ -8354,6 +8386,36 @@ mod test {
     }
 
     proptest! {
+        #[test]
+        fn prop_ipv4_prefix_some_iff_is_contiguous(net in arb_ipv4_network()) {
+            prop_assert_eq!(net.is_contiguous(), net.prefix().is_some());
+            if let Some(prefix) = net.prefix() {
+                prop_assert_eq!(Ok(*net.mask()), ipv4_mask_from_cidr(prefix));
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_prefix_some_iff_is_contiguous(net in arb_ipv6_network()) {
+            prop_assert_eq!(net.is_contiguous(), net.prefix().is_some());
+            if let Some(prefix) = net.prefix() {
+                prop_assert_eq!(Ok(*net.mask()), ipv6_mask_from_cidr(prefix));
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_prefix_roundtrips_cidr(addr in any::<u32>(), cidr in 0u8..=32) {
+            let mask = ipv4_mask_from_cidr(cidr).unwrap();
+            let net = Ipv4Network::new(Ipv4Addr::from_bits(addr), mask);
+            prop_assert_eq!(Some(cidr), net.prefix());
+        }
+
+        #[test]
+        fn prop_ipv6_prefix_roundtrips_cidr(addr in any::<u128>(), cidr in 0u8..=128) {
+            let mask = ipv6_mask_from_cidr(cidr).unwrap();
+            let net = Ipv6Network::new(Ipv6Addr::from_bits(addr), mask);
+            prop_assert_eq!(Some(cidr), net.prefix());
+        }
+
         #[test]
         fn prop_ipv4_intersects_is_not_disjoint(
             a in arb_ipv4_network(),
