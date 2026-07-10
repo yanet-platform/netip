@@ -243,15 +243,15 @@ impl BiContiguous<Ipv6Network> {
     ///
     /// The [`BiContiguous`] type invariant guarantees the mask splits into
     /// exactly two contiguous runs, one per 64-bit half, so every host index
-    /// `i` maps to its address through a 5-op closed form instead of the
-    /// general [`Ipv6Network::addrs`]'s per-bit `pdep` loop:
+    /// `i` maps to its address through a 5-op closed form rather than the
+    /// general [`Ipv6Network::addrs`]'s per-item stepping:
     ///
     /// `addr(i) = base | (i & lo_mask) | ((i >> split_shift) << 64)`, where
     /// `split_shift = 64 - lo_prefix` and `lo_mask = (1 << split_shift) - 1`
     /// for the low half's prefix length `lo_prefix` -- all three precomputed
     /// once here, at construction.
     ///
-    /// Because `pdep` is strictly increasing in its source, this produces the
+    /// The closed form is strictly increasing in `i`, so this produces the
     /// exact same sequence as the general iterator, in both directions: host
     /// index order is row-major over the (high half, low half) plane, the
     /// low half's `split_shift` host bits cycling fastest and carrying into
@@ -390,10 +390,6 @@ impl BiContiguous<Ipv6Network> {
         // NOTE: use `Option::map` when it becomes const.
         match (self, other) {
             (Self(a), Self(b)) => match a.intersection(b) {
-                // The bi-contiguous class is closed under intersection: the
-                // mask-or of two bi-contiguous masks is itself bi-contiguous,
-                // so the result never leaves the class -- no re-validation
-                // needed, unlike a normalization check.
                 Some(net) => Some(Self(net)),
                 None => None,
             },
@@ -420,19 +416,15 @@ impl BiContiguousIpv6Addrs {
 /// Created by [`BiContiguous::<Ipv6Network>::addrs`].
 ///
 /// The [`BiContiguous`] type invariant guarantees the mask splits into two
-/// contiguous runs, one per 64-bit half, so unlike [`Ipv6NetworkAddrs`] this
-/// iterator never runs `pdep`: each step maps its host index to an address
-/// through the 5-op closed form documented on
+/// contiguous runs, one per 64-bit half, so this iterator maps each step's
+/// host index to an address through the 5-op closed form documented on
 /// [`BiContiguous::<Ipv6Network>::addrs`]. Unlike
 /// [`ContiguousIpv6NetworkAddrs`], the index cannot be folded into the
 /// bounds and advanced as a single packed address: the two host-bit runs
 /// live at different bit offsets (`0..split_shift` and `64..64+hi host
-/// bits`), so
-/// consecutive indices can "carry" from the low run into the high run at a
-/// bit position other than the next one up. The host index is therefore
-/// kept as its own cursor, mirroring [`Ipv6NetworkAddrs`]'s `base`/`front`/
-/// `back` field protocol, with the per-step cost of the closed form instead
-/// of `pdep`.
+/// bits`), so consecutive indices can "carry" from the low run into the high
+/// run at a bit position other than the next one up. The host index is
+/// therefore kept as its own cursor, paying the closed form's per-step cost.
 ///
 /// When the iterator is exhausted it enters a sentinel state where
 /// `front > back`, so every subsequent call to [`next`](Iterator::next) or
@@ -973,19 +965,9 @@ const fn bicontiguous_shape_mask(hi_prefix: u8, lo_prefix: u8) -> u128 {
 // skip.
 //
 // Always runs the `O(N * S * log N)` probe below against the present ancestor
-// shapes. A companion small-N quadratic scan was measured (head-to-head
-// against this probe, across sweep-clean inputs from `N = 2` to `N = 32768`,
-// with a realistic handful of shapes and with a deliberately adversarial fan
-// of as many distinct shapes as elements) and removed: on a realistic handful
-// of shapes the probe already wins from `N` as low as 32, and on the
-// adversarial fan the quadratic scan only stays ahead by a bounded, few-tens-
-// of-microseconds margin until the bi-contiguous shape space (65 * 65 = 4225
-// distinct `(hi_prefix, lo_prefix)` pairs) is exhausted and shapes start
-// repeating, pushing the real crossover out past `N = 10000`. No threshold
-// below that crossover protects the adversarial fan without also routing
-// realistic, large inputs -- the library's actual target -- through the
-// quadratic scan's `O(N^2)` cost, which is the worse regret of the two, so
-// the routing branch was not worth keeping.
+// shapes. A small-N quadratic scan was measured and rejected: any threshold
+// that would route the adversarial many-distinct-shapes case to it also routes
+// realistic large inputs through its `O(N^2)` cost, the worse regret.
 fn bicontiguous_find_containment(nets: &mut [BiContiguous<Ipv6Network>]) -> usize {
     if nets.len() <= 1 {
         return nets.len();
@@ -1841,7 +1823,7 @@ mod test {
 
         // Independent oracle: reconstructs the address grid from the two
         // axes directly (hi host index x lo host index), bypassing both the
-        // closed-form override and the general `pdep` path, then checks set
+        // closed-form override and the general iterator, then checks set
         // equality (order is checked separately by the `_matches_general_*`
         // tests above).
         #[test]
