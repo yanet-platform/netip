@@ -2143,6 +2143,12 @@ pub struct Ipv4NetworkDiff {
     mask: u32,
     /// Bits of `d` not yet yielded.
     remaining: u32,
+    /// Prediction of `next()`'s upcoming peel bit: one position below the
+    /// last bit yielded, zero before the first call. Pending bits only ever
+    /// sit at or below it, so whenever it — or, failing that, its next lower
+    /// neighbour — is still pending, that guess is exactly the highest
+    /// pending bit and `next()` skips the scan for it.
+    predicted: u32,
 }
 
 impl Ipv4NetworkDiff {
@@ -2171,6 +2177,7 @@ impl Ipv4NetworkDiff {
                     addr: addr ^ b,
                     mask: mask ^ b,
                     remaining: b,
+                    predicted: 0,
                 }
             }
             Some(intersected) => {
@@ -2181,13 +2188,19 @@ impl Ipv4NetworkDiff {
 
                 if d == 0 {
                     // A ⊆ B: A \ B = ∅.
-                    Self { addr: 0, mask: 0, remaining: 0 }
+                    Self {
+                        addr: 0,
+                        mask: 0,
+                        remaining: 0,
+                        predicted: 0,
+                    }
                 } else {
                     // General case: peel one network per bit of d.
                     Self {
                         addr: intersected_addr,
                         mask,
                         remaining: d,
+                        predicted: 0,
                     }
                 }
             }
@@ -2200,11 +2213,36 @@ impl Iterator for Ipv4NetworkDiff {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        if self.remaining == 0 {
-            return None;
+        // After the first peel every pending bit sits at or below
+        // `predicted`, so whenever either guess below is still pending it is
+        // exactly the highest pending bit and the step needs no scan:
+        // `predicted` resolves contiguous runs of `d`, `predicted >> 1`
+        // resolves masks alternating set and clear bits. Both guesses fail
+        // against an exhausted iterator (`x & 0` is always zero), so the
+        // end-of-iteration check rides behind them instead of costing every
+        // step a test.
+        let mut b = self.predicted;
+
+        if b & self.remaining == 0 {
+            b >>= 1;
+
+            if b & self.remaining == 0 {
+                if self.remaining == 0 {
+                    return None;
+                }
+
+                // Both guesses miss with bits still pending only on the first
+                // call, after a three-or-more bit gap in `d`, or once
+                // back-iteration has drained `remaining` down past the
+                // guesses. The call keeps the rescue a real branch: a
+                // conditional move would chain the scan back into every
+                // step's dependencies.
+                core::hint::cold_path();
+                b = 0x8000_0000u32 >> self.remaining.leading_zeros();
+            }
         }
 
-        let b = 0x8000_0000u32 >> self.remaining.leading_zeros();
+        self.predicted = b >> 1;
         self.mask |= b;
         let addr = (self.addr ^ b) & self.mask;
         self.remaining ^= b;
@@ -3769,6 +3807,12 @@ pub struct Ipv6NetworkDiff {
     mask: u128,
     /// Bits of `d` not yet yielded.
     remaining: u128,
+    /// Prediction of `next()`'s upcoming peel bit: one position below the
+    /// last bit yielded, zero before the first call. Pending bits only ever
+    /// sit at or below it, so whenever it — or, failing that, its next lower
+    /// neighbour — is still pending, that guess is exactly the highest
+    /// pending bit and `next()` skips the scan for it.
+    predicted: u128,
 }
 
 impl Ipv6NetworkDiff {
@@ -3797,6 +3841,7 @@ impl Ipv6NetworkDiff {
                     addr: addr ^ b,
                     mask: mask ^ b,
                     remaining: b,
+                    predicted: 0,
                 }
             }
             Some(intersected) => {
@@ -3807,10 +3852,20 @@ impl Ipv6NetworkDiff {
 
                 if d == 0 {
                     // A ⊆ B: A \ B = ∅.
-                    Self { addr: 0, mask: 0, remaining: 0 }
+                    Self {
+                        addr: 0,
+                        mask: 0,
+                        remaining: 0,
+                        predicted: 0,
+                    }
                 } else {
                     // General case: peel one network per bit of d.
-                    Self { addr: inter_addr, mask, remaining: d }
+                    Self {
+                        addr: inter_addr,
+                        mask,
+                        remaining: d,
+                        predicted: 0,
+                    }
                 }
             }
         }
@@ -3822,11 +3877,72 @@ impl Iterator for Ipv6NetworkDiff {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        if self.remaining == 0 {
-            return None;
+        // Working in generic `u128` arithmetic would cost double-word
+        // instruction pairs on every step, so each arm below runs the whole
+        // step — guess validation, rescue scan, and peel — pinned to the
+        // 64-bit half holding the highest pending bit, and the compiler
+        // lowers it to single-word instructions. The prediction is stored
+        // full-width, so it survives the arm switch at the word boundary.
+        let remaining = (self.remaining >> 64) as u64;
+
+        if remaining != 0 {
+            // After the first peel every pending bit sits at or below
+            // `predicted`, so whenever either guess below is still pending it
+            // is exactly the highest pending bit and the step needs no scan:
+            // `predicted` resolves contiguous runs of `d`, `predicted >> 1`
+            // resolves masks alternating set and clear bits.
+            let mut b = (self.predicted >> 64) as u64;
+
+            if b & remaining == 0 {
+                b >>= 1;
+
+                if b & remaining == 0 {
+                    // Both guesses miss only on the first call, after a
+                    // three-or-more bit gap in `d`, or once back-iteration has
+                    // drained `remaining` down past the guesses. The call
+                    // keeps the rescue a real branch: a conditional move would
+                    // chain the scan back into every step's dependencies.
+                    core::hint::cold_path();
+                    b = 0x8000_0000_0000_0000u64 >> remaining.leading_zeros();
+                }
+            }
+
+            self.predicted = (b as u128) << 63;
+            let b = (b as u128) << 64;
+            self.mask |= b;
+            let addr = (self.addr ^ b) & self.mask;
+            self.remaining ^= b;
+
+            // NOTE: address is already normalized by the `& mask` above.
+            return Some(Ipv6Network(Ipv6Addr::from_bits(addr), Ipv6Addr::from_bits(self.mask)));
         }
 
-        let b = 1u128 << (127 - self.remaining.leading_zeros());
+        // An empty high half puts every pending bit in the low one, so the
+        // truncated prediction loses nothing pending. Right after a peel of
+        // bit 64 it still carries the in-range bit 63 (stored full-width
+        // above); only a guess straddling the boundary from higher up
+        // degrades into the rescue, at most once per iteration lifetime.
+        let remaining = self.remaining as u64;
+        let mut b = self.predicted as u64;
+
+        if b & remaining == 0 {
+            b >>= 1;
+
+            if b & remaining == 0 {
+                // Both guesses fail against an exhausted iterator (`x & 0` is
+                // always zero), so the end-of-iteration check rides here
+                // instead of costing every step a test.
+                if remaining == 0 {
+                    return None;
+                }
+
+                core::hint::cold_path();
+                b = 0x8000_0000_0000_0000u64 >> remaining.leading_zeros();
+            }
+        }
+
+        self.predicted = (b >> 1) as u128;
+        let b = b as u128;
         self.mask |= b;
         let addr = (self.addr ^ b) & self.mask;
         self.remaining ^= b;
@@ -10538,6 +10654,209 @@ mod test {
             let recovered = recovered.unwrap();
             let (addr, mask) = (recovered.addr().to_bits(), recovered.mask().to_bits());
             prop_assert_eq!(addr & mask, addr, "net4={}, mapped={}", net4, mapped);
+        }
+    }
+
+    // Reference oracle for `Ipv4NetworkDiff`: a byte-for-byte copy of the
+    // implementation before the peel step was rewritten for speed. The
+    // proptests below hold the rewritten iterator to the exact same item
+    // sequence from both ends and under arbitrary interleaving.
+    struct Ipv4NetworkDiffReference {
+        addr: u32,
+        mask: u32,
+        remaining: u32,
+    }
+
+    impl Ipv4NetworkDiffReference {
+        fn new(source: &Ipv4Network, other: &Ipv4Network) -> Self {
+            let (addr, mask) = source.to_bits();
+
+            match source.intersection(other) {
+                None => {
+                    let b = mask & mask.wrapping_neg();
+
+                    Self {
+                        addr: addr ^ b,
+                        mask: mask ^ b,
+                        remaining: b,
+                    }
+                }
+                Some(intersected) => {
+                    let (intersected_addr, intersected_mask) = intersected.to_bits();
+                    let d = intersected_mask & !mask;
+
+                    if d == 0 {
+                        Self { addr: 0, mask: 0, remaining: 0 }
+                    } else {
+                        Self {
+                            addr: intersected_addr,
+                            mask,
+                            remaining: d,
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    impl Iterator for Ipv4NetworkDiffReference {
+        type Item = Ipv4Network;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.remaining == 0 {
+                return None;
+            }
+
+            let b = 0x8000_0000u32 >> self.remaining.leading_zeros();
+            self.mask |= b;
+            let addr = (self.addr ^ b) & self.mask;
+            self.remaining ^= b;
+
+            Some(Ipv4Network(Ipv4Addr::from_bits(addr), Ipv4Addr::from_bits(self.mask)))
+        }
+    }
+
+    impl DoubleEndedIterator for Ipv4NetworkDiffReference {
+        fn next_back(&mut self) -> Option<Self::Item> {
+            if self.remaining == 0 {
+                return None;
+            }
+
+            let b = self.remaining & self.remaining.wrapping_neg();
+            let mask = self.mask | self.remaining;
+            let addr = (self.addr ^ b) & mask;
+            self.remaining ^= b;
+
+            Some(Ipv4Network(Ipv4Addr::from_bits(addr), Ipv4Addr::from_bits(mask)))
+        }
+    }
+
+    // Reference oracle for `Ipv6NetworkDiff`, mirroring the IPv4 one above.
+    struct Ipv6NetworkDiffReference {
+        addr: u128,
+        mask: u128,
+        remaining: u128,
+    }
+
+    impl Ipv6NetworkDiffReference {
+        fn new(source: &Ipv6Network, other: &Ipv6Network) -> Self {
+            let (addr, mask) = source.to_bits();
+
+            match source.intersection(other) {
+                None => {
+                    let b = mask & mask.wrapping_neg();
+
+                    Self {
+                        addr: addr ^ b,
+                        mask: mask ^ b,
+                        remaining: b,
+                    }
+                }
+                Some(intersected) => {
+                    let (inter_addr, inter_mask) = intersected.to_bits();
+                    let d = inter_mask & !mask;
+
+                    if d == 0 {
+                        Self { addr: 0, mask: 0, remaining: 0 }
+                    } else {
+                        Self { addr: inter_addr, mask, remaining: d }
+                    }
+                }
+            }
+        }
+    }
+
+    impl Iterator for Ipv6NetworkDiffReference {
+        type Item = Ipv6Network;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.remaining == 0 {
+                return None;
+            }
+
+            let b = 1u128 << (127 - self.remaining.leading_zeros());
+            self.mask |= b;
+            let addr = (self.addr ^ b) & self.mask;
+            self.remaining ^= b;
+
+            Some(Ipv6Network(Ipv6Addr::from_bits(addr), Ipv6Addr::from_bits(self.mask)))
+        }
+    }
+
+    impl DoubleEndedIterator for Ipv6NetworkDiffReference {
+        fn next_back(&mut self) -> Option<Self::Item> {
+            if self.remaining == 0 {
+                return None;
+            }
+
+            let b = self.remaining & self.remaining.wrapping_neg();
+            let mask = self.mask | self.remaining;
+            let addr = (self.addr ^ b) & mask;
+            self.remaining ^= b;
+
+            Some(Ipv6Network(Ipv6Addr::from_bits(addr), Ipv6Addr::from_bits(mask)))
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_ipv4_difference_matches_reference_forward(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+            let actual: Vec<_> = a.difference(&b).collect();
+            let expected: Vec<_> = Ipv4NetworkDiffReference::new(&a, &b).collect();
+            prop_assert_eq!(actual, expected, "a={}, b={}", a, b);
+        }
+
+        #[test]
+        fn prop_ipv4_difference_matches_reference_backward(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+            let actual: Vec<_> = a.difference(&b).rev().collect();
+            let expected: Vec<_> = Ipv4NetworkDiffReference::new(&a, &b).rev().collect();
+            prop_assert_eq!(actual, expected, "a={}, b={}", a, b);
+        }
+
+        #[test]
+        fn prop_ipv4_difference_matches_reference_interleaved(
+            a in arb_ipv4_network(),
+            b in arb_ipv4_network(),
+            pattern in proptest::collection::vec(any::<bool>(), 0..40),
+        ) {
+            let mut actual = a.difference(&b);
+            let mut expected = Ipv4NetworkDiffReference::new(&a, &b);
+
+            for pop_front in pattern {
+                let actual_item = if pop_front { actual.next() } else { actual.next_back() };
+                let expected_item = if pop_front { expected.next() } else { expected.next_back() };
+                prop_assert_eq!(actual_item, expected_item, "a={}, b={}, pop_front={}", a, b, pop_front);
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_difference_matches_reference_forward(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+            let actual: Vec<_> = a.difference(&b).collect();
+            let expected: Vec<_> = Ipv6NetworkDiffReference::new(&a, &b).collect();
+            prop_assert_eq!(actual, expected, "a={}, b={}", a, b);
+        }
+
+        #[test]
+        fn prop_ipv6_difference_matches_reference_backward(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+            let actual: Vec<_> = a.difference(&b).rev().collect();
+            let expected: Vec<_> = Ipv6NetworkDiffReference::new(&a, &b).rev().collect();
+            prop_assert_eq!(actual, expected, "a={}, b={}", a, b);
+        }
+
+        #[test]
+        fn prop_ipv6_difference_matches_reference_interleaved(
+            a in arb_ipv6_network(),
+            b in arb_ipv6_network(),
+            pattern in proptest::collection::vec(any::<bool>(), 0..140),
+        ) {
+            let mut actual = a.difference(&b);
+            let mut expected = Ipv6NetworkDiffReference::new(&a, &b);
+
+            for pop_front in pattern {
+                let actual_item = if pop_front { actual.next() } else { actual.next_back() };
+                let expected_item = if pop_front { expected.next() } else { expected.next_back() };
+                prop_assert_eq!(actual_item, expected_item, "a={}, b={}, pop_front={}", a, b, pop_front);
+            }
         }
     }
 

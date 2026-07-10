@@ -1847,6 +1847,28 @@ fn bench_difference(c: &mut Criterion) {
         });
     });
 
+    group.throughput(Throughput::Elements(16));
+    group.bench_function("Ipv4Network::difference universe minus alternating-mask host", |b| {
+        let source = Ipv4Network::parse("0.0.0.0/0").unwrap();
+        let other = Ipv4Network::parse("1.2.3.4/85.85.85.85").unwrap();
+        b.iter(|| {
+            for net in core::hint::black_box(&source).difference(core::hint::black_box(&other)) {
+                core::hint::black_box(net);
+            }
+        });
+    });
+
+    group.throughput(Throughput::Elements(64));
+    group.bench_function("Ipv6Network::difference universe minus alternating-mask host", |b| {
+        let source = Ipv6Network::parse("::/0").unwrap();
+        let other = Ipv6Network::parse("2001:db8::1/5555:5555:5555:5555:5555:5555:5555:5555").unwrap();
+        b.iter(|| {
+            for net in core::hint::black_box(&source).difference(core::hint::black_box(&other)) {
+                core::hint::black_box(net);
+            }
+        });
+    });
+
     group.finish();
 }
 
