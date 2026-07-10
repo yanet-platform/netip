@@ -1691,26 +1691,39 @@ impl Ipv4Network {
     #[inline]
     #[must_use]
     pub const fn merge_by_lowest_mask_bit(&self, other: &Self) -> Option<Self> {
+        let (a1, m1) = self.to_bits();
+        let (a2, m2) = other.to_bits();
+
+        if m1 == m2 {
+            // Equal masks: containment degenerates to network equality, so both
+            // `contains` probes collapse to one address compare.
+            if a1 == a2 {
+                return Some(*self);
+            }
+
+            if ipv4_adjacent_by_lowest_mask_bit(a1, m1, a2, m2) {
+                // NOTE: the addresses differ only in the mask's lowest set bit,
+                // which the reduced mask clears, so `a1 & a2` is already
+                // normalized and needs no further `& mask`.
+                return Some(Self(
+                    Ipv4Addr::from_bits(a1 & a2),
+                    Ipv4Addr::from_bits(m1 & m1.wrapping_sub(1)),
+                ));
+            }
+
+            return None;
+        }
+
+        // Different masks: adjacency requires equal masks, so containment is
+        // the only remaining way to merge.
         if self.contains(other) {
             return Some(*self);
         }
         if other.contains(self) {
             return Some(*other);
         }
-        if !self.is_adjacent_by_lowest_mask_bit(other) {
-            return None;
-        }
 
-        let (a1, m1) = self.to_bits();
-        let (a2, ..) = other.to_bits();
-
-        // NOTE: the addresses differ only in the mask's lowest set bit, which the
-        // reduced mask clears, so `a1 & a2` is already normalized and needs no
-        // further `& mask`.
-        Some(Self(
-            Ipv4Addr::from_bits(a1 & a2),
-            Ipv4Addr::from_bits(m1 & m1.wrapping_sub(1)),
-        ))
+        None
     }
 
     /// Converts this network to an IPv4-mapped IPv6 network.
@@ -3363,26 +3376,39 @@ impl Ipv6Network {
     #[inline]
     #[must_use]
     pub const fn merge_by_lowest_mask_bit(&self, other: &Self) -> Option<Self> {
+        let (a1, m1) = self.to_bits();
+        let (a2, m2) = other.to_bits();
+
+        if m1 == m2 {
+            // Equal masks: containment degenerates to network equality, so both
+            // `contains` probes collapse to one address compare.
+            if a1 == a2 {
+                return Some(*self);
+            }
+
+            if ipv6_adjacent_by_lowest_mask_bit(a1, m1, a2, m2) {
+                // NOTE: the addresses differ only in the mask's lowest set bit,
+                // which the reduced mask clears, so `a1 & a2` is already
+                // normalized and needs no further `& mask`.
+                return Some(Self(
+                    Ipv6Addr::from_bits(a1 & a2),
+                    Ipv6Addr::from_bits(m1 & m1.wrapping_sub(1)),
+                ));
+            }
+
+            return None;
+        }
+
+        // Different masks: adjacency requires equal masks, so containment is
+        // the only remaining way to merge.
         if self.contains(other) {
             return Some(*self);
         }
         if other.contains(self) {
             return Some(*other);
         }
-        if !self.is_adjacent_by_lowest_mask_bit(other) {
-            return None;
-        }
 
-        let (a1, m1) = self.to_bits();
-        let (a2, ..) = other.to_bits();
-
-        // NOTE: the addresses differ only in the mask's lowest set bit, which the
-        // reduced mask clears, so `a1 & a2` is already normalized and needs no
-        // further `& mask`.
-        Some(Self(
-            Ipv6Addr::from_bits(a1 & a2),
-            Ipv6Addr::from_bits(m1 & m1.wrapping_sub(1)),
-        ))
+        None
     }
 
     /// Returns the last address in this IPv6 network.
