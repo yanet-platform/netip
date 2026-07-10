@@ -1409,14 +1409,19 @@ impl Ipv4Network {
     #[inline]
     #[must_use]
     pub fn supernet_for(&self, nets: &[Ipv4Network]) -> Ipv4Network {
-        let (addr, mut mask) = self.to_bits();
+        // AND/XOR/NOT commute with byte order, so the fold runs on native-order words:
+        // this keeps LLVM's auto-vectorization free of the per-element big-endian byte
+        // swap it would otherwise expand into a chain of SSE2 shuffles.
+        let addr = u32::from_ne_bytes(self.addr().octets());
+        let mut mask = u32::from_ne_bytes(self.mask().octets());
 
         for net in nets {
-            let (a, m) = net.to_bits();
+            let a = u32::from_ne_bytes(net.addr().octets());
+            let m = u32::from_ne_bytes(net.mask().octets());
             mask &= m & !(addr ^ a);
         }
 
-        Self::new(addr.into(), mask.into())
+        Self::new(Ipv4Addr::from(addr.to_ne_bytes()), Ipv4Addr::from(mask.to_ne_bytes()))
     }
 
     /// Returns `true` if this network is adjacent to `other`.
@@ -3060,14 +3065,46 @@ impl Ipv6Network {
     #[inline]
     #[must_use]
     pub fn supernet_for(&self, nets: &[Ipv6Network]) -> Ipv6Network {
-        let (addr, mut mask) = self.to_bits();
+        // AND/XOR/NOT commute with byte order, so the fold runs bytewise in memory
+        // order: this removes four per-element byte swaps, and the fixed 16-byte
+        // inner loop is the shape LLVM auto-vectorizes into whole-address vector
+        // operations (`u128` arithmetic stays in scalar 64-bit halves instead).
+        //
+        // Folding four networks per step into `mask` plus three all-ones `lanes`
+        // breaks the loop-carried AND dependency chain; AND is associative and
+        // commutative, so combining the lanes afterwards is bit-identical to the
+        // sequential fold.
+        let addr = self.addr().octets();
+        let mut mask = self.mask().octets();
+        let mut lanes = [[0xff_u8; 16]; 3];
 
-        for net in nets {
-            let (a, m) = net.to_bits();
-            mask &= m & !(addr ^ a);
+        let mut quads = nets.chunks_exact(4);
+        for quad in &mut quads {
+            let (a0, m0) = (quad[0].addr().octets(), quad[0].mask().octets());
+            let (a1, m1) = (quad[1].addr().octets(), quad[1].mask().octets());
+            let (a2, m2) = (quad[2].addr().octets(), quad[2].mask().octets());
+            let (a3, m3) = (quad[3].addr().octets(), quad[3].mask().octets());
+            for i in 0..16 {
+                mask[i] &= m0[i] & !(addr[i] ^ a0[i]);
+                lanes[0][i] &= m1[i] & !(addr[i] ^ a1[i]);
+                lanes[1][i] &= m2[i] & !(addr[i] ^ a2[i]);
+                lanes[2][i] &= m3[i] & !(addr[i] ^ a3[i]);
+            }
+        }
+        for net in quads.remainder() {
+            let a = net.addr().octets();
+            let m = net.mask().octets();
+            for i in 0..16 {
+                mask[i] &= m[i] & !(addr[i] ^ a[i]);
+            }
+        }
+        for lane in &lanes {
+            for i in 0..16 {
+                mask[i] &= lane[i];
+            }
         }
 
-        Self::new(addr.into(), mask.into())
+        Self::new(Ipv6Addr::from(addr), Ipv6Addr::from(mask))
     }
 
     /// Returns `true` if this network is adjacent to `other`.
@@ -7726,6 +7763,138 @@ mod test {
         #[test]
         fn prop_ipv6_merge_matches_reference(a in arb_ipv6_network(), b in arb_ipv6_network()) {
             prop_assert_eq!(ipv6_merge_reference(&a, &b), a.merge(&b), "mismatch: a={}, b={}", a, b);
+        }
+    }
+
+    // Pre-rewrite `Ipv4Network::supernet_for` body, kept verbatim to validate
+    // the native-byte-order rewrite against known-correct behavior.
+    fn ipv4_supernet_for_reference(net: &Ipv4Network, nets: &[Ipv4Network]) -> Ipv4Network {
+        let (addr, mut mask) = net.to_bits();
+
+        for net in nets {
+            let (a, m) = net.to_bits();
+            mask &= m & !(addr ^ a);
+        }
+
+        Ipv4Network::new(addr.into(), mask.into())
+    }
+
+    // Pre-rewrite `Ipv6Network::supernet_for` body, kept verbatim to validate
+    // the native-byte-order rewrite against known-correct behavior.
+    fn ipv6_supernet_for_reference(net: &Ipv6Network, nets: &[Ipv6Network]) -> Ipv6Network {
+        let (addr, mut mask) = net.to_bits();
+
+        for net in nets {
+            let (a, m) = net.to_bits();
+            mask &= m & !(addr ^ a);
+        }
+
+        Ipv6Network::new(addr.into(), mask.into())
+    }
+
+    #[test]
+    fn ipv4_supernet_for_empty() {
+        let net = Ipv4Network::parse("10.0.0.1/255.255.0.255").unwrap();
+        assert_eq!(net, net.supernet_for(&[]));
+    }
+
+    #[test]
+    fn ipv6_supernet_for_empty() {
+        let net = Ipv6Network::parse("2001:db8::1/ffff:ffff:ff00:ffff:ffff:ffff:ffff:ffff").unwrap();
+        assert_eq!(net, net.supernet_for(&[]));
+    }
+
+    #[test]
+    fn ipv4_supernet_for_matches_reference_fixed_cases() {
+        let cases: &[(&str, &[&str])] = &[
+            // Empty slice: returns self unchanged.
+            ("10.0.0.0/24", &[]),
+            // Duplicates of self.
+            ("10.0.0.0/24", &["10.0.0.0/24", "10.0.0.0/24"]),
+            // Sibling /25s fold into the /24.
+            ("192.0.2.0/25", &["192.0.2.128/25"]),
+            // Contiguous inputs, non-contiguous result.
+            ("10.0.0.0/24", &["10.1.0.0/24"]),
+            // Non-contiguous masks with a hole in the third octet.
+            (
+                "10.0.0.1/255.255.0.255",
+                &["10.1.0.1/255.255.0.255", "10.2.0.1/255.255.0.255"],
+            ),
+            // Top-bit difference collapses the mask to zero.
+            ("0.0.0.0/8", &["128.0.0.0/8", "10.0.0.0/24"]),
+        ];
+
+        for (net, rest) in cases {
+            let net = Ipv4Network::parse(net).unwrap();
+            let rest: Vec<_> = rest.iter().map(|s| Ipv4Network::parse(s).unwrap()).collect();
+            assert_eq!(
+                ipv4_supernet_for_reference(&net, &rest),
+                net.supernet_for(&rest),
+                "mismatch: net={net}, rest={rest:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ipv6_supernet_for_matches_reference_fixed_cases() {
+        let cases: &[(&str, &[&str])] = &[
+            // Empty slice: returns self unchanged.
+            ("2001:db8::/48", &[]),
+            // Duplicates of self.
+            ("2001:db8::/48", &["2001:db8::/48", "2001:db8::/48"]),
+            // Sibling /49s fold into the /48.
+            ("2001:db8::/49", &["2001:db8:0:8000::/49"]),
+            // Contiguous inputs, non-contiguous result.
+            ("2001:db8::/48", &["2001:db8:100::/48"]),
+            // Non-contiguous masks with an 8-bit hole in the third group.
+            (
+                "2001:db8:c00::1/ffff:ffff:ff00:ffff:ffff:ffff:ffff:ffff",
+                &["2001:db8:c01::1/ffff:ffff:ff00:ffff:ffff:ffff:ffff:ffff"],
+            ),
+            // Top-bit difference collapses the mask to zero.
+            ("::/8", &["8000::/8", "2001:db8::/48"]),
+        ];
+
+        for (net, rest) in cases {
+            let net = Ipv6Network::parse(net).unwrap();
+            let rest: Vec<_> = rest.iter().map(|s| Ipv6Network::parse(s).unwrap()).collect();
+            assert_eq!(
+                ipv6_supernet_for_reference(&net, &rest),
+                net.supernet_for(&rest),
+                "mismatch: net={net}, rest={rest:?}"
+            );
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2000))]
+
+        #[test]
+        fn prop_ipv4_supernet_for_matches_reference(
+            net in arb_ipv4_network(),
+            nets in prop::collection::vec(arb_ipv4_network(), 0..33),
+        ) {
+            prop_assert_eq!(
+                ipv4_supernet_for_reference(&net, &nets),
+                net.supernet_for(&nets),
+                "mismatch: net={}, nets={:?}",
+                net,
+                nets
+            );
+        }
+
+        #[test]
+        fn prop_ipv6_supernet_for_matches_reference(
+            net in arb_ipv6_network(),
+            nets in prop::collection::vec(arb_ipv6_network(), 0..33),
+        ) {
+            prop_assert_eq!(
+                ipv6_supernet_for_reference(&net, &nets),
+                net.supernet_for(&nets),
+                "mismatch: net={}, nets={:?}",
+                net,
+                nets
+            );
         }
     }
 
