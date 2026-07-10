@@ -1907,9 +1907,14 @@ impl Ipv4Network {
     pub fn addrs(self) -> Ipv4NetworkAddrs {
         let (addr, mask) = self.to_bits();
         let host_bits = (!mask).count_ones();
-        let back = u32::MAX.checked_shr(32 - host_bits).unwrap_or(0);
 
-        Ipv4NetworkAddrs { base: addr, mask, front: 0, back }
+        Ipv4NetworkAddrs {
+            base: addr,
+            mask,
+            front_addr: addr,
+            back_addr: addr | !mask,
+            remaining: 1u64 << host_bits,
+        }
     }
 }
 
@@ -2001,15 +2006,20 @@ impl AsRef<Ipv4Network> for Ipv4Network {
 /// mask is zero) are filled with successive values `0 ..= 2^k - 1`, starting
 /// from the least-significant host bit.
 ///
-/// When the iterator is exhausted it enters a sentinel state where
-/// `front > back`, so every subsequent call to [`next`](Iterator::next) or
-/// [`next_back`](DoubleEndedIterator::next_back) returns [`None`].
+/// When the iterator is exhausted (`remaining == 0`) every subsequent call to
+/// [`next`](Iterator::next) or [`next_back`](DoubleEndedIterator::next_back)
+/// returns [`None`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ipv4NetworkAddrs {
     base: u32,
     mask: u32,
-    front: u32,
-    back: u32,
+    /// Next address to yield from the front end, stepped in O(1) per item.
+    front_addr: u32,
+    /// Next address to yield from the back end, stepped in O(1) per item.
+    back_addr: u32,
+    /// Number of addresses not yet yielded; `u64` so the /0 network's `2^32`
+    /// is represented exactly.
+    remaining: u64,
 }
 
 impl Iterator for Ipv4NetworkAddrs {
@@ -2017,25 +2027,36 @@ impl Iterator for Ipv4NetworkAddrs {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        if self.front > self.back {
+        if self.remaining == 0 {
             return None;
         }
 
-        let index = self.front;
-        self.front = self.front.wrapping_add(1);
+        self.remaining -= 1;
 
-        // Wrap-around means front was u32::MAX — only possible for a /0
-        // network.
-        //
-        // Enter sentinel state so the next call returns None.
-        if self.front == 0 {
-            self.front = 1;
-            self.back = 0;
+        let host_mask = !self.mask;
+        let bits = self.front_addr;
+
+        self.front_addr = if host_mask & host_mask.wrapping_add(1) == 0 {
+            // Contiguous mask (trailing zeros only): a plain increment steps
+            // to the next address; the overrun past the last one is repaired
+            // by the exhaustion canonicalization below.
+            bits.wrapping_add(1)
+        } else {
+            // O(1) step to the next host pattern: with the mask bits preset
+            // to one, the +1 carry ripples straight across them between host
+            // positions.
+            ((bits | self.mask).wrapping_add(1) & host_mask) | self.base
+        };
+
+        // On exhaustion park the front cursor on `base`, so that every drain
+        // script ending in `next_back` collapses into one sentinel state while
+        // an all-front overrun keeps its stepped `back_addr` as a distinct
+        // (still exhausted) state.
+        if self.remaining == 0 {
+            self.front_addr = self.base;
         }
 
-        Some(Ipv4Addr::from_bits(ipv4_bits_from_host_index(
-            self.base, self.mask, index,
-        )))
+        Some(Ipv4Addr::from_bits(bits))
     }
 
     #[inline]
@@ -2045,16 +2066,10 @@ impl Iterator for Ipv4NetworkAddrs {
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        if self.front > self.back {
-            return (0, Some(0));
-        }
-
-        let rem = self.back.wrapping_sub(self.front).wrapping_add(1);
-
-        if rem == 0 {
+        if self.remaining > u32::MAX as u64 {
             (usize::MAX, None)
         } else {
-            let n = rem as usize;
+            let n = self.remaining as usize;
             (n, Some(n))
         }
     }
@@ -2063,35 +2078,42 @@ impl Iterator for Ipv4NetworkAddrs {
 impl DoubleEndedIterator for Ipv4NetworkAddrs {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.front > self.back {
+        if self.remaining == 0 {
             return None;
         }
 
-        let index = self.back;
+        self.remaining -= 1;
 
-        if self.front == self.back {
-            self.front = 1;
-            self.back = 0;
+        let host_mask = !self.mask;
+        let bits = self.back_addr;
+
+        self.back_addr = if host_mask & host_mask.wrapping_add(1) == 0 {
+            // Contiguous mask (trailing zeros only): a plain decrement steps
+            // to the previous address; the underrun past the first one is
+            // repaired by the exhaustion canonicalization below.
+            bits.wrapping_sub(1)
         } else {
-            self.back = self.back.wrapping_sub(1);
+            // O(1) step to the previous host pattern: with the mask bits
+            // cleared, the -1 borrow ripples straight across them between
+            // host positions.
+            ((bits & host_mask).wrapping_sub(1) & host_mask) | self.base
+        };
+
+        // On exhaustion park both cursors on `base`, the shared sentinel for
+        // every drain script whose last item came off the back end.
+        if self.remaining == 0 {
+            self.front_addr = self.base;
+            self.back_addr = self.base;
         }
 
-        Some(Ipv4Addr::from_bits(ipv4_bits_from_host_index(
-            self.base, self.mask, index,
-        )))
+        Some(Ipv4Addr::from_bits(bits))
     }
 }
 
 impl ExactSizeIterator for Ipv4NetworkAddrs {
     #[inline]
     fn len(&self) -> usize {
-        if self.front > self.back {
-            return 0;
-        }
-
-        let rem = self.back.wrapping_sub(self.front).wrapping_add(1);
-
-        if rem == 0 { 1usize << 32 } else { rem as usize }
+        self.remaining as usize
     }
 }
 
@@ -2237,36 +2259,6 @@ impl ExactSizeIterator for Ipv4NetworkDiff {
     fn len(&self) -> usize {
         self.remaining.count_ones() as usize
     }
-}
-
-#[inline]
-const fn ipv4_bits_from_host_index(base: u32, mask: u32, index: u32) -> u32 {
-    let host_mask = !mask;
-
-    // For contiguous masks (trailing ones only) pdep is identity.
-    if host_mask & host_mask.wrapping_add(1) == 0 {
-        base | index
-    } else {
-        base | pdep_u32(index, host_mask)
-    }
-}
-
-#[inline]
-const fn pdep_u32(mut src: u32, mut mask: u32) -> u32 {
-    let mut out = 0u32;
-
-    while mask != 0 {
-        let t = mask & mask.wrapping_neg();
-
-        if src & 1 != 0 {
-            out |= t;
-        }
-
-        src >>= 1;
-        mask ^= t;
-    }
-
-    out
 }
 
 /// An iterator over the minimum set of contiguous IPv4 networks (CIDR blocks)
@@ -3521,9 +3513,20 @@ impl Ipv6Network {
     pub fn addrs(self) -> Ipv6NetworkAddrs {
         let (addr, mask) = self.to_bits();
         let host_bits = (!mask).count_ones();
-        let back = u128::MAX.checked_shr(128 - host_bits).unwrap_or(0);
 
-        Ipv6NetworkAddrs { base: addr, mask, front: 0, back }
+        // The /0 network's 2^128 does not fit `u128`, so its count saturates
+        // to `2^128 - 1`. The one-address deficit is unobservable: reaching it
+        // would take 2^128 - 1 iterator steps, and `size_hint` reports every
+        // count above `usize::MAX` as `(usize::MAX, None)` anyway.
+        let remaining = 1u128.checked_shl(host_bits).unwrap_or(u128::MAX);
+
+        Ipv6NetworkAddrs {
+            base: addr,
+            mask,
+            front_addr: addr,
+            back_addr: addr | !mask,
+            remaining,
+        }
     }
 }
 
@@ -3573,15 +3576,20 @@ impl PartialOrd for Ipv6Network {
 /// mask is zero) are filled with successive values `0 ..= 2^k - 1`, starting
 /// from the least-significant host bit.
 ///
-/// When the iterator is exhausted it enters a sentinel state where
-/// `front > back`, so every subsequent call to [`next`](Iterator::next) or
-/// [`next_back`](DoubleEndedIterator::next_back) returns [`None`].
+/// When the iterator is exhausted (`remaining == 0`) every subsequent call to
+/// [`next`](Iterator::next) or [`next_back`](DoubleEndedIterator::next_back)
+/// returns [`None`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ipv6NetworkAddrs {
     base: u128,
     mask: u128,
-    front: u128,
-    back: u128,
+    /// Next address to yield from the front end, stepped in O(1) per item.
+    front_addr: u128,
+    /// Next address to yield from the back end, stepped in O(1) per item.
+    back_addr: u128,
+    /// Number of addresses not yet yielded; the /0 network's `2^128`
+    /// saturates to `u128::MAX`.
+    remaining: u128,
 }
 
 impl Iterator for Ipv6NetworkAddrs {
@@ -3589,25 +3597,36 @@ impl Iterator for Ipv6NetworkAddrs {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        if self.front > self.back {
+        if self.remaining == 0 {
             return None;
         }
 
-        let index = self.front;
-        self.front = self.front.wrapping_add(1);
+        self.remaining -= 1;
 
-        // Wrap-around means front was u128::MAX — only possible for a /0
-        // network.
-        //
-        // Enter sentinel state so the next call returns None.
-        if self.front == 0 {
-            self.front = 1;
-            self.back = 0;
+        let host_mask = !self.mask;
+        let bits = self.front_addr;
+
+        self.front_addr = if host_mask & host_mask.wrapping_add(1) == 0 {
+            // Contiguous mask (trailing zeros only): a plain increment steps
+            // to the next address; the overrun past the last one is repaired
+            // by the exhaustion canonicalization below.
+            bits.wrapping_add(1)
+        } else {
+            // O(1) step to the next host pattern: with the mask bits preset
+            // to one, the +1 carry ripples straight across them between host
+            // positions.
+            ((bits | self.mask).wrapping_add(1) & host_mask) | self.base
+        };
+
+        // On exhaustion park the front cursor on `base`, so that every drain
+        // script ending in `next_back` collapses into one sentinel state while
+        // an all-front overrun keeps its stepped `back_addr` as a distinct
+        // (still exhausted) state.
+        if self.remaining == 0 {
+            self.front_addr = self.base;
         }
 
-        Some(Ipv6Addr::from_bits(ipv6_bits_from_host_index(
-            self.base, self.mask, index,
-        )))
+        Some(Ipv6Addr::from_bits(bits))
     }
 
     #[inline]
@@ -3618,19 +3637,9 @@ impl Iterator for Ipv6NetworkAddrs {
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        if self.front > self.back {
-            return (0, Some(0));
-        }
-
-        let rem = self.back.wrapping_sub(self.front).wrapping_add(1);
-
-        if rem == 0 {
-            (usize::MAX, None)
-        } else {
-            match usize::try_from(rem) {
-                Ok(n) => (n, Some(n)),
-                Err(..) => (usize::MAX, None),
-            }
+        match usize::try_from(self.remaining) {
+            Ok(n) => (n, Some(n)),
+            Err(..) => (usize::MAX, None),
         }
     }
 }
@@ -3638,51 +3647,36 @@ impl Iterator for Ipv6NetworkAddrs {
 impl DoubleEndedIterator for Ipv6NetworkAddrs {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.front > self.back {
+        if self.remaining == 0 {
             return None;
         }
 
-        let bits = ipv6_bits_from_host_index(self.base, self.mask, self.back);
+        self.remaining -= 1;
 
-        if self.front == self.back {
-            self.front = 1;
-            self.back = 0;
+        let host_mask = !self.mask;
+        let bits = self.back_addr;
+
+        self.back_addr = if host_mask & host_mask.wrapping_add(1) == 0 {
+            // Contiguous mask (trailing zeros only): a plain decrement steps
+            // to the previous address; the underrun past the first one is
+            // repaired by the exhaustion canonicalization below.
+            bits.wrapping_sub(1)
         } else {
-            self.back = self.back.wrapping_sub(1);
+            // O(1) step to the previous host pattern: with the mask bits
+            // cleared, the -1 borrow ripples straight across them between
+            // host positions.
+            ((bits & host_mask).wrapping_sub(1) & host_mask) | self.base
+        };
+
+        // On exhaustion park both cursors on `base`, the shared sentinel for
+        // every drain script whose last item came off the back end.
+        if self.remaining == 0 {
+            self.front_addr = self.base;
+            self.back_addr = self.base;
         }
 
         Some(Ipv6Addr::from_bits(bits))
     }
-}
-
-#[inline]
-const fn ipv6_bits_from_host_index(base: u128, mask: u128, index: u128) -> u128 {
-    let host_mask = !mask;
-
-    // For contiguous masks (trailing ones only) pdep is identity.
-    if host_mask & host_mask.wrapping_add(1) == 0 {
-        base | index
-    } else {
-        base | pdep_u128(index, host_mask)
-    }
-}
-
-#[inline]
-const fn pdep_u128(mut src: u128, mut mask: u128) -> u128 {
-    let mut out = 0u128;
-
-    while mask != 0 {
-        let t = mask & mask.wrapping_neg();
-
-        if src & 1 != 0 {
-            out |= t;
-        }
-
-        src >>= 1;
-        mask ^= t;
-    }
-
-    out
 }
 
 /// Yields between 0 and 128 pairwise-disjoint networks whose union equals
@@ -5017,6 +5011,445 @@ mod test {
         expected.sort();
         actual.sort();
         assert_eq!(expected, actual);
+    }
+
+    // Reference for the `addrs` iterators: the original per-item software-pdep
+    // expansion of a host index into the mask's zero bits (for a contiguous
+    // host mask pdep is the identity, so no shortcut is needed here).
+    fn pdep_u32_reference(mut src: u32, mut mask: u32) -> u32 {
+        let mut out = 0u32;
+
+        while mask != 0 {
+            let t = mask & mask.wrapping_neg();
+
+            if src & 1 != 0 {
+                out |= t;
+            }
+
+            src >>= 1;
+            mask ^= t;
+        }
+
+        out
+    }
+
+    fn pdep_u128_reference(mut src: u128, mut mask: u128) -> u128 {
+        let mut out = 0u128;
+
+        while mask != 0 {
+            let t = mask & mask.wrapping_neg();
+
+            if src & 1 != 0 {
+                out |= t;
+            }
+
+            src >>= 1;
+            mask ^= t;
+        }
+
+        out
+    }
+
+    fn ipv4_addr_at_host_index_reference(net: &Ipv4Network, index: u32) -> Ipv4Addr {
+        let (base, mask) = net.to_bits();
+        Ipv4Addr::from_bits(base | pdep_u32_reference(index, !mask))
+    }
+
+    fn ipv6_addr_at_host_index_reference(net: &Ipv6Network, index: u128) -> Ipv6Addr {
+        let (base, mask) = net.to_bits();
+        Ipv6Addr::from_bits(base | pdep_u128_reference(index, !mask))
+    }
+
+    // Pins `last()`'s default forward-walk output on purpose.
+    #[allow(clippy::double_ended_iterator_last)]
+    #[test]
+    fn ipv4_addrs_non_contiguous_pins_forward_and_reverse_order() {
+        let net = Ipv4Network::parse("10.0.0.1/255.255.15.255").unwrap();
+        let expected: Vec<_> = (0u32..16).map(|k| Ipv4Addr::new(10, 0, (16 * k) as u8, 1)).collect();
+
+        let forward: Vec<_> = net.addrs().collect();
+        assert_eq!(expected, forward);
+
+        let mut reversed: Vec<_> = net.addrs().rev().collect();
+        reversed.reverse();
+        assert_eq!(expected, reversed);
+
+        assert_eq!(16, net.addrs().len());
+        assert_eq!((16, Some(16)), net.addrs().size_hint());
+        assert_eq!(16, net.addrs().count());
+        assert_eq!(Some(Ipv4Addr::new(10, 0, 240, 1)), net.addrs().last());
+    }
+
+    #[test]
+    fn ipv4_addrs_non_contiguous_pins_interleaved_next_and_next_back() {
+        let net = Ipv4Network::parse("10.0.0.1/255.255.15.255").unwrap();
+        let at = |k: u32| Ipv4Addr::new(10, 0, (16 * k) as u8, 1);
+        let mut addrs = net.addrs();
+
+        assert_eq!(Some(at(0)), addrs.next());
+        assert_eq!(Some(at(15)), addrs.next_back());
+        assert_eq!(Some(at(14)), addrs.next_back());
+        assert_eq!(13, addrs.len());
+        assert_eq!((13, Some(13)), addrs.size_hint());
+        assert_eq!(Some(at(1)), addrs.next());
+        assert_eq!(Some(at(2)), addrs.next());
+        assert_eq!(Some(at(13)), addrs.next_back());
+
+        for k in 3..13 {
+            assert_eq!(Some(at(k)), addrs.next());
+        }
+
+        assert_eq!(0, addrs.len());
+        assert_eq!((0, Some(0)), addrs.size_hint());
+        assert_eq!(None, addrs.next());
+        assert_eq!(None, addrs.next_back());
+    }
+
+    // Pins `last()`'s default forward-walk output on purpose.
+    #[allow(clippy::double_ended_iterator_last)]
+    #[test]
+    fn ipv4_addrs_edge_masks_pin_len_and_size_hint() {
+        let single = Ipv4Network::parse("10.0.0.1/32").unwrap();
+        assert_eq!(1, single.addrs().len());
+        assert_eq!((1, Some(1)), single.addrs().size_hint());
+        assert_eq!(1, single.addrs().count());
+        assert_eq!(Some(Ipv4Addr::new(10, 0, 0, 1)), single.addrs().last());
+
+        let full = Ipv4Network::parse("0.0.0.0/0").unwrap();
+        assert_eq!(1usize << 32, full.addrs().len());
+        assert_eq!((usize::MAX, None), full.addrs().size_hint());
+
+        let mut addrs = full.addrs();
+        assert_eq!(Some(Ipv4Addr::new(0, 0, 0, 0)), addrs.next());
+        assert_eq!(Some(Ipv4Addr::new(0, 0, 0, 1)), addrs.next());
+        assert_eq!(Some(Ipv4Addr::new(255, 255, 255, 255)), addrs.next_back());
+        assert_eq!(Some(Ipv4Addr::new(255, 255, 255, 254)), addrs.next_back());
+        assert_eq!((1usize << 32) - 4, addrs.len());
+    }
+
+    #[test]
+    fn ipv4_addrs_exhausted_iterators_pin_equality_by_drain_path() {
+        // A single non-contiguous host bit (bit 1), so exactly two addresses.
+        let net = Ipv4Network::parse("10.0.0.0/255.255.255.253").unwrap();
+
+        let mut front_only = net.addrs();
+        assert_eq!(Some(Ipv4Addr::new(10, 0, 0, 0)), front_only.next());
+        assert_eq!(Some(Ipv4Addr::new(10, 0, 0, 2)), front_only.next());
+        assert_eq!(None, front_only.next());
+
+        let mut front_then_back = net.addrs();
+        front_then_back.next();
+        front_then_back.next_back();
+
+        let mut back_only = net.addrs();
+        back_only.next_back();
+        back_only.next_back();
+
+        let mut back_then_front = net.addrs();
+        back_then_front.next_back();
+        back_then_front.next();
+
+        // Iterators drained through the back end share one sentinel state; the
+        // all-front drain overruns into a different (still exhausted) state.
+        assert_eq!(front_then_back, back_only);
+        assert_eq!(back_only, back_then_front);
+        assert_ne!(front_only, front_then_back);
+
+        // Same-script iterators are always equal, mid-iteration included.
+        let mut a = net.addrs();
+        let mut b = net.addrs();
+        assert_eq!(a, b);
+        a.next();
+        b.next();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn ipv4_addrs_contiguous_exhausted_iterators_pin_equality_by_drain_path() {
+        let net = Ipv4Network::parse("10.0.0.0/31").unwrap();
+
+        let mut front_only = net.addrs();
+        front_only.next();
+        front_only.next();
+
+        let mut front_then_back = net.addrs();
+        front_then_back.next();
+        front_then_back.next_back();
+
+        let mut back_only = net.addrs();
+        back_only.next_back();
+        back_only.next_back();
+
+        assert_eq!(front_then_back, back_only);
+        assert_ne!(front_only, front_then_back);
+    }
+
+    // Pins `last()`'s default forward-walk output on purpose.
+    #[allow(clippy::double_ended_iterator_last)]
+    #[test]
+    fn ipv6_addrs_non_contiguous_pins_forward_and_reverse_order() {
+        // Host bits at positions 12..16 and 80..84: index bits 0..4 fill the
+        // lower run, index bits 4..8 the upper one.
+        let net = Ipv6Network::parse("2001:db8::1/ffff:ffff:fff0:ffff:ffff:ffff:ffff:0fff").unwrap();
+        let at = |k: u16| Ipv6Addr::new(0x2001, 0xdb8, k >> 4, 0, 0, 0, 0, 0x0001 | ((k & 0xf) << 12));
+        let expected: Vec<_> = (0u16..256).map(at).collect();
+
+        let forward: Vec<_> = net.addrs().collect();
+        assert_eq!(expected, forward);
+
+        let mut reversed: Vec<_> = net.addrs().rev().collect();
+        reversed.reverse();
+        assert_eq!(expected, reversed);
+
+        assert_eq!((256, Some(256)), net.addrs().size_hint());
+        assert_eq!(256, net.addrs().count());
+        assert_eq!(Some(at(255)), net.addrs().last());
+    }
+
+    #[test]
+    fn ipv6_addrs_non_contiguous_pins_interleaved_next_and_next_back() {
+        let net = Ipv6Network::parse("2001:db8::1/ffff:ffff:fff0:ffff:ffff:ffff:ffff:0fff").unwrap();
+        let at = |k: u16| Ipv6Addr::new(0x2001, 0xdb8, k >> 4, 0, 0, 0, 0, 0x0001 | ((k & 0xf) << 12));
+        let mut addrs = net.addrs();
+
+        assert_eq!(Some(at(0)), addrs.next());
+        assert_eq!(Some(at(255)), addrs.next_back());
+        assert_eq!(Some(at(254)), addrs.next_back());
+        assert_eq!((253, Some(253)), addrs.size_hint());
+        assert_eq!(Some(at(1)), addrs.next());
+        assert_eq!(Some(at(2)), addrs.next());
+        assert_eq!(Some(at(253)), addrs.next_back());
+
+        for k in 3..253 {
+            assert_eq!(Some(at(k)), addrs.next());
+        }
+
+        assert_eq!((0, Some(0)), addrs.size_hint());
+        assert_eq!(None, addrs.next());
+        assert_eq!(None, addrs.next_back());
+    }
+
+    // Pins `last()`'s default forward-walk output on purpose.
+    #[allow(clippy::double_ended_iterator_last)]
+    #[test]
+    fn ipv6_addrs_edge_masks_pin_size_hint() {
+        let single = Ipv6Network::parse("2001:db8::1/128").unwrap();
+        assert_eq!((1, Some(1)), single.addrs().size_hint());
+        assert_eq!(1, single.addrs().count());
+        assert_eq!(
+            Some(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
+            single.addrs().last()
+        );
+
+        let full = Ipv6Network::parse("::/0").unwrap();
+        assert_eq!((usize::MAX, None), full.addrs().size_hint());
+
+        let mut addrs = full.addrs();
+        assert_eq!(Some(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)), addrs.next());
+        assert_eq!(Some(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)), addrs.next());
+        assert_eq!(
+            Some(Ipv6Addr::new(
+                0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff
+            )),
+            addrs.next_back()
+        );
+        assert_eq!((usize::MAX, None), addrs.size_hint());
+    }
+
+    #[test]
+    fn ipv6_addrs_wide_non_contiguous_pins_both_ends() {
+        // 96 host bits (positions 16..112): far beyond `usize`, so only the
+        // ends are materialized.
+        let net = Ipv6Network::parse("2001::1/ffff::ffff").unwrap();
+        let at = |k: u128| ipv6_addr_at_host_index_reference(&net, k);
+        let last = (1u128 << 96) - 1;
+
+        let mut addrs = net.addrs();
+        assert_eq!(Some(at(0)), addrs.next());
+        assert_eq!(Some(at(1)), addrs.next());
+        assert_eq!(Some(at(2)), addrs.next());
+        assert_eq!(Some(at(last)), addrs.next_back());
+        assert_eq!(Some(at(last - 1)), addrs.next_back());
+        assert_eq!(Some(at(last - 2)), addrs.next_back());
+        assert_eq!((usize::MAX, None), addrs.size_hint());
+        assert_eq!(*net.addr(), at(0));
+        assert_eq!(net.last_addr(), at(last));
+    }
+
+    #[test]
+    fn ipv6_addrs_exhausted_iterators_pin_equality_by_drain_path() {
+        // A single non-contiguous host bit (bit 1), so exactly two addresses.
+        let net = Ipv6Network::parse("2001:db8::/ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffd").unwrap();
+
+        let mut front_only = net.addrs();
+        assert_eq!(Some(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0)), front_only.next());
+        assert_eq!(Some(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)), front_only.next());
+        assert_eq!(None, front_only.next());
+
+        let mut front_then_back = net.addrs();
+        front_then_back.next();
+        front_then_back.next_back();
+
+        let mut back_only = net.addrs();
+        back_only.next_back();
+        back_only.next_back();
+
+        let mut back_then_front = net.addrs();
+        back_then_front.next_back();
+        back_then_front.next();
+
+        assert_eq!(front_then_back, back_only);
+        assert_eq!(back_only, back_then_front);
+        assert_ne!(front_only, front_then_back);
+    }
+
+    proptest! {
+        #[test]
+        fn prop_ipv4_addrs_ends_match_host_index_reference(net in arb_ipv4_network()) {
+            let host_bits = (!net.mask().to_bits()).count_ones();
+            let total = 1u64 << host_bits;
+            let take = total.min(32) as u32;
+
+            let mut addrs = net.addrs();
+            for index in 0..take {
+                prop_assert_eq!(Some(ipv4_addr_at_host_index_reference(&net, index)), addrs.next());
+            }
+
+            let mut addrs = net.addrs();
+            for step in 0..u64::from(take) {
+                let index = (total - 1 - step) as u32;
+                prop_assert_eq!(Some(ipv4_addr_at_host_index_reference(&net, index)), addrs.next_back());
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_addrs_len_and_size_hint_match_host_count(net in arb_ipv4_network()) {
+            let host_bits = (!net.mask().to_bits()).count_ones();
+            let total = 1u64 << host_bits;
+            let addrs = net.addrs();
+
+            prop_assert_eq!(total, addrs.len() as u64);
+            prop_assert_eq!(total, net.addrs().count() as u64);
+            if host_bits == 32 {
+                prop_assert_eq!((usize::MAX, None), addrs.size_hint());
+            } else {
+                prop_assert_eq!((total as usize, Some(total as usize)), addrs.size_hint());
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_addrs_interleaved_matches_host_index_model(
+            net in arb_ipv4_network(),
+            script in prop::collection::vec(any::<bool>(), 1..48),
+        ) {
+            let host_bits = (!net.mask().to_bits()).count_ones();
+            let total = 1u64 << host_bits;
+            let mut addrs = net.addrs();
+            let mut front = 0u64;
+            let mut back = total - 1;
+            let mut exhausted = false;
+
+            for take_front in script {
+                let expected = if exhausted {
+                    None
+                } else {
+                    let index = if take_front { front } else { back } as u32;
+                    Some(ipv4_addr_at_host_index_reference(&net, index))
+                };
+                let actual = if take_front { addrs.next() } else { addrs.next_back() };
+                prop_assert_eq!(expected, actual);
+
+                if !exhausted {
+                    if front == back {
+                        exhausted = true;
+                    } else if take_front {
+                        front += 1;
+                    } else {
+                        back -= 1;
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_addrs_ends_match_host_index_reference(net in arb_ipv6_network()) {
+            let host_bits = (!net.mask().to_bits()).count_ones();
+            let last = if host_bits == 128 {
+                u128::MAX
+            } else {
+                (1u128 << host_bits) - 1
+            };
+            let take = last.saturating_add(1).min(32) as u32;
+
+            let mut addrs = net.addrs();
+            for index in 0..take {
+                prop_assert_eq!(
+                    Some(ipv6_addr_at_host_index_reference(&net, u128::from(index))),
+                    addrs.next()
+                );
+            }
+
+            let mut addrs = net.addrs();
+            for step in 0..u128::from(take) {
+                prop_assert_eq!(
+                    Some(ipv6_addr_at_host_index_reference(&net, last - step)),
+                    addrs.next_back()
+                );
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_addrs_size_hint_matches_host_count(net in arb_ipv6_network()) {
+            let host_bits = (!net.mask().to_bits()).count_ones();
+            let addrs = net.addrs();
+
+            if host_bits >= 64 {
+                prop_assert_eq!((usize::MAX, None), addrs.size_hint());
+                prop_assert_eq!(usize::MAX, net.addrs().count());
+            } else {
+                let total = 1usize << host_bits;
+                prop_assert_eq!((total, Some(total)), addrs.size_hint());
+                prop_assert_eq!(total, net.addrs().count());
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_addrs_interleaved_matches_host_index_model(
+            net in arb_ipv6_network(),
+            script in prop::collection::vec(any::<bool>(), 1..48),
+        ) {
+            let host_bits = (!net.mask().to_bits()).count_ones();
+            let mut addrs = net.addrs();
+            let mut front = 0u128;
+            let mut back = if host_bits == 128 {
+                u128::MAX
+            } else {
+                (1u128 << host_bits) - 1
+            };
+            let mut exhausted = false;
+
+            for take_front in script {
+                let expected = if exhausted {
+                    None
+                } else {
+                    let index = if take_front { front } else { back };
+                    Some(ipv6_addr_at_host_index_reference(&net, index))
+                };
+                let actual = if take_front { addrs.next() } else { addrs.next_back() };
+                prop_assert_eq!(expected, actual);
+
+                if !exhausted {
+                    if front == back {
+                        exhausted = true;
+                    } else if take_front {
+                        front += 1;
+                    } else {
+                        back -= 1;
+                    }
+                }
+            }
+        }
+
     }
 
     #[test]
