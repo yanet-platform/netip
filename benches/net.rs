@@ -2137,17 +2137,68 @@ fn bench_parse(c: &mut Criterion) {
         b.iter(|| core::hint::black_box(Ipv6Network::parse(core::hint::black_box("2001:db8::1"))));
     });
 
-    // The target case for the `splitn`-to-`split_once` refactor: previously
-    // `IpNetwork::parse` re-scanned the buffer for `/` once per family parser
-    // it tried, so a v6 string paid for two scans (a failed v4 attempt, then
-    // v6). Now the buffer is scanned for `/` exactly once and the parts are
-    // reused across both family parsers.
+    group.bench_function("Ipv6Network::parse full form (no ::)", |b| {
+        b.iter(|| core::hint::black_box(Ipv6Network::parse(core::hint::black_box("2001:db8:1:2:3:4:5:6/64"))));
+    });
+
+    group.bench_function("Ipv6Network::parse :: compressed", |b| {
+        b.iter(|| core::hint::black_box(Ipv6Network::parse(core::hint::black_box("2a02:6b8::c00:1"))));
+    });
+
+    group.bench_function("Ipv6Network::parse embedded v4", |b| {
+        b.iter(|| core::hint::black_box(Ipv6Network::parse(core::hint::black_box("::ffff:192.0.2.1"))));
+    });
+
+    group.bench_function("Ipv6Network::parse non-contiguous colon mask", |b| {
+        b.iter(|| {
+            core::hint::black_box(Ipv6Network::parse(core::hint::black_box(
+                "2a02:6b8:c00::1234:0:0/ffff:ffff:ff00::ffff:ffff:0:0",
+            )))
+        });
+    });
+
+    // The dispatch-overhead case: `IpNetwork::parse` adds a `:` scan and a
+    // family dispatch on top of the family parser, whose fused fast path
+    // does not scan for `/` at all (the address parse itself stops at it).
     group.bench_function("IpNetwork::parse v4 CIDR", |b| {
         b.iter(|| core::hint::black_box(IpNetwork::parse(core::hint::black_box("10.0.0.0/8"))));
     });
 
     group.bench_function("IpNetwork::parse v6 CIDR", |b| {
         b.iter(|| core::hint::black_box(IpNetwork::parse(core::hint::black_box("2001:db8::/32"))));
+    });
+
+    // Permanent comparator entries: `core::net`'s `FromStr` parsing the same
+    // address text, with no CIDR/mask suffix or network construction at all.
+    // These document the "fastest in class" claim against the standard
+    // library's own parser, which the hand-rolled parser in `src/parser.rs`
+    // is benchmarked against.
+    group.bench_function("core::net Ipv4Addr::from_str CIDR-shaped", |b| {
+        b.iter(|| core::hint::black_box(core::hint::black_box("10.0.0.0").parse::<Ipv4Addr>()));
+    });
+
+    group.bench_function("core::net Ipv4Addr::from_str non-contiguous-shaped", |b| {
+        b.iter(|| core::hint::black_box(core::hint::black_box("192.168.0.1").parse::<Ipv4Addr>()));
+    });
+
+    group.bench_function("core::net Ipv4Addr::from_str bare", |b| {
+        b.iter(|| core::hint::black_box(core::hint::black_box("10.0.0.1").parse::<Ipv4Addr>()));
+    });
+
+    group.bench_function("core::net Ipv6Addr::from_str CIDR-shaped", |b| {
+        b.iter(|| core::hint::black_box(core::hint::black_box("2001:db8::").parse::<Ipv6Addr>()));
+    });
+
+    group.bench_function("core::net Ipv6Addr::from_str full mask-shaped", |b| {
+        b.iter(|| core::hint::black_box(core::hint::black_box("2001:db8::1").parse::<Ipv6Addr>()));
+    });
+
+    group.bench_function("core::net Ipv6Addr::from_str full form (no ::)", |b| {
+        b.iter(|| core::hint::black_box(core::hint::black_box("2001:db8:1:2:3:4:5:6").parse::<Ipv6Addr>()));
+    });
+
+    group.bench_function("core::net Ipv6Addr::from_str non-contiguous-shaped", |b| {
+        b.iter(|| core::hint::black_box(core::hint::black_box("2a02:6b8:c00::1234:0:0").parse::<Ipv6Addr>()));
     });
 
     group.finish();

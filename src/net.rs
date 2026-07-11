@@ -9,10 +9,8 @@
 use core::{
     cmp::Ordering,
     convert::TryFrom,
-    error::Error,
     fmt::{Debug, Display, Formatter},
-    net::{AddrParseError, IpAddr, Ipv4Addr, Ipv6Addr},
-    num::ParseIntError,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     ops::{BitAnd, BitOr, BitOrAssign, BitXor, Not, Range},
     str::FromStr,
 };
@@ -23,8 +21,10 @@ mod contiguous;
 pub use bicontiguous::{BiContiguous, BiContiguousIpNetParseError, ipv6_aggregate_bicontiguous};
 pub use contiguous::{Contiguous, ContiguousIpNetParseError, ipv4_aggregate_contiguous, ipv6_aggregate_contiguous};
 
-const IPV4_ALL_BITS: Ipv4Addr = Ipv4Addr::new(0xff, 0xff, 0xff, 0xff);
-const IPV6_ALL_BITS: Ipv6Addr = Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff);
+use crate::parser::{self, IpNetParseError};
+
+pub const IPV4_ALL_BITS: Ipv4Addr = Ipv4Addr::new(0xff, 0xff, 0xff, 0xff);
+pub const IPV6_ALL_BITS: Ipv6Addr = Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff);
 
 /// An error that is returned during IP network conversion from address and CIDR
 /// when the CIDR is too large.
@@ -35,64 +35,6 @@ impl Display for CidrOverflowError {
     fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
         let Self(from, to) = self;
         write!(fmt, "invalid CIDR: {from} must be <= {to}")
-    }
-}
-
-/// An error that is returned during IP network parsing.
-#[derive(Debug, PartialEq)]
-pub enum IpNetParseError {
-    /// Expected IP network, but got something malformed instead.
-    ExpectedIpNetwork,
-    /// Expected IP address.
-    ExpectedIpAddr,
-    /// Failed to parse IP address.
-    AddrParseError(AddrParseError),
-    /// Expected CIDR number after `/`.
-    ExpectedIpCidr,
-    /// Failed to parse CIDR mask.
-    CidrParseError(ParseIntError),
-    /// CIDR mask is too large.
-    CidrOverflow(CidrOverflowError),
-}
-
-impl Display for IpNetParseError {
-    fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
-        match self {
-            Self::ExpectedIpNetwork => {
-                write!(fmt, "expected IP network")
-            }
-            Self::ExpectedIpAddr => {
-                write!(fmt, "expected IP address")
-            }
-            Self::AddrParseError(err) => {
-                write!(fmt, "IP address parse error: {err}")
-            }
-            Self::ExpectedIpCidr => {
-                write!(fmt, "expected IP CIDR")
-            }
-            Self::CidrParseError(err) => {
-                write!(fmt, "CIDR parse error: {err}")
-            }
-            Self::CidrOverflow(err) => {
-                write!(fmt, "CIDR overflow: {err}")
-            }
-        }
-    }
-}
-
-impl Error for IpNetParseError {}
-
-impl From<AddrParseError> for IpNetParseError {
-    #[inline]
-    fn from(err: AddrParseError) -> Self {
-        Self::AddrParseError(err)
-    }
-}
-
-impl From<CidrOverflowError> for IpNetParseError {
-    #[inline]
-    fn from(err: CidrOverflowError) -> Self {
-        Self::CidrOverflow(err)
     }
 }
 
@@ -288,24 +230,9 @@ impl IpNetwork {
     ///     IpNetwork::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap(),
     /// );
     /// ```
+    #[inline]
     pub fn parse(buf: &str) -> Result<Self, IpNetParseError> {
-        let (addr, mask) = match buf.split_once('/') {
-            Some((addr, mask)) => (addr, Some(mask)),
-            None => (buf, None),
-        };
-
-        match Ipv4Network::parse_parts(addr, mask) {
-            Ok(net) => {
-                return Ok(Self::V4(net));
-            }
-            Err(IpNetParseError::AddrParseError(..)) => {}
-            Err(err) => {
-                return Err(err);
-            }
-        }
-
-        let net = Ipv6Network::parse_parts(addr, mask)?;
-        Ok(Self::V6(net))
+        parser::parse_ip_network(buf)
     }
 
     /// Returns the IP address of this network.
@@ -969,32 +896,9 @@ impl Ipv4Network {
     ///     Ipv4Network::parse("192.168.1.1/255.255.255.255").unwrap()
     /// );
     /// ```
-    pub fn parse(buf: &str) -> Result<Self, IpNetParseError> {
-        match buf.split_once('/') {
-            Some((addr, mask)) => Self::parse_parts(addr, Some(mask)),
-            None => Self::parse_parts(buf, None),
-        }
-    }
-
-    /// Parses an address paired with an already-extracted, optional mask.
-    ///
-    /// Shared by [`Self::parse`] and [`IpNetwork::parse`], the latter of which
-    /// splits `buf` on `/` once and reuses the parts across both address
-    /// families instead of letting each family parser re-scan the input.
     #[inline]
-    fn parse_parts(addr: &str, mask: Option<&str>) -> Result<Self, IpNetParseError> {
-        let addr: Ipv4Addr = addr.parse()?;
-        match mask {
-            Some(mask) => match mask.parse::<u8>() {
-                Ok(cidr) => Ok(Self::try_from((addr, cidr))?),
-                Err(..) => {
-                    // Maybe explicit mask.
-                    let mask: Ipv4Addr = mask.parse()?;
-                    Ok(Self::new(addr, mask))
-                }
-            },
-            None => Ok(Self(addr, IPV4_ALL_BITS)),
-        }
+    pub fn parse(buf: &str) -> Result<Self, IpNetParseError> {
+        parser::parse_ipv4_network(buf)
     }
 
     /// Returns the IP address of this IPv4 network.
@@ -2467,32 +2371,9 @@ impl Ipv6Network {
     ///     Ipv6Network::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap(),
     /// );
     /// ```
-    pub fn parse(buf: &str) -> Result<Self, IpNetParseError> {
-        match buf.split_once('/') {
-            Some((addr, mask)) => Self::parse_parts(addr, Some(mask)),
-            None => Self::parse_parts(buf, None),
-        }
-    }
-
-    /// Parses an address paired with an already-extracted, optional mask.
-    ///
-    /// Shared by [`Self::parse`] and [`IpNetwork::parse`], the latter of which
-    /// splits `buf` on `/` once and reuses the parts across both address
-    /// families instead of letting each family parser re-scan the input.
     #[inline]
-    fn parse_parts(addr: &str, mask: Option<&str>) -> Result<Self, IpNetParseError> {
-        let addr: Ipv6Addr = addr.parse()?;
-        match mask {
-            Some(mask) => match mask.parse::<u8>() {
-                Ok(mask) => Ok(Self::try_from((addr, mask))?),
-                Err(..) => {
-                    // Maybe explicit mask.
-                    let mask: Ipv6Addr = mask.parse()?;
-                    Ok(Self::new(addr, mask))
-                }
-            },
-            None => Ok(Self(addr, IPV6_ALL_BITS)),
-        }
+    pub fn parse(buf: &str) -> Result<Self, IpNetParseError> {
+        parser::parse_ipv6_network(buf)
     }
 
     /// Returns the IP address of this IPv6 network.
@@ -4933,6 +4814,19 @@ mod test {
     }
 
     #[test]
+    fn parse_ipv4_non_contiguous_mask() {
+        assert_eq!(
+            Ipv4Network::new(Ipv4Addr::new(192, 168, 0, 1), Ipv4Addr::new(255, 255, 0, 255)),
+            Ipv4Network::parse("192.168.0.1/255.255.0.255").unwrap()
+        );
+        // Address bits outside a non-contiguous mask are cleared.
+        assert_eq!(
+            Ipv4Network::new(Ipv4Addr::new(192, 168, 0, 1), Ipv4Addr::new(255, 255, 0, 255)),
+            Ipv4Network::parse("192.168.7.1/255.255.0.255").unwrap()
+        );
+    }
+
+    #[test]
     fn ipv4_contains() {
         assert!(
             Ipv4Network::parse("0.0.0.0/0")
@@ -5770,6 +5664,26 @@ mod test {
                 Ipv6Addr::new(0xffff, 0xffff, 0xff00, 0, 0, 0, 0, 0),
             ),
             Ipv6Network::parse("2a02:6b8:c00:1:2:3:4:5/ffff:ffff:ff00::").unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_ipv6_non_contiguous_mask() {
+        assert_eq!(
+            Ipv6Network::new(
+                Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 0, 0, 0x1234, 0, 0),
+                Ipv6Addr::new(0xffff, 0xffff, 0xff00, 0, 0xffff, 0xffff, 0, 0),
+            ),
+            Ipv6Network::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap()
+        );
+        // Address bits outside a non-contiguous mask (the last 2 groups,
+        // here) are cleared.
+        assert_eq!(
+            Ipv6Network::new(
+                Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 0, 0, 0x1234, 0, 0),
+                Ipv6Addr::new(0xffff, 0xffff, 0xff00, 0, 0xffff, 0xffff, 0, 0),
+            ),
+            Ipv6Network::parse("2a02:6b8:c00::1234:9:9/ffff:ffff:ff00::ffff:ffff:0:0").unwrap()
         );
     }
 
@@ -6991,6 +6905,17 @@ mod test {
                 Ipv4Addr::new(255, 0, 0, 0)
             )),
             IpNetwork::parse("10.0.0.0/255.0.0.0").unwrap(),
+        );
+    }
+
+    #[test]
+    fn parse_pin_ipnetwork_valid_v4_non_contiguous_mask() {
+        assert_eq!(
+            IpNetwork::V4(Ipv4Network::new(
+                Ipv4Addr::new(192, 168, 0, 1),
+                Ipv4Addr::new(255, 255, 0, 255)
+            )),
+            IpNetwork::parse("192.168.0.1/255.255.0.255").unwrap(),
         );
     }
 
