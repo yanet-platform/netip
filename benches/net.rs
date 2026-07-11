@@ -2134,6 +2134,38 @@ fn bench_parse(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("Ipv4Network::parse_next_ascii CIDR", |b| {
+        b.iter(|| {
+            core::hint::black_box(Ipv4Network::parse_next_ascii(core::hint::black_box(
+                b"10.0.0.0/8 } to any".as_slice(),
+            )))
+        });
+    });
+
+    group.bench_function("Ipv6Network::parse_next_ascii non-contiguous", |b| {
+        b.iter(|| {
+            core::hint::black_box(Ipv6Network::parse_next_ascii(core::hint::black_box(
+                b"2a02:6b8:c00::/ffff:fff:ff00::ffff:ffff:0:0 } to any".as_slice(),
+            )))
+        });
+    });
+
+    group.bench_function("Ipv4Network::parse_next_ascii bare", |b| {
+        b.iter(|| {
+            core::hint::black_box(Ipv4Network::parse_next_ascii(core::hint::black_box(
+                b"10.0.0.1 } to any".as_slice(),
+            )))
+        });
+    });
+
+    group.bench_function("Ipv6Network::parse_next_ascii CIDR", |b| {
+        b.iter(|| {
+            core::hint::black_box(Ipv6Network::parse_next_ascii(core::hint::black_box(
+                b"2001:db8::/32, next".as_slice(),
+            )))
+        });
+    });
+
     group.bench_function("Ipv4Network::parse dotted mask", |b| {
         b.iter(|| core::hint::black_box(Ipv4Network::parse(core::hint::black_box("10.0.0.0/255.0.0.0"))));
     });

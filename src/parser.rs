@@ -114,6 +114,143 @@ pub fn parse_ip_network_ascii(buf: &[u8]) -> Result<IpNetwork, IpNetParseError> 
     Ok(IpNetwork::V6(parse_ipv6_network_ascii(buf)?))
 }
 
+/// Parses the leading network token of `buf` as an [`IpNetwork`] and
+/// returns it with the unconsumed remainder.
+///
+/// The token is the maximal leading run of bytes from the IPv6 alphabet
+/// and must parse as a whole: a malformed token is an error, never a
+/// shorter partial parse. The remainder starts at the first byte outside
+/// the alphabet. Leading whitespace is not skipped, so an empty token is an
+/// error too.
+///
+/// The IPv6 alphabet applies to both families here: the family is unknown
+/// before tokenizing, so `:` and hex letters must be token material. This
+/// makes inputs like `1.2.3.4:80` an error, while the family-declaring
+/// [`parse_ipv4_network_next_ascii`] accepts them.
+///
+/// The hot path runs the fused kernels directly, with no pre-scan, both
+/// under the IPv6 alphabet's stop-byte rule. Trying IPv4 first preserves
+/// the scan-first colon dispatch of [`parse_ip_network_ascii`]: an IPv4
+/// accept consumes only `[0-9./+]` bytes and stops outside the shared
+/// alphabet, so its token is colon-free and the colon dispatch would pick
+/// IPv4 for it too, while an IPv6 accept always consumes a `:`, which the
+/// IPv4 kernel can neither absorb nor stop at.
+pub fn parse_ip_network_next_ascii(buf: &[u8]) -> Result<(IpNetwork, &[u8]), IpNetParseError> {
+    match ipv4_network_next_fused::<true>(buf) {
+        Some(Ok((network, end))) => return Ok((IpNetwork::V4(network), &buf[end..])),
+        Some(Err(err)) => return Err(err),
+        None => {}
+    }
+    match ipv6_network_next_fused(buf) {
+        Some(Ok((network, end))) => Ok((IpNetwork::V6(network), &buf[end..])),
+        Some(Err(err)) => Err(err),
+        None => parse_ip_network_next_fallback(buf),
+    }
+}
+
+/// The reject arm of [`parse_ip_network_next_ascii`]: scans the token and
+/// re-parses it as a whole, owning every error value.
+#[cold]
+#[inline(never)]
+fn parse_ip_network_next_fallback(buf: &[u8]) -> Result<(IpNetwork, &[u8]), IpNetParseError> {
+    let end = ipv6_token_end(buf);
+    let network = parse_ip_network_ascii(&buf[..end])?;
+    Ok((network, &buf[end..]))
+}
+
+/// Whether a token under the selected alphabet ends at `position`: the end
+/// of input or a byte outside that alphabet.
+#[inline]
+fn token_ends_at<const UNION_ALPHABET: bool>(buf: &[u8], position: usize) -> bool {
+    match buf.get(position) {
+        Some(&byte) => {
+            if UNION_ALPHABET {
+                !is_ipv6_token_byte(byte)
+            } else {
+                !is_ipv4_token_byte(byte)
+            }
+        }
+        None => true,
+    }
+}
+
+/// Reads a CIDR suffix as a prefix of `buf` starting at `start`, in
+/// [`parse_cidr_suffix`]'s grammar: one optional `+`, then decimal digits,
+/// rejecting on `u8` overflow.
+///
+/// Returns the value and the position just past the digit run. The caller
+/// decides whether that position ends the token, since a `.` or `:` there
+/// means the mask is dotted/colon-form (or garbage) rather than a CIDR
+/// number.
+#[inline]
+fn read_cidr_prefix(buf: &[u8], start: usize) -> Option<(u8, usize)> {
+    let mut position = start;
+    if buf.get(position) == Some(&b'+') {
+        position += 1;
+    }
+    let digits_start = position;
+    let mut value: u16 = 0;
+    while let Some(&byte) = buf.get(position) {
+        let Some(digit) = ascii_digit_value(byte) else {
+            break;
+        };
+        value = value * 10 + digit as u16;
+        if value > u8::MAX as u16 {
+            return None;
+        }
+        position += 1;
+    }
+    if position == digits_start {
+        return None;
+    }
+    Some((value as u8, position))
+}
+
+/// Returns the end position of the leading IPv4 network token: the maximal
+/// run of bytes from [`is_ipv4_token_byte`]'s set.
+#[inline]
+fn ipv4_token_end(buf: &[u8]) -> usize {
+    let mut end = 0;
+    while end < buf.len() && is_ipv4_token_byte(buf[end]) {
+        end += 1;
+    }
+    end
+}
+
+/// Whether `byte` can appear in an IPv4 network token (address, dotted
+/// mask, or CIDR text).
+///
+/// The set is `[0-9./+]`, with `+` present because the CIDR suffix accepts
+/// one leading `+`, matching `u8::from_str`. Hex letters and `:` are
+/// deliberately absent: they mean nothing in IPv4 text, so for a caller who
+/// has already declared the family they delimit the token like any other
+/// byte.
+#[inline]
+const fn is_ipv4_token_byte(byte: u8) -> bool {
+    matches!(byte, b'0'..=b'9' | b'.' | b'/' | b'+')
+}
+
+/// Returns the end position of the leading IPv6 network token: the maximal
+/// run of bytes from [`is_ipv6_token_byte`]'s set.
+#[inline]
+fn ipv6_token_end(buf: &[u8]) -> usize {
+    let mut end = 0;
+    while end < buf.len() && is_ipv6_token_byte(buf[end]) {
+        end += 1;
+    }
+    end
+}
+
+/// Whether `byte` can appear in an IPv6 network token (address, colon-form
+/// mask, or CIDR text, with dots covering the embedded IPv4 form).
+///
+/// The set is `[0-9a-fA-F:./+]`, with `+` present because the CIDR suffix
+/// accepts one leading `+`, matching `u8::from_str`.
+#[inline]
+const fn is_ipv6_token_byte(byte: u8) -> bool {
+    byte.is_ascii_hexdigit() || matches!(byte, b':' | b'.' | b'/' | b'+')
+}
+
 /// Whether `buf` contains a `:` anywhere, marking IPv6 (address or
 /// colon-mask) text.
 ///
@@ -153,6 +290,91 @@ pub fn parse_ipv4_network_ascii(buf: &[u8]) -> Result<Ipv4Network, IpNetParseErr
         }
     }
     parse_ipv4_network_fallback(buf)
+}
+
+/// Parses the leading network token of `buf` as an [`Ipv4Network`] and
+/// returns it with the unconsumed remainder.
+///
+/// Mirrors [`parse_ip_network_next_ascii`]'s semantics, except the token is
+/// scanned with the IPv4 alphabet `[0-9./+]`: the caller has declared the
+/// family, so `:` and hex letters delimit the token, and `1.2.3.4:80`
+/// parses with `:80` as the remainder.
+pub fn parse_ipv4_network_next_ascii(buf: &[u8]) -> Result<(Ipv4Network, &[u8]), IpNetParseError> {
+    match ipv4_network_next_fused::<false>(buf) {
+        Some(Ok((network, end))) => Ok((network, &buf[end..])),
+        Some(Err(err)) => Err(err),
+        None => parse_ipv4_network_next_fallback(buf),
+    }
+}
+
+/// The reject arm of [`parse_ipv4_network_next_ascii`]: scans the token and
+/// re-parses it as a whole, owning every error value.
+#[cold]
+#[inline(never)]
+fn parse_ipv4_network_next_fallback(buf: &[u8]) -> Result<(Ipv4Network, &[u8]), IpNetParseError> {
+    let end = ipv4_token_end(buf);
+    let network = parse_ipv4_network_ascii(&buf[..end])?;
+    Ok((network, &buf[end..]))
+}
+
+/// The fused fast path of [`parse_ipv4_network_next_ascii`] and the IPv4
+/// arm of [`parse_ip_network_next_ascii`]: parses the token directly as a
+/// prefix of `buf` and validates the byte that stopped the parse, so the
+/// accept path never pre-scans the token.
+///
+/// Every sub-parser consumes only alphabet bytes, so a parse stopping at a
+/// non-alphabet byte (or the end of input) has consumed exactly the token,
+/// while an alphabet stop byte means the token extends beyond the parse.
+/// `UNION_ALPHABET` selects the stop-byte rule: the family-declared caller
+/// delimits on anything outside `[0-9./+]`, while the family-agnostic
+/// caller keeps `:` and hex letters token material.
+///
+/// `Some(Ok(..))` carries the network and the token length. `Some(Err(..))`
+/// is a definitive error matching the whole-token parse (a CIDR value over
+/// the family's bit width). `None` sends the caller to its cold fallback,
+/// which re-scans and re-parses the whole token for its error value.
+#[inline]
+fn ipv4_network_next_fused<const UNION_ALPHABET: bool>(
+    buf: &[u8],
+) -> Option<Result<(Ipv4Network, usize), IpNetParseError>> {
+    let (addr, consumed) = ipv4_parse_at(buf)?;
+    if buf.get(consumed) == Some(&b'/') {
+        return ipv4_network_next_fused_mask::<UNION_ALPHABET>(addr, buf, consumed + 1);
+    }
+    if token_ends_at::<UNION_ALPHABET>(buf, consumed) {
+        return Some(Ok((Ipv4Network::new(addr, IPV4_ALL_BITS), consumed)));
+    }
+    None
+}
+
+/// The mask arm of [`ipv4_network_next_fused`], entered just past the `/`.
+///
+/// A CIDR read wins only when its stopping byte ends the token. Stopping at
+/// an alphabet byte (the `.` of a dotted mask, or garbage) falls through to
+/// an address-prefix parse of the mask, which must end the token the same
+/// way.
+#[inline]
+fn ipv4_network_next_fused_mask<const UNION_ALPHABET: bool>(
+    addr: Ipv4Addr,
+    buf: &[u8],
+    mask_start: usize,
+) -> Option<Result<(Ipv4Network, usize), IpNetParseError>> {
+    if let Some((cidr, end)) = read_cidr_prefix(buf, mask_start)
+        && token_ends_at::<UNION_ALPHABET>(buf, end)
+    {
+        return Some(match Ipv4Network::try_from((addr, cidr)) {
+            Ok(network) => Ok((network, end)),
+            Err(err) => Err(err.into()),
+        });
+    }
+
+    let (mask, consumed) = ipv4_parse_at(&buf[mask_start..])?;
+    let end = mask_start + consumed;
+    if token_ends_at::<UNION_ALPHABET>(buf, end) {
+        return Some(Ok((Ipv4Network::new(addr, mask), end)));
+    }
+
+    None
 }
 
 /// Parses a dotted-decimal IPv4 address as a prefix of `bytes`.
@@ -368,6 +590,69 @@ pub fn parse_ipv6_network_ascii(buf: &[u8]) -> Result<Ipv6Network, IpNetParseErr
         }
     }
     parse_ipv6_network_fallback(buf)
+}
+
+/// Parses the leading network token of `buf` as an [`Ipv6Network`] and
+/// returns it with the unconsumed remainder, mirroring
+/// [`parse_ip_network_next_ascii`]'s semantics and alphabet.
+pub fn parse_ipv6_network_next_ascii(buf: &[u8]) -> Result<(Ipv6Network, &[u8]), IpNetParseError> {
+    match ipv6_network_next_fused(buf) {
+        Some(Ok((network, end))) => Ok((network, &buf[end..])),
+        Some(Err(err)) => Err(err),
+        None => parse_ipv6_network_next_fallback(buf),
+    }
+}
+
+/// The reject arm of [`parse_ipv6_network_next_ascii`]: scans the token and
+/// re-parses it as a whole, owning every error value.
+#[cold]
+#[inline(never)]
+fn parse_ipv6_network_next_fallback(buf: &[u8]) -> Result<(Ipv6Network, &[u8]), IpNetParseError> {
+    let end = ipv6_token_end(buf);
+    let network = parse_ipv6_network_ascii(&buf[..end])?;
+    Ok((network, &buf[end..]))
+}
+
+/// The fused fast path of [`parse_ipv6_network_next_ascii`] and the IPv6
+/// arm of [`parse_ip_network_next_ascii`], mirroring
+/// [`ipv4_network_next_fused`] under the IPv6 alphabet, which both callers
+/// share.
+#[inline]
+fn ipv6_network_next_fused(buf: &[u8]) -> Option<Result<(Ipv6Network, usize), IpNetParseError>> {
+    let (addr, consumed) = ipv6_parse_at(buf)?;
+    if buf.get(consumed) == Some(&b'/') {
+        return ipv6_network_next_fused_mask(addr, buf, consumed + 1);
+    }
+    if token_ends_at::<true>(buf, consumed) {
+        return Some(Ok((Ipv6Network::new(addr, IPV6_ALL_BITS), consumed)));
+    }
+    None
+}
+
+/// The mask arm of [`ipv6_network_next_fused`], entered just past the `/`,
+/// mirroring [`ipv4_network_next_fused_mask`].
+#[inline]
+fn ipv6_network_next_fused_mask(
+    addr: Ipv6Addr,
+    buf: &[u8],
+    mask_start: usize,
+) -> Option<Result<(Ipv6Network, usize), IpNetParseError>> {
+    if let Some((cidr, end)) = read_cidr_prefix(buf, mask_start)
+        && token_ends_at::<true>(buf, end)
+    {
+        return Some(match Ipv6Network::try_from((addr, cidr)) {
+            Ok(network) => Ok((network, end)),
+            Err(err) => Err(err.into()),
+        });
+    }
+
+    let (mask, consumed) = ipv6_parse_at(&buf[mask_start..])?;
+    let end = mask_start + consumed;
+    if token_ends_at::<true>(buf, end) {
+        return Some(Ok((Ipv6Network::new(addr, mask), end)));
+    }
+
+    None
 }
 
 /// Parses an IPv6 address as a prefix of `bytes`.

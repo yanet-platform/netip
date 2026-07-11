@@ -268,6 +268,41 @@ impl IpNetwork {
         parser::parse_ip_network_ascii(buf)
     }
 
+    /// Parses the leading network token of `buf` into an IP network,
+    /// returning it with the unconsumed remainder.
+    ///
+    /// The token is the maximal leading run of network characters
+    /// (`[0-9a-fA-F:./+]`) and must parse as a whole: a malformed token is
+    /// an error, never a shorter partial parse. The alphabet covers both
+    /// families, since the family is unknown before tokenizing: `:` and hex
+    /// letters are token material here, so `10.0.0.1:8080` is an error,
+    /// while the family-declaring [`Ipv4Network::parse_next_ascii`] accepts
+    /// it. Leading whitespace is not skipped. This suits pulling networks
+    /// out of a larger rule text.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::{IpNetwork, Ipv6Network};
+    ///
+    /// let expected = IpNetwork::V6(Ipv6Network::new(
+    ///     Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 0, 0, 0, 0, 0),
+    ///     Ipv6Addr::new(0xffff, 0xfff, 0xff00, 0, 0xffff, 0xffff, 0, 0),
+    /// ));
+    ///
+    /// let (network, rest) =
+    ///     IpNetwork::parse_next_ascii(b"2a02:6b8:c00::/ffff:fff:ff00::ffff:ffff:0:0 } to any")
+    ///         .unwrap();
+    /// assert_eq!(expected, network);
+    /// assert_eq!(b" } to any", rest);
+    /// ```
+    #[inline]
+    pub fn parse_next_ascii(buf: &[u8]) -> Result<(Self, &[u8]), IpNetParseError> {
+        parser::parse_ip_network_next_ascii(buf)
+    }
+
     /// Returns the IP address of this network.
     ///
     /// # Examples
@@ -965,6 +1000,36 @@ impl Ipv4Network {
     #[inline]
     pub fn parse_ascii(buf: &[u8]) -> Result<Self, IpNetParseError> {
         parser::parse_ipv4_network_ascii(buf)
+    }
+
+    /// Parses the leading network token of `buf` into an IPv4 network,
+    /// returning it with the unconsumed remainder.
+    ///
+    /// The token is the maximal leading run of IPv4 network characters
+    /// (`[0-9./+]`) and must parse as a whole: a malformed token is an
+    /// error, never a shorter partial parse. Bytes meaningless in IPv4
+    /// text, including `:` and hex letters, delimit the token, so
+    /// `10.0.0.1:8080` parses with `:8080` as the remainder — unlike
+    /// [`IpNetwork::parse_next_ascii`], whose token alphabet must cover
+    /// both families. Leading whitespace is not skipped. This suits pulling
+    /// networks out of a larger rule text.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv4Addr;
+    ///
+    /// use netip::Ipv4Network;
+    ///
+    /// let expected = Ipv4Network::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(255, 0, 0, 0));
+    ///
+    /// let (network, rest) = Ipv4Network::parse_next_ascii(b"10.0.0.0/8 } to any").unwrap();
+    /// assert_eq!(expected, network);
+    /// assert_eq!(b" } to any", rest);
+    /// ```
+    #[inline]
+    pub fn parse_next_ascii(buf: &[u8]) -> Result<(Self, &[u8]), IpNetParseError> {
+        parser::parse_ipv4_network_next_ascii(buf)
     }
 
     /// Returns the IP address of this IPv4 network.
@@ -2472,6 +2537,35 @@ impl Ipv6Network {
     #[inline]
     pub fn parse_ascii(buf: &[u8]) -> Result<Self, IpNetParseError> {
         parser::parse_ipv6_network_ascii(buf)
+    }
+
+    /// Parses the leading network token of `buf` into an IPv6 network,
+    /// returning it with the unconsumed remainder.
+    ///
+    /// The token is the maximal leading run of network characters
+    /// (`[0-9a-fA-F:./+]`) and must parse as a whole: a malformed token is
+    /// an error, never a shorter partial parse. Leading whitespace is not
+    /// skipped. This suits pulling networks out of a larger rule text.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::Ipv6Network;
+    ///
+    /// let expected = Ipv6Network::new(
+    ///     Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 0, 0, 0, 0, 0),
+    ///     Ipv6Addr::new(0xffff, 0xffff, 0xff00, 0, 0, 0, 0, 0),
+    /// );
+    ///
+    /// let (network, rest) = Ipv6Network::parse_next_ascii(b"2a02:6b8:c00::/40, next").unwrap();
+    /// assert_eq!(expected, network);
+    /// assert_eq!(b", next", rest);
+    /// ```
+    #[inline]
+    pub fn parse_next_ascii(buf: &[u8]) -> Result<(Self, &[u8]), IpNetParseError> {
+        parser::parse_ipv6_network_next_ascii(buf)
     }
 
     /// Returns the IP address of this IPv6 network.
@@ -5847,6 +5941,103 @@ mod test {
                 Ok(text) => prop_assert_eq!(IpNetwork::parse(text), IpNetwork::parse_ascii(&bytes)),
                 Err(..) => prop_assert!(IpNetwork::parse_ascii(&bytes).is_err()),
             }
+        }
+    }
+
+    #[test]
+    fn parse_next_ascii_ipv4() {
+        let (network, rest) = Ipv4Network::parse_next_ascii(b"10.0.0.0/8 } to any").unwrap();
+        assert_eq!(Ipv4Network::parse("10.0.0.0/8").unwrap(), network);
+        assert_eq!(b" } to any", rest);
+
+        let (network, rest) = Ipv4Network::parse_next_ascii(b"192.168.0.1/255.255.0.255,next").unwrap();
+        assert_eq!(Ipv4Network::parse("192.168.0.1/255.255.0.255").unwrap(), network);
+        assert_eq!(b",next", rest);
+
+        let (network, rest) = Ipv4Network::parse_next_ascii(b"10.0.0.1").unwrap();
+        assert_eq!(Ipv4Network::parse("10.0.0.1").unwrap(), network);
+        assert_eq!(b"", rest);
+
+        // The IPv4 alphabet excludes `:` and hex letters, so they delimit
+        // the token like any other non-IPv4 byte.
+        let (network, rest) = Ipv4Network::parse_next_ascii(b"10.0.0.1:8080").unwrap();
+        assert_eq!(Ipv4Network::parse("10.0.0.1").unwrap(), network);
+        assert_eq!(b":8080", rest);
+
+        let (network, rest) = Ipv4Network::parse_next_ascii(b"10.0.0.1abc").unwrap();
+        assert_eq!(Ipv4Network::parse("10.0.0.1").unwrap(), network);
+        assert_eq!(b"abc", rest);
+    }
+
+    #[test]
+    fn parse_next_ascii_ipv6_non_contiguous_mask() {
+        let (network, rest) =
+            Ipv6Network::parse_next_ascii(b"2a02:6b8:c00::/ffff:fff:ff00::ffff:ffff:0:0 } to any").unwrap();
+        assert_eq!(
+            Ipv6Network::parse("2a02:6b8:c00::/ffff:fff:ff00::ffff:ffff:0:0").unwrap(),
+            network
+        );
+        assert_eq!(b" } to any", rest);
+    }
+
+    #[test]
+    fn parse_next_ascii_ip_network_both_families() {
+        let (network, rest) = IpNetwork::parse_next_ascii(b"10.0.0.0/8 to").unwrap();
+        assert_eq!(IpNetwork::parse("10.0.0.0/8").unwrap(), network);
+        assert_eq!(b" to", rest);
+
+        let (network, rest) = IpNetwork::parse_next_ascii(b"2001:db8::/32 to").unwrap();
+        assert_eq!(IpNetwork::parse("2001:db8::/32").unwrap(), network);
+        assert_eq!(b" to", rest);
+    }
+
+    #[test]
+    fn parse_next_ascii_rejects_malformed_token() {
+        // The whole token must parse: no shorter partial parse is attempted.
+        assert!(matches!(
+            Ipv4Network::parse_next_ascii(b"1.2.3.4.5 x").unwrap_err(),
+            IpNetParseError::AddrParseError(..)
+        ));
+        assert!(matches!(
+            Ipv6Network::parse_next_ascii(b"1::2::3 x").unwrap_err(),
+            IpNetParseError::AddrParseError(..)
+        ));
+        // The family-agnostic parser tokenizes with the IPv6 alphabet, so a
+        // `:` extends its token where the IPv4 parser would stop.
+        assert!(matches!(
+            IpNetwork::parse_next_ascii(b"10.0.0.1:8080").unwrap_err(),
+            IpNetParseError::AddrParseError(..)
+        ));
+    }
+
+    #[test]
+    fn parse_next_ascii_rejects_empty_token() {
+        assert!(matches!(
+            IpNetwork::parse_next_ascii(b"").unwrap_err(),
+            IpNetParseError::AddrParseError(..)
+        ));
+        // Leading whitespace is not skipped.
+        assert!(matches!(
+            IpNetwork::parse_next_ascii(b" 10.0.0.0/8").unwrap_err(),
+            IpNetParseError::AddrParseError(..)
+        ));
+    }
+
+    proptest! {
+        #[test]
+        fn prop_parse_next_ascii_round_trips_with_rest_ipv4(network in arb_ipv4_network()) {
+            let text = std::format!("{network} }} to any");
+            let (parsed, rest) = Ipv4Network::parse_next_ascii(text.as_bytes()).unwrap();
+            prop_assert_eq!(network, parsed);
+            prop_assert_eq!(b" } to any".as_slice(), rest);
+        }
+
+        #[test]
+        fn prop_parse_next_ascii_round_trips_with_rest_ipv6(network in arb_ipv6_network()) {
+            let text = std::format!("{network} }} to any");
+            let (parsed, rest) = Ipv6Network::parse_next_ascii(text.as_bytes()).unwrap();
+            prop_assert_eq!(network, parsed);
+            prop_assert_eq!(b" } to any".as_slice(), rest);
         }
     }
 
