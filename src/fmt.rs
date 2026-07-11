@@ -11,7 +11,7 @@ use crate::net::{IpNetwork, Ipv4Network, Ipv6Network};
 /// - non-contiguous networks as `addr/explicit-mask`.
 ///
 /// The base [`Display`] of the network types always prints an explicit prefix
-/// (`1.2.3.4/32`); wrap a value in `Compact` to get the bare-address form where
+/// (`1.2.3.4/32`). Wrap a value in `Compact` to get the bare-address form where
 /// it is part of an output contract.
 ///
 /// # Examples
@@ -130,7 +130,7 @@ mod test {
 
     proptest! {
         /// Compact differs from the base `Display` only by dropping the prefix
-        /// of host routes; otherwise the two agree.
+        /// of host routes. Otherwise the two agree.
         #[test]
         fn prop_ipv4_compact_matches_display_except_host(net in arb_ipv4_network()) {
             let compact = Compact(net).to_string();
