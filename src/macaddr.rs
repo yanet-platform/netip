@@ -101,7 +101,7 @@ impl MacAddr {
 
     /// Returns the numeric value of this address as a [`u64`].
     ///
-    /// The address occupies the lower 48 bits; the upper 16 bits are zero.
+    /// The address occupies the lower 48 bits. The upper 16 bits are zero.
     ///
     /// # Examples
     ///
@@ -234,7 +234,7 @@ impl Default for MacAddr {
 
 /// Creates a MAC address from a [`u64`].
 ///
-/// Only the lower 48 bits are used; the upper 16 bits are silently masked.
+/// Only the lower 48 bits are used. The upper 16 bits are silently masked.
 impl From<u64> for MacAddr {
     #[inline]
     fn from(addr: u64) -> MacAddr {
@@ -281,9 +281,9 @@ impl Display for MacAddr {
 
 /// Encodes a 4-bit nibble (must be `< 16`) as its lowercase ASCII hex digit.
 ///
-/// Branchless: digits `0..=9` map to `'0'..='9'`; digits `10..=15` need an
-/// extra `'a' - '0' - 10` offset to land in the lowercase letter range, added
-/// via a 0/1 multiplier instead of a conditional.
+/// Branchless: digits `0..=9` map to `'0'..='9'`, while digits `10..=15` need
+/// an extra `'a' - '0' - 10` offset to land in the lowercase letter range,
+/// added via a 0/1 multiplier instead of a conditional.
 #[inline]
 const fn hex_nibble(nibble: u8) -> u8 {
     let is_letter = (nibble > 9) as u8;
@@ -423,7 +423,7 @@ mod test {
     #[test]
     fn hex_nibble_pair_matches_format_spec_for_all_bytes() {
         // `MacAddr::fmt` encodes each byte as `hex_nibble(byte >> 4)` then
-        // `hex_nibble(byte & 0x0f)`; every byte value must match `{:02x}`.
+        // `hex_nibble(byte & 0x0f)`. Every byte value must match `{:02x}`.
         for byte in 0..=u8::MAX {
             let expected = format!("{byte:02x}");
             assert_eq!(

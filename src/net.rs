@@ -147,7 +147,7 @@ const fn ipv4_adjacent_bit(a1: u32, m1: u32, a2: u32, m2: u32) -> Option<u32> {
 /// lowest set bit of that mask, `false` otherwise.
 ///
 /// The `m1 != 0` clause excludes the `/0` mask, whose isolated lowest set bit
-/// is `0`; without it two identical `/0` networks would qualify.
+/// is `0`. Without it, two identical `/0` networks would qualify.
 #[inline]
 const fn ipv4_adjacent_by_lowest_mask_bit(a1: u32, m1: u32, a2: u32, m2: u32) -> bool {
     m1 == m2 && m1 != 0 && (a1 ^ a2) == (m1 & m1.wrapping_neg())
@@ -168,7 +168,7 @@ const fn ipv6_adjacent_bit(a1: u128, m1: u128, a2: u128, m2: u128) -> Option<u12
 /// lowest set bit of that mask, `false` otherwise.
 ///
 /// The `m1 != 0` clause excludes the `/0` mask, whose isolated lowest set bit
-/// is `0`; without it two identical `/0` networks would qualify.
+/// is `0`. Without it, two identical `/0` networks would qualify.
 #[inline]
 const fn ipv6_adjacent_by_lowest_mask_bit(a1: u128, m1: u128, a2: u128, m2: u128) -> bool {
     m1 == m2 && m1 != 0 && (a1 ^ a2) == (m1 & m1.wrapping_neg())
@@ -1080,7 +1080,7 @@ impl Ipv4Network {
     /// least one common address.
     ///
     /// Two networks `(a1, m1)` and `(a2, m2)` intersect when they agree on
-    /// every bit position that both masks constrain:
+    /// every bit position that both masks constrain, meaning
     /// `a1 & m2 == a2 & m1`.
     ///
     /// Works correctly with non-contiguous masks.
@@ -1296,7 +1296,7 @@ impl Ipv4Network {
     #[must_use]
     pub const fn prefix(&self) -> Option<u8> {
         // For a contiguous mask every set bit is in the leading run, so its
-        // popcount equals `leading_ones`; the dedicated contiguity check is
+        // popcount equals `leading_ones`. The dedicated contiguity check is
         // cheaper than recomputing the popcount here.
         if self.is_contiguous() {
             Some(self.mask().to_bits().leading_ones() as u8)
@@ -1602,8 +1602,8 @@ impl Ipv4Network {
     /// For a mask made of two contiguous runs (a non-contiguous mask), sibling
     /// merging happens only along the lower run's boundary — the mask's lowest
     /// set bit. A sibling pair differing at the higher run's boundary is left
-    /// unmerged even though `merge` would combine it into another two-run mask;
-    /// doing that safely would require assuming the mask has that two-run
+    /// unmerged even though `merge` would combine it into another two-run mask.
+    /// Doing that safely would require assuming the mask has that two-run
     /// shape, which this general-purpose method does not.
     ///
     /// # Examples
@@ -1759,12 +1759,12 @@ impl Ipv4Network {
     ///
     /// # Correctness
     ///
-    /// `addr | !mask` is the greatest address in the network. Masking it
-    /// (`& mask`) maps it back to `addr`, since `!mask & mask == 0`, so it is a
-    /// member. Setting every host bit — the bits cleared in `mask` — is the
-    /// largest possible host pattern, so no member is larger. Both facts hold
-    /// for non-contiguous masks, where the host bits need not form a trailing
-    /// run.
+    /// The expression `addr | !mask` is the greatest address in the network.
+    /// Masking it (`& mask`) maps it back to `addr`, since `!mask & mask == 0`,
+    /// so it is a member. Setting every host bit — the bits cleared in `mask`
+    /// — is the largest possible host pattern, so no member is larger. Both
+    /// facts hold for non-contiguous masks, where the host bits need not form
+    /// a trailing run.
     #[inline]
     #[must_use]
     pub const fn last_addr(&self) -> Ipv4Addr {
@@ -1928,8 +1928,8 @@ pub struct Ipv4NetworkAddrs {
     front_addr: u32,
     /// Next address to yield from the back end, stepped in O(1) per item.
     back_addr: u32,
-    /// Number of addresses not yet yielded; `u64` so the /0 network's `2^32`
-    /// is represented exactly.
+    /// Number of addresses not yet yielded, stored as `u64` so the /0
+    /// network's `2^32` is represented exactly.
     remaining: u64,
 }
 
@@ -1949,7 +1949,7 @@ impl Iterator for Ipv4NetworkAddrs {
 
         self.front_addr = if host_mask & host_mask.wrapping_add(1) == 0 {
             // Contiguous mask (trailing zeros only): a plain increment steps
-            // to the next address; the overrun past the last one is repaired
+            // to the next address. The overrun past the last one is repaired
             // by the exhaustion canonicalization below.
             bits.wrapping_add(1)
         } else {
@@ -2000,7 +2000,7 @@ impl DoubleEndedIterator for Ipv4NetworkAddrs {
 
         self.back_addr = if host_mask & host_mask.wrapping_add(1) == 0 {
             // Contiguous mask (trailing zeros only): a plain decrement steps
-            // to the previous address; the underrun past the first one is
+            // to the previous address. The underrun past the first one is
             // repaired by the exhaustion canonicalization below.
             bits.wrapping_sub(1)
         } else {
@@ -2036,7 +2036,7 @@ impl ExactSizeIterator for Ipv4NetworkAddrs {
 /// address set of `A` minus the address set of `B`.
 ///
 /// Each call to [`next`](Iterator::next) computes one network by peeling the
-/// highest remaining bit from the difference mask; each call to
+/// highest remaining bit from the difference mask. Each call to
 /// [`next_back`](DoubleEndedIterator::next_back) peels the lowest remaining
 /// bit instead. Consumption from either end is O(1) and the two can be
 /// freely interleaved.
@@ -2227,7 +2227,7 @@ impl ExactSizeIterator for Ipv4NetworkDiff {
 pub struct Ipv4RangeNetworks {
     first: u32,
     last: u32,
-    /// Remaining ascending-phase block sizes, one per set bit, lowest first;
+    /// Remaining ascending-phase block sizes, one per set bit, lowest first —
     /// zero once the iterator enters the descending phase.
     ascending: u32,
     done: bool,
@@ -2367,7 +2367,7 @@ impl core::iter::FusedIterator for Ipv4RangeNetworks {}
 /// such as `2a02:6b8:c00::/ffff:ffff:ff00::`.
 ///
 /// However, this struct supports non-contiguous masks, i.e. masks with
-/// non-contiguous bits set to one, like the following one:
+/// non-contiguous bits set to one, such as
 /// `2a02:6b8:c00::1234:0:0/ffff:ffff:ff00::ffff:ffff:0:0`.
 ///
 /// [IETF RFC 4632]: https://tools.ietf.org/html/rfc4632
@@ -2900,9 +2900,9 @@ impl Ipv6Network {
     /// network, as defined in [IETF RFC 4291 section 2.5.5.2], otherwise
     /// returns [`None`].
     ///
-    /// `::ffff:a.b.c.d/N` becomes `a.b.c.d/M`, where `M = N - 96`.
-    /// All networks with their addresses *not* starting with `::ffff` will
-    /// return `None`.
+    /// The mapped network `::ffff:a.b.c.d/N` becomes `a.b.c.d/M`, where
+    /// `M = N - 96`. All networks with their addresses *not* starting with
+    /// `::ffff` will return `None`.
     ///
     /// [`IPv4` network]: Ipv4Network
     /// [IETF RFC 4291 section 2.5.5.2]: https://tools.ietf.org/html/rfc4291#section-2.5.5.2
@@ -2981,7 +2981,7 @@ impl Ipv6Network {
     #[must_use]
     pub const fn prefix(&self) -> Option<u8> {
         // For a contiguous mask every set bit is in the leading run, so its
-        // popcount equals `leading_ones`; the dedicated contiguity check is
+        // popcount equals `leading_ones`. The dedicated contiguity check is
         // cheaper than recomputing the popcount here.
         if self.is_contiguous() {
             Some(self.mask().to_bits().leading_ones() as u8)
@@ -3320,7 +3320,7 @@ impl Ipv6Network {
     /// half), sibling merging happens only along the finer low-half boundary —
     /// the mask's lowest set bit. A sibling pair differing in the high-half
     /// boundary is left unmerged even though their union would also be
-    /// bi-contiguous; performing that merge would require assuming the value is
+    /// bi-contiguous. Performing that merge would require assuming the value is
     /// bi-contiguous, which this general-purpose method does not.
     ///
     /// # Examples
@@ -3590,8 +3590,8 @@ pub struct Ipv6NetworkAddrs {
     front_addr: u128,
     /// Next address to yield from the back end, stepped in O(1) per item.
     back_addr: u128,
-    /// Number of addresses not yet yielded; the /0 network's `2^128`
-    /// saturates to `u128::MAX`.
+    /// Number of addresses not yet yielded, saturating to `u128::MAX` for the
+    /// /0 network's `2^128`.
     remaining: u128,
 }
 
@@ -3611,7 +3611,7 @@ impl Iterator for Ipv6NetworkAddrs {
 
         self.front_addr = if host_mask & host_mask.wrapping_add(1) == 0 {
             // Contiguous mask (trailing zeros only): a plain increment steps
-            // to the next address; the overrun past the last one is repaired
+            // to the next address. The overrun past the last one is repaired
             // by the exhaustion canonicalization below.
             bits.wrapping_add(1)
         } else {
@@ -3661,7 +3661,7 @@ impl DoubleEndedIterator for Ipv6NetworkAddrs {
 
         self.back_addr = if host_mask & host_mask.wrapping_add(1) == 0 {
             // Contiguous mask (trailing zeros only): a plain decrement steps
-            // to the previous address; the underrun past the first one is
+            // to the previous address. The underrun past the first one is
             // repaired by the exhaustion canonicalization below.
             bits.wrapping_sub(1)
         } else {
@@ -3690,7 +3690,7 @@ impl DoubleEndedIterator for Ipv6NetworkAddrs {
 /// address set of `A` minus the address set of `B`.
 ///
 /// Each call to [`next`](Iterator::next) computes one network by peeling the
-/// highest remaining bit from the difference mask; each call to
+/// highest remaining bit from the difference mask. Each call to
 /// [`next_back`](DoubleEndedIterator::next_back) peels the lowest remaining
 /// bit instead. Consumption from either end is O(1) and the two can be
 /// freely interleaved.
@@ -3816,7 +3816,7 @@ impl Iterator for Ipv6NetworkDiff {
         // An empty high half puts every pending bit in the low one, so the
         // truncated prediction loses nothing pending. Right after a peel of
         // bit 64 it still carries the in-range bit 63 (stored full-width
-        // above); only a guess straddling the boundary from higher up
+        // above). Only a guess straddling the boundary from higher up
         // degrades into the rescue, at most once per iteration lifetime.
         let remaining = self.remaining as u64;
         let mut b = self.predicted as u64;
@@ -3917,7 +3917,7 @@ impl ExactSizeIterator for Ipv6NetworkDiff {
 pub struct Ipv6RangeNetworks {
     first: u128,
     last: u128,
-    /// Remaining ascending-phase block sizes, one per set bit, lowest first;
+    /// Remaining ascending-phase block sizes, one per set bit, lowest first —
     /// zero once the iterator enters the descending phase.
     ascending: u128,
     done: bool,
@@ -4486,7 +4486,7 @@ where
     let mut best_len = n;
     let mut best_mask = !full_or & mask_last;
 
-    // Pass 2: scan windows left to right; strict `>` keeps the first-seen
+    // Pass 2: scan windows left to right. Strict `>` keeps the first-seen
     // best window on ties.
     for i in 0..=(n - window_size) {
         if i > 0 {
@@ -5276,7 +5276,7 @@ mod test {
         back_then_front.next_back();
         back_then_front.next();
 
-        // Iterators drained through the back end share one sentinel state; the
+        // Iterators drained through the back end share one sentinel state. The
         // all-front drain overruns into a different (still exhausted) state.
         assert_eq!(front_then_back, back_only);
         assert_eq!(back_only, back_then_front);
@@ -8596,7 +8596,7 @@ mod test {
             ("10.0.0.0/8", "10.1.0.0/16"),
             // Different masks, no containment -> reject.
             ("10.0.0.0/8", "172.16.0.0/16"),
-            // /0 with itself -> self (containment; no lowest mask bit).
+            // /0 with itself -> self (containment — no lowest mask bit).
             ("0.0.0.0/0", "0.0.0.0/0"),
         ];
 
@@ -8626,7 +8626,7 @@ mod test {
             ("2001:db8::/32", "2001:db8:1::/48"),
             // Different masks, no containment -> reject.
             ("2001:db8::/32", "2001:beef:1::/48"),
-            // /0 with itself -> self (containment; no lowest mask bit).
+            // /0 with itself -> self (containment — no lowest mask bit).
             ("::/0", "::/0"),
         ];
 
@@ -9026,8 +9026,8 @@ mod test {
 
     // A pair of IPv4 networks guaranteed to be lowest-mask-bit siblings: a shared
     // non-zero (possibly non-contiguous) mask and addresses differing only in that
-    // mask's lowest set bit. `merge_by_lowest_mask_bit` always fires on such a
-    // pair.
+    // mask's lowest set bit. The function `merge_by_lowest_mask_bit` always fires
+    // on such a pair.
     fn arb_ipv4_lowest_bit_sibling_pair() -> impl Strategy<Value = (Ipv4Network, Ipv4Network)> {
         (any::<u32>(), any::<u32>())
             .prop_filter("mask must be non-zero", |(.., mask)| *mask != 0)
@@ -10988,9 +10988,9 @@ mod test {
         assert!(zero < max);
     }
 
-    // Fixed shuffled input; `sort()` must reproduce this exact order so
-    // sorted-input consumers (`ip_binary_split`, `*_aggregate`) keep working
-    // across any `Ord` rewrite.
+    // Fixed shuffled input. Sorting it with `sort()` must reproduce this
+    // exact order, so sorted-input consumers (`ip_binary_split`,
+    // `*_aggregate`) keep working across any `Ord` rewrite.
     #[test]
     fn test_ipv4_network_sort_matches_expected_order() {
         let mut nets = [
