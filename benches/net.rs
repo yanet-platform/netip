@@ -2113,6 +2113,27 @@ fn bench_parse(c: &mut Criterion) {
         b.iter(|| core::hint::black_box(Ipv4Network::parse(core::hint::black_box("10.0.0.0/8"))));
     });
 
+    // The byte literals coerce to slices BEFORE `black_box`, hiding their
+    // length the same way `black_box(&str)` does for the `parse` twins.
+    // Passing `&[u8; N]` through would leave the length a compile-time
+    // constant and let LLVM specialize the call site the string benches
+    // cannot match.
+    group.bench_function("Ipv4Network::parse_ascii CIDR", |b| {
+        b.iter(|| {
+            core::hint::black_box(Ipv4Network::parse_ascii(core::hint::black_box(
+                b"10.0.0.0/8".as_slice(),
+            )))
+        });
+    });
+
+    group.bench_function("Ipv6Network::parse_ascii CIDR", |b| {
+        b.iter(|| {
+            core::hint::black_box(Ipv6Network::parse_ascii(core::hint::black_box(
+                b"2001:db8::/32".as_slice(),
+            )))
+        });
+    });
+
     group.bench_function("Ipv4Network::parse dotted mask", |b| {
         b.iter(|| core::hint::black_box(Ipv4Network::parse(core::hint::black_box("10.0.0.0/255.0.0.0"))));
     });
