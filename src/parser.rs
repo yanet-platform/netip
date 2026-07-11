@@ -9,13 +9,15 @@
 //!
 //! On reject, the parsers fall back to `core::net`'s `FromStr` to
 //! manufacture the genuine `AddrParseError`, which has no public
-//! constructor.
+//! constructor. Non-UTF-8 input takes an equal-valued error from a
+//! canonical failing parse instead.
 
 use core::{
     error::Error,
     fmt::{Display, Formatter},
     net::{AddrParseError, Ipv4Addr, Ipv6Addr},
     num::ParseIntError,
+    str,
 };
 
 use crate::net::{CidrOverflowError, IPV4_ALL_BITS, IPV6_ALL_BITS, IpNetwork, Ipv4Network, Ipv6Network};
@@ -89,20 +91,27 @@ struct ParseError;
 
 /// Parses an [`IpNetwork`] in CIDR, explicit-mask, or bare-address
 /// notation, dispatching between the address families.
+#[inline]
+pub fn parse_ip_network(buf: &str) -> Result<IpNetwork, IpNetParseError> {
+    parse_ip_network_ascii(buf.as_bytes())
+}
+
+/// Parses an [`IpNetwork`] from ASCII bytes, dispatching between the
+/// address families.
 ///
 /// A `:` anywhere in the input can never appear in a valid IPv4 network, so
 /// such input goes straight to the IPv6 parser. Everything else tries IPv4
 /// first and falls through to IPv6 only on an address-shaped error.
-pub fn parse_ip_network(buf: &str) -> Result<IpNetwork, IpNetParseError> {
+pub fn parse_ip_network_ascii(buf: &[u8]) -> Result<IpNetwork, IpNetParseError> {
     if !contains_colon(buf) {
-        match parse_ipv4_network(buf) {
+        match parse_ipv4_network_ascii(buf) {
             Ok(net) => return Ok(IpNetwork::V4(net)),
             Err(IpNetParseError::AddrParseError(..)) => {}
             Err(err) => return Err(err),
         }
     }
 
-    Ok(IpNetwork::V6(parse_ipv6_network(buf)?))
+    Ok(IpNetwork::V6(parse_ipv6_network_ascii(buf)?))
 }
 
 /// Whether `buf` contains a `:` anywhere, marking IPv6 (address or
@@ -111,8 +120,8 @@ pub fn parse_ip_network(buf: &str) -> Result<IpNetwork, IpNetParseError> {
 /// A hand-rolled byte scan on purpose: `<[u8]>::contains` is specialized to
 /// an outlined `memchr` call, oversized for address-sized inputs.
 #[inline]
-fn contains_colon(buf: &str) -> bool {
-    for &byte in buf.as_bytes() {
+fn contains_colon(buf: &[u8]) -> bool {
+    for &byte in buf {
         if byte == b':' {
             return true;
         }
@@ -122,6 +131,12 @@ fn contains_colon(buf: &str) -> bool {
 
 /// Parses an [`Ipv4Network`] in CIDR (`10.0.0.0/8`), explicit-mask
 /// (`10.0.0.0/255.0.0.0`), or bare-address notation.
+#[inline]
+pub fn parse_ipv4_network(buf: &str) -> Result<Ipv4Network, IpNetParseError> {
+    parse_ipv4_network_ascii(buf.as_bytes())
+}
+
+/// Parses an [`Ipv4Network`] from ASCII bytes.
 ///
 /// The fast path parses the address as a prefix and dispatches on the byte
 /// that stopped it, folding the `/` scan into the parse itself. The bytes
@@ -129,9 +144,9 @@ fn contains_colon(buf: &str) -> bool {
 /// the first one in the input, exactly where the fallback's split would
 /// cut. Everything else defers to the split-first fallback, which owns
 /// every reject and its genuine error value.
-pub fn parse_ipv4_network(buf: &str) -> Result<Ipv4Network, IpNetParseError> {
-    if let Some((addr, consumed)) = ipv4_parse_at(buf.as_bytes()) {
-        match buf.as_bytes().get(consumed) {
+pub fn parse_ipv4_network_ascii(buf: &[u8]) -> Result<Ipv4Network, IpNetParseError> {
+    if let Some((addr, consumed)) = ipv4_parse_at(buf) {
+        match buf.get(consumed) {
             None => return Ok(Ipv4Network::new(addr, IPV4_ALL_BITS)),
             Some(&b'/') => return ipv4_apply_mask(addr, &buf[consumed + 1..]),
             Some(..) => {}
@@ -217,8 +232,8 @@ const fn ascii_digit_value(byte: u8) -> Option<u8> {
 
 /// Applies an already-split mask part (CIDR or dotted) to an address.
 #[inline(always)]
-fn ipv4_apply_mask(addr: Ipv4Addr, mask: &str) -> Result<Ipv4Network, IpNetParseError> {
-    match parse_cidr_suffix(mask.as_bytes()) {
+fn ipv4_apply_mask(addr: Ipv4Addr, mask: &[u8]) -> Result<Ipv4Network, IpNetParseError> {
+    match parse_cidr_suffix(mask) {
         Ok(cidr) => Ok(Ipv4Network::try_from((addr, cidr))?),
         Err(..) => {
             // Maybe explicit mask.
@@ -268,17 +283,26 @@ fn parse_cidr_suffix(bytes: &[u8]) -> Result<u8, ParseError> {
 /// Keeping it outlined and cold leaves only the hand-rolled hot path to
 /// inline into the callers.
 #[inline]
-fn parse_ipv4_addr(s: &str) -> Result<Ipv4Addr, IpNetParseError> {
-    match ipv4_parse_ascii(s.as_bytes()) {
+fn parse_ipv4_addr(bytes: &[u8]) -> Result<Ipv4Addr, IpNetParseError> {
+    match ipv4_parse_ascii(bytes) {
         Ok(addr) => Ok(addr),
-        Err(..) => parse_ipv4_addr_error(s),
+        Err(..) => parse_ipv4_addr_error(bytes),
     }
 }
 
 #[cold]
 #[inline(never)]
-fn parse_ipv4_addr_error(s: &str) -> Result<Ipv4Addr, IpNetParseError> {
-    Ok(s.parse()?)
+fn parse_ipv4_addr_error(bytes: &[u8]) -> Result<Ipv4Addr, IpNetParseError> {
+    // Non-UTF-8 input cannot reach core's parser, but it does not need to:
+    // every IPv4 `AddrParseError` carries the same value, so one from a
+    // canonical failing parse is indistinguishable from a genuine one.
+    match str::from_utf8(bytes) {
+        Ok(s) => Ok(s.parse()?),
+        Err(..) => match "".parse::<Ipv4Addr>() {
+            Err(err) => Err(err.into()),
+            Ok(..) => unreachable!(),
+        },
+    }
 }
 
 /// Parses a dotted-decimal IPv4 address, e.g. `192.168.0.1`.
@@ -294,11 +318,11 @@ fn ipv4_parse_ascii(bytes: &[u8]) -> Result<Ipv4Addr, ParseError> {
     }
 }
 
-/// The reject arm of [`parse_ipv4_network`]: re-parses through the
+/// The reject arm of [`parse_ipv4_network_ascii`]: re-parses through the
 /// split-first path purely to manufacture the correct error value.
 #[cold]
 #[inline(never)]
-fn parse_ipv4_network_fallback(buf: &str) -> Result<Ipv4Network, IpNetParseError> {
+fn parse_ipv4_network_fallback(buf: &[u8]) -> Result<Ipv4Network, IpNetParseError> {
     let (addr, mask) = split_slash(buf);
     let addr = parse_ipv4_addr(addr)?;
     match mask {
@@ -307,16 +331,14 @@ fn parse_ipv4_network_fallback(buf: &str) -> Result<Ipv4Network, IpNetParseError
     }
 }
 
-/// Splits `buf` at the first `/` into address text and an optional mask.
+/// Splits `buf` at the first `/` into address bytes and an optional mask.
 ///
-/// A hand-rolled byte scan on purpose: `str::split_once` lowers its
-/// single-byte search to an outlined `memchr` call, whose call and
-/// alignment-prologue overhead dominates on address-sized inputs (well
-/// under one cache line). `/` is ASCII, so slicing at its byte index cannot
-/// break a UTF-8 boundary.
+/// A hand-rolled byte scan on purpose: `split_once`-style searches lower to
+/// an outlined `memchr` call, whose call and alignment-prologue overhead
+/// dominates on address-sized inputs (well under one cache line).
 #[inline]
-fn split_slash(buf: &str) -> (&str, Option<&str>) {
-    for (index, &byte) in buf.as_bytes().iter().enumerate() {
+fn split_slash(buf: &[u8]) -> (&[u8], Option<&[u8]>) {
+    for (index, &byte) in buf.iter().enumerate() {
         if byte == b'/' {
             return (&buf[..index], Some(&buf[index + 1..]));
         }
@@ -326,14 +348,20 @@ fn split_slash(buf: &str) -> (&str, Option<&str>) {
 
 /// Parses an [`Ipv6Network`] in CIDR (`2001:db8::/32`), explicit-mask
 /// (`2001:db8::/ffff:ffff::`), or bare-address notation.
+#[inline]
+pub fn parse_ipv6_network(buf: &str) -> Result<Ipv6Network, IpNetParseError> {
+    parse_ipv6_network_ascii(buf.as_bytes())
+}
+
+/// Parses an [`Ipv6Network`] from ASCII bytes.
 ///
-/// The fast path mirrors [`parse_ipv4_network`]: the bytes before
+/// The fast path mirrors [`parse_ipv4_network_ascii`]: the bytes before
 /// `consumed` are all hex digits, colons, and dots, so a `/` at `consumed`
 /// is necessarily the first one in the input, exactly where the fallback's
 /// split would cut.
-pub fn parse_ipv6_network(buf: &str) -> Result<Ipv6Network, IpNetParseError> {
-    if let Some((addr, consumed)) = ipv6_parse_at(buf.as_bytes()) {
-        match buf.as_bytes().get(consumed) {
+pub fn parse_ipv6_network_ascii(buf: &[u8]) -> Result<Ipv6Network, IpNetParseError> {
+    if let Some((addr, consumed)) = ipv6_parse_at(buf) {
+        match buf.get(consumed) {
             None => return Ok(Ipv6Network::new(addr, IPV6_ALL_BITS)),
             Some(&b'/') => return ipv6_apply_mask(addr, &buf[consumed + 1..]),
             Some(..) => {}
@@ -553,8 +581,8 @@ fn assemble_ipv6_groups(high: u64, low: u64, count: u32) -> u128 {
 
 /// Applies an already-split mask part (CIDR or colon-form) to an address.
 #[inline(always)]
-fn ipv6_apply_mask(addr: Ipv6Addr, mask: &str) -> Result<Ipv6Network, IpNetParseError> {
-    match parse_cidr_suffix(mask.as_bytes()) {
+fn ipv6_apply_mask(addr: Ipv6Addr, mask: &[u8]) -> Result<Ipv6Network, IpNetParseError> {
+    match parse_cidr_suffix(mask) {
         Ok(cidr) => Ok(Ipv6Network::try_from((addr, cidr))?),
         Err(..) => {
             // Maybe explicit mask.
@@ -567,17 +595,25 @@ fn ipv6_apply_mask(addr: Ipv6Addr, mask: &str) -> Result<Ipv6Network, IpNetParse
 /// Parses an IPv6 address the same way [`parse_ipv4_addr`] parses an IPv4
 /// address.
 #[inline]
-fn parse_ipv6_addr(s: &str) -> Result<Ipv6Addr, IpNetParseError> {
-    match ipv6_parse_ascii(s.as_bytes()) {
+fn parse_ipv6_addr(bytes: &[u8]) -> Result<Ipv6Addr, IpNetParseError> {
+    match ipv6_parse_ascii(bytes) {
         Ok(addr) => Ok(addr),
-        Err(..) => parse_ipv6_addr_error(s),
+        Err(..) => parse_ipv6_addr_error(bytes),
     }
 }
 
 #[cold]
 #[inline(never)]
-fn parse_ipv6_addr_error(s: &str) -> Result<Ipv6Addr, IpNetParseError> {
-    Ok(s.parse()?)
+fn parse_ipv6_addr_error(bytes: &[u8]) -> Result<Ipv6Addr, IpNetParseError> {
+    // Non-UTF-8 input takes an equal-valued error from a canonical failing
+    // parse, mirroring `parse_ipv4_addr_error`.
+    match str::from_utf8(bytes) {
+        Ok(s) => Ok(s.parse()?),
+        Err(..) => match "".parse::<Ipv6Addr>() {
+            Err(err) => Err(err.into()),
+            Ok(..) => unreachable!(),
+        },
+    }
 }
 
 /// Parses an IPv6 address, e.g. `2001:db8::1` or `::ffff:192.0.2.1`.
@@ -593,11 +629,11 @@ fn ipv6_parse_ascii(bytes: &[u8]) -> Result<Ipv6Addr, ParseError> {
     }
 }
 
-/// The reject arm of [`parse_ipv6_network`]: re-parses through the
+/// The reject arm of [`parse_ipv6_network_ascii`]: re-parses through the
 /// split-first path purely to manufacture the correct error value.
 #[cold]
 #[inline(never)]
-fn parse_ipv6_network_fallback(buf: &str) -> Result<Ipv6Network, IpNetParseError> {
+fn parse_ipv6_network_fallback(buf: &[u8]) -> Result<Ipv6Network, IpNetParseError> {
     let (addr, mask) = split_slash(buf);
     let addr = parse_ipv6_addr(addr)?;
     match mask {

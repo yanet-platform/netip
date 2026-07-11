@@ -235,6 +235,39 @@ impl IpNetwork {
         parser::parse_ip_network(buf)
     }
 
+    /// Parses the specified ASCII byte buffer into an IP network.
+    ///
+    /// The buffer does not need to be valid UTF-8, so slices cut from a
+    /// larger byte stream can be parsed without a validation pass. The
+    /// accepted formats match [`Self::parse`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::{Ipv4Addr, Ipv6Addr};
+    ///
+    /// use netip::{IpNetwork, Ipv4Network, Ipv6Network};
+    ///
+    /// assert_eq!(
+    ///     IpNetwork::V4(Ipv4Network::new(
+    ///         Ipv4Addr::new(192, 168, 0, 0),
+    ///         Ipv4Addr::new(255, 255, 255, 0),
+    ///     )),
+    ///     IpNetwork::parse_ascii(b"192.168.0.0/24").unwrap(),
+    /// );
+    /// assert_eq!(
+    ///     IpNetwork::V6(Ipv6Network::new(
+    ///         Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 0, 0, 0, 0, 0),
+    ///         Ipv6Addr::new(0xffff, 0xffff, 0xff00, 0, 0, 0, 0, 0),
+    ///     )),
+    ///     IpNetwork::parse_ascii(b"2a02:6b8:c00::/40").unwrap(),
+    /// );
+    /// ```
+    #[inline]
+    pub fn parse_ascii(buf: &[u8]) -> Result<Self, IpNetParseError> {
+        parser::parse_ip_network_ascii(buf)
+    }
+
     /// Returns the IP address of this network.
     ///
     /// # Examples
@@ -899,6 +932,39 @@ impl Ipv4Network {
     #[inline]
     pub fn parse(buf: &str) -> Result<Self, IpNetParseError> {
         parser::parse_ipv4_network(buf)
+    }
+
+    /// Parses the specified ASCII byte buffer into an IPv4 network.
+    ///
+    /// The buffer does not need to be valid UTF-8, so slices cut from a
+    /// larger byte stream can be parsed without a validation pass. The
+    /// accepted formats match [`Self::parse`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv4Addr;
+    ///
+    /// use netip::Ipv4Network;
+    ///
+    /// let expected = Ipv4Network::new(
+    ///     Ipv4Addr::new(192, 168, 1, 1),
+    ///     Ipv4Addr::new(255, 255, 255, 255),
+    /// );
+    ///
+    /// assert_eq!(expected, Ipv4Network::parse_ascii(b"192.168.1.1").unwrap());
+    /// assert_eq!(
+    ///     expected,
+    ///     Ipv4Network::parse_ascii(b"192.168.1.1/32").unwrap()
+    /// );
+    /// assert_eq!(
+    ///     expected,
+    ///     Ipv4Network::parse_ascii(b"192.168.1.1/255.255.255.255").unwrap()
+    /// );
+    /// ```
+    #[inline]
+    pub fn parse_ascii(buf: &[u8]) -> Result<Self, IpNetParseError> {
+        parser::parse_ipv4_network_ascii(buf)
     }
 
     /// Returns the IP address of this IPv4 network.
@@ -2374,6 +2440,38 @@ impl Ipv6Network {
     #[inline]
     pub fn parse(buf: &str) -> Result<Self, IpNetParseError> {
         parser::parse_ipv6_network(buf)
+    }
+
+    /// Parses the specified ASCII byte buffer into an IPv6 network.
+    ///
+    /// The buffer does not need to be valid UTF-8, so slices cut from a
+    /// larger byte stream can be parsed without a validation pass. The
+    /// accepted formats match [`Self::parse`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::Ipv6Network;
+    ///
+    /// let expected = Ipv6Network::new(
+    ///     Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 0, 0, 0, 0, 0),
+    ///     Ipv6Addr::new(0xffff, 0xffff, 0xff00, 0, 0, 0, 0, 0),
+    /// );
+    ///
+    /// assert_eq!(
+    ///     expected,
+    ///     Ipv6Network::parse_ascii(b"2a02:6b8:c00::/40").unwrap()
+    /// );
+    /// assert_eq!(
+    ///     expected,
+    ///     Ipv6Network::parse_ascii(b"2a02:6b8:c00::/ffff:ffff:ff00::").unwrap()
+    /// );
+    /// ```
+    #[inline]
+    pub fn parse_ascii(buf: &[u8]) -> Result<Self, IpNetParseError> {
+        parser::parse_ipv6_network_ascii(buf)
     }
 
     /// Returns the IP address of this IPv6 network.
@@ -5685,6 +5783,71 @@ mod test {
             ),
             Ipv6Network::parse("2a02:6b8:c00::1234:9:9/ffff:ffff:ff00::ffff:ffff:0:0").unwrap()
         );
+    }
+
+    #[test]
+    fn parse_ascii_ipv4_non_contiguous_mask() {
+        assert_eq!(
+            Ipv4Network::new(Ipv4Addr::new(192, 168, 0, 1), Ipv4Addr::new(255, 255, 0, 255)),
+            Ipv4Network::parse_ascii(b"192.168.0.1/255.255.0.255").unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_ascii_ipv6_non_contiguous_mask() {
+        assert_eq!(
+            Ipv6Network::new(
+                Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 0, 0, 0x1234, 0, 0),
+                Ipv6Addr::new(0xffff, 0xffff, 0xff00, 0, 0xffff, 0xffff, 0, 0),
+            ),
+            Ipv6Network::parse_ascii(b"2a02:6b8:c00::1234:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_ascii_rejects_non_utf8() {
+        assert!(matches!(
+            Ipv4Network::parse_ascii(b"\xff\xfe").unwrap_err(),
+            IpNetParseError::AddrParseError(..)
+        ));
+        assert!(matches!(
+            Ipv4Network::parse_ascii(b"192.168.0.1/\xff").unwrap_err(),
+            IpNetParseError::AddrParseError(..)
+        ));
+        assert!(matches!(
+            Ipv6Network::parse_ascii(b"\xff\xfe").unwrap_err(),
+            IpNetParseError::AddrParseError(..)
+        ));
+        assert!(matches!(
+            Ipv6Network::parse_ascii(b"2001:db8::/\xff").unwrap_err(),
+            IpNetParseError::AddrParseError(..)
+        ));
+        assert!(matches!(
+            IpNetwork::parse_ascii(b"\xff\xfe").unwrap_err(),
+            IpNetParseError::AddrParseError(..)
+        ));
+    }
+
+    proptest! {
+        #[test]
+        fn prop_parse_ascii_matches_parse_ipv4(network in arb_ipv4_network()) {
+            let text = std::format!("{network}");
+            prop_assert_eq!(Ipv4Network::parse(&text), Ipv4Network::parse_ascii(text.as_bytes()));
+        }
+
+        #[test]
+        fn prop_parse_ascii_matches_parse_ipv6(network in arb_ipv6_network()) {
+            let text = std::format!("{network}");
+            prop_assert_eq!(Ipv6Network::parse(&text), Ipv6Network::parse_ascii(text.as_bytes()));
+        }
+
+        #[test]
+        fn prop_parse_ascii_parity_arbitrary_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..48)) {
+            match core::str::from_utf8(&bytes) {
+                Ok(text) => prop_assert_eq!(IpNetwork::parse(text), IpNetwork::parse_ascii(&bytes)),
+                Err(..) => prop_assert!(IpNetwork::parse_ascii(&bytes).is_err()),
+            }
+        }
     }
 
     #[test]
