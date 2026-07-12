@@ -22,6 +22,7 @@ If your masks happen to be contiguous, the `Contiguous<T>` wrapper gives you a c
 - **Fast parsing** — hand-rolled ASCII parsers, 1.8–3.2× faster than parsing through the standard library; `parse_ascii` accepts byte buffers, `parse_next_ascii` extracts the leading network from rule text and returns the remainder
 - **Correct iteration** — iterate over addresses in a non-contiguous network in host-index order, from either end, with O(1) stepping
 - **Zero dependencies** — only `core`, nothing else
+- **`no_std`** — works on bare metal, no allocator required; CI builds the library for `thumbv7em-none-eabihf`
 - **No unsafe** — `#![forbid(unsafe_code)]`
 - **Performance-first** — `const fn` where possible, allocation-free runtime, minimal instruction count, criterion-benchmarked
 - **Type-safe** — `Contiguous<T>` and `BiContiguous<T>` enforce mask shape at parse time; mismatched IPv4/IPv6 operations are compile errors
