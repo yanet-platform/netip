@@ -410,12 +410,7 @@ impl DoubleEndedIterator for ContiguousIpv4NetworkAddrs {
     }
 }
 
-// Implemented only where the count of every IPv4 network fits a `usize`. The /0
-// network holds 2^32 addresses, one more than a 32-bit `usize` can represent,
-// so on a 32-bit target no exact length exists for it and the trait's contract
-// (`size_hint` must equal `(len(), Some(len()))`) is unsatisfiable. The
-// standard library draws the same line: `RangeInclusive<u32>` is not an
-// `ExactSizeIterator` while `Range<u32>` is.
+// Implemented only where the count of every IPv4 network fits a `usize`.
 #[cfg(target_pointer_width = "64")]
 impl ExactSizeIterator for ContiguousIpv4NetworkAddrs {
     #[inline]

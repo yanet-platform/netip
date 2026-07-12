@@ -6,13 +6,6 @@
 //! Unlike most open-source libraries, this library is designed to support
 //! non-contiguous masks.
 
-// The library itself needs nothing beyond `core`. Tests are exempt so they keep
-// the `std` prelude and may allocate freely. A bare `#![no_std]` would instead
-// strip `Vec`, `String`, `vec!` and `format!` from every test module. The
-// consequence is that `cargo test` compiles the library against `std`, so the
-// test suite cannot catch a `use std::` that slips into runtime code later.
-// Only a build for a target without `std` can, and CI does exactly that by
-// building the library for `thumbv7em-none-eabihf`.
 #![cfg_attr(not(test), no_std)]
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
