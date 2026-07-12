@@ -277,8 +277,9 @@ impl Contiguous<Ipv4Network> {
     /// index instead. Reach the general iterator for a possibly
     /// non-contiguous network through [`Deref`], e.g. `(*net).addrs()`.
     ///
-    /// The iterator implements [`DoubleEndedIterator`] and
-    /// [`ExactSizeIterator`].
+    /// The iterator always implements [`DoubleEndedIterator`], and implements
+    /// [`ExactSizeIterator`] on 64-bit targets only: the /0 network holds
+    /// `2^32` addresses, one more than a 32-bit `usize` can represent.
     ///
     /// # Examples
     ///
@@ -334,6 +335,22 @@ pub struct ContiguousIpv4NetworkAddrs {
     back: u32,
 }
 
+impl ContiguousIpv4NetworkAddrs {
+    /// Returns the number of addresses not yet yielded.
+    ///
+    /// Widened to `u64` because the /0 network's `2^32` addresses are one more
+    /// than the `u32` index range can count: the difference of the two bounds
+    /// is `u32::MAX`, and the inclusive count is that plus one.
+    #[inline]
+    fn remaining(&self) -> u64 {
+        if self.front > self.back {
+            return 0;
+        }
+
+        u64::from(self.back - self.front) + 1
+    }
+}
+
 impl Iterator for ContiguousIpv4NetworkAddrs {
     type Item = Ipv4Addr;
 
@@ -360,22 +377,15 @@ impl Iterator for ContiguousIpv4NetworkAddrs {
 
     #[inline]
     fn count(self) -> usize {
-        self.len()
+        let (n, ..) = self.size_hint();
+        n
     }
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        if self.front > self.back {
-            return (0, Some(0));
-        }
-
-        let rem = self.back.wrapping_sub(self.front).wrapping_add(1);
-
-        if rem == 0 {
-            (usize::MAX, None)
-        } else {
-            let n = rem as usize;
-            (n, Some(n))
+        match usize::try_from(self.remaining()) {
+            Ok(n) => (n, Some(n)),
+            Err(..) => (usize::MAX, None),
         }
     }
 }
@@ -400,16 +410,18 @@ impl DoubleEndedIterator for ContiguousIpv4NetworkAddrs {
     }
 }
 
+// Implemented only where the count of every IPv4 network fits a `usize`. The /0
+// network holds 2^32 addresses, one more than a 32-bit `usize` can represent,
+// so on a 32-bit target no exact length exists for it and the trait's contract
+// (`size_hint` must equal `(len(), Some(len()))`) is unsatisfiable. The
+// standard library draws the same line: `RangeInclusive<u32>` is not an
+// `ExactSizeIterator` while `Range<u32>` is.
+#[cfg(target_pointer_width = "64")]
 impl ExactSizeIterator for ContiguousIpv4NetworkAddrs {
     #[inline]
     fn len(&self) -> usize {
-        if self.front > self.back {
-            return 0;
-        }
-
-        let rem = self.back.wrapping_sub(self.front).wrapping_add(1);
-
-        if rem == 0 { 1usize << 32 } else { rem as usize }
+        // 2^32, the largest count any IPv4 network has, fits a 64-bit `usize`.
+        self.remaining() as usize
     }
 }
 
@@ -968,7 +980,42 @@ mod test {
         let mut addrs = net.addrs();
         assert_eq!(addrs.next(), Some(Ipv4Addr::new(0, 0, 0, 0)));
         assert_eq!(addrs.next_back(), Some(Ipv4Addr::new(255, 255, 255, 255)));
-        assert_eq!(net.addrs().len(), 1usize << 32);
+    }
+
+    // The /0 network's 2^32 addresses only fit a 64-bit `usize`, which is also
+    // the only target family where `ExactSizeIterator` is implemented.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn contiguous_ipv4_addrs_unspecified_size_hint_is_exact_and_matches_len() {
+        let net = Contiguous::<Ipv4Network>::parse("0.0.0.0/0").unwrap();
+        let total = 1usize << 32;
+
+        let addrs = net.addrs();
+        assert_eq!(total, addrs.len());
+        assert_eq!((total, Some(total)), addrs.size_hint());
+        assert_eq!(total, net.addrs().count());
+
+        let mut addrs = net.addrs();
+        addrs.next();
+        addrs.next_back();
+        assert_eq!(total - 2, addrs.len());
+        assert_eq!((total - 2, Some(total - 2)), addrs.size_hint());
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn contiguous_ipv4_addrs_size_hint_matches_len_across_drain() {
+        let net = Contiguous::<Ipv4Network>::parse("192.168.1.0/30").unwrap();
+        let mut addrs = net.addrs();
+
+        for expected_len in (1..=4).rev() {
+            assert_eq!(expected_len, addrs.len());
+            assert_eq!((expected_len, Some(expected_len)), addrs.size_hint());
+            addrs.next();
+        }
+
+        assert_eq!(0, addrs.len());
+        assert_eq!((0, Some(0)), addrs.size_hint());
     }
 
     #[test]
@@ -1745,12 +1792,42 @@ mod test {
             }
         }
 
+        #[cfg(target_pointer_width = "64")]
         #[test]
         fn prop_contiguous_ipv4_addrs_len_matches_host_bits(net in arb_small_contiguous_ipv4_network()) {
             let (.., mask) = (*net).to_bits();
             let expected_len = 1usize << (!mask).count_ones();
             prop_assert_eq!(net.addrs().len(), expected_len);
             prop_assert_eq!(net.addrs().count(), expected_len);
+        }
+
+        // Covers every prefix, including the /0 network whose 2^32 addresses
+        // are the reason `ExactSizeIterator` is 64-bit-only here.
+        #[cfg(target_pointer_width = "64")]
+        #[test]
+        fn prop_contiguous_ipv4_addrs_size_hint_equals_len(net in arb_contiguous_ipv4_network()) {
+            let (.., mask) = (*net).to_bits();
+            let expected_len = 1u64 << (!mask).count_ones();
+            let addrs = net.addrs();
+            let len = addrs.len();
+
+            prop_assert_eq!(expected_len, len as u64);
+            prop_assert_eq!((len, Some(len)), addrs.size_hint());
+            prop_assert_eq!(len, net.addrs().count());
+        }
+
+        // The upper `2^128 / 2^64` counts do not fit a `usize`, so the hint
+        // saturates to an honest lower bound instead of an exact length.
+        #[test]
+        fn prop_contiguous_ipv6_addrs_size_hint_is_exact_or_saturating(net in arb_contiguous_ipv6_network()) {
+            let (.., mask) = (*net).to_bits();
+            let host_bits = (!mask).count_ones();
+            let exact = 1u128.checked_shl(host_bits).and_then(|total| usize::try_from(total).ok());
+
+            match exact {
+                Some(total) => prop_assert_eq!((total, Some(total)), net.addrs().size_hint()),
+                None => prop_assert_eq!((usize::MAX, None), net.addrs().size_hint()),
+            }
         }
 
         #[test]

@@ -1820,8 +1820,9 @@ impl Ipv4Network {
     /// For a non-contiguous mask the numeric order of the produced addresses
     /// may differ from the iteration order.
     ///
-    /// The iterator implements [`DoubleEndedIterator`] and
-    /// [`ExactSizeIterator`].
+    /// The iterator always implements [`DoubleEndedIterator`], and implements
+    /// [`ExactSizeIterator`] on 64-bit targets only: the /0 network holds
+    /// `2^32` addresses, one more than a 32-bit `usize` can represent.
     ///
     /// # Examples
     ///
@@ -2007,16 +2008,15 @@ impl Iterator for Ipv4NetworkAddrs {
 
     #[inline]
     fn count(self) -> usize {
-        self.len()
+        let (n, ..) = self.size_hint();
+        n
     }
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        if self.remaining > u32::MAX as u64 {
-            (usize::MAX, None)
-        } else {
-            let n = self.remaining as usize;
-            (n, Some(n))
+        match usize::try_from(self.remaining) {
+            Ok(n) => (n, Some(n)),
+            Err(..) => (usize::MAX, None),
         }
     }
 }
@@ -2056,9 +2056,17 @@ impl DoubleEndedIterator for Ipv4NetworkAddrs {
     }
 }
 
+// Implemented only where the count of every IPv4 network fits a `usize`. The /0
+// network holds 2^32 addresses, one more than a 32-bit `usize` can represent,
+// so on a 32-bit target no exact length exists for it and the trait's contract
+// (`size_hint` must equal `(len(), Some(len()))`) is unsatisfiable. The
+// standard library draws the same line: `RangeInclusive<u32>` is not an
+// `ExactSizeIterator` while `Range<u32>` is.
+#[cfg(target_pointer_width = "64")]
 impl ExactSizeIterator for Ipv4NetworkAddrs {
     #[inline]
     fn len(&self) -> usize {
+        // 2^32, the largest count any IPv4 network has, fits a 64-bit `usize`.
         self.remaining as usize
     }
 }
@@ -5319,6 +5327,10 @@ mod test {
     }
 
     // Pins `last()`'s default forward-walk output on purpose.
+    //
+    // The /0 network's 2^32 addresses only fit a 64-bit `usize`, which is also
+    // the only target family where `ExactSizeIterator` is implemented.
+    #[cfg(target_pointer_width = "64")]
     #[allow(clippy::double_ended_iterator_last)]
     #[test]
     fn ipv4_addrs_edge_masks_pin_len_and_size_hint() {
@@ -5329,15 +5341,44 @@ mod test {
         assert_eq!(Some(Ipv4Addr::new(10, 0, 0, 1)), single.addrs().last());
 
         let full = Ipv4Network::parse("0.0.0.0/0").unwrap();
-        assert_eq!(1usize << 32, full.addrs().len());
-        assert_eq!((usize::MAX, None), full.addrs().size_hint());
+        let total = 1usize << 32;
+        assert_eq!(total, full.addrs().len());
+        assert_eq!((total, Some(total)), full.addrs().size_hint());
+        assert_eq!(total, full.addrs().count());
 
         let mut addrs = full.addrs();
         assert_eq!(Some(Ipv4Addr::new(0, 0, 0, 0)), addrs.next());
         assert_eq!(Some(Ipv4Addr::new(0, 0, 0, 1)), addrs.next());
         assert_eq!(Some(Ipv4Addr::new(255, 255, 255, 255)), addrs.next_back());
         assert_eq!(Some(Ipv4Addr::new(255, 255, 255, 254)), addrs.next_back());
-        assert_eq!((1usize << 32) - 4, addrs.len());
+        assert_eq!(total - 4, addrs.len());
+        assert_eq!((total - 4, Some(total - 4)), addrs.size_hint());
+    }
+
+    // `ExactSizeIterator` requires `size_hint` to report exactly
+    // `(len(), Some(len()))`. The /0 network is the only IPv4 network whose
+    // count exceeds `u32::MAX`, so it is the case where the two can disagree.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn ipv4_addrs_size_hint_matches_len_on_non_contiguous_masks() {
+        // 30 host bits: the widest count a non-contiguous mask can hold, since
+        // an all-zero mask is contiguous.
+        let wide = Ipv4Network::parse("128.0.0.1/128.0.0.1").unwrap();
+        assert_eq!(1 << 30, wide.addrs().len());
+        assert_eq!((1 << 30, Some(1 << 30)), wide.addrs().size_hint());
+        assert_eq!(1 << 30, wide.addrs().count());
+
+        let net = Ipv4Network::parse("10.0.0.1/255.255.15.255").unwrap();
+        let mut addrs = net.addrs();
+
+        for expected_len in (1..=16).rev() {
+            assert_eq!(expected_len, addrs.len());
+            assert_eq!((expected_len, Some(expected_len)), addrs.size_hint());
+            addrs.next();
+        }
+
+        assert_eq!(0, addrs.len());
+        assert_eq!((0, Some(0)), addrs.size_hint());
     }
 
     #[test]
@@ -5470,6 +5511,22 @@ mod test {
     }
 
     #[test]
+    fn ipv6_addrs_size_hint_lower_bound_never_exceeds_yielded_count() {
+        // Four host bits, at the non-contiguous positions 4..8.
+        let net = Ipv6Network::parse("2001:db8::/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ff0f").unwrap();
+        let mut addrs = net.addrs();
+
+        for _ in 0..=16 {
+            let (lower, upper) = addrs.size_hint();
+            let yielded = addrs.collect::<Vec<_>>().len();
+
+            assert_eq!(yielded, lower);
+            assert_eq!(Some(yielded), upper);
+            addrs.next();
+        }
+    }
+
+    #[test]
     fn ipv6_addrs_wide_non_contiguous_pins_both_ends() {
         // 96 host bits (positions 16..112): far beyond `usize`, so only the
         // ends are materialized.
@@ -5535,18 +5592,43 @@ mod test {
             }
         }
 
+        // Every IPv4 count, the /0 network's 2^32 included, fits a 64-bit
+        // `usize`, so the hint is exact for every network and the
+        // `ExactSizeIterator` contract holds unconditionally.
+        #[cfg(target_pointer_width = "64")]
         #[test]
         fn prop_ipv4_addrs_len_and_size_hint_match_host_count(net in arb_ipv4_network()) {
             let host_bits = (!net.mask().to_bits()).count_ones();
             let total = 1u64 << host_bits;
             let addrs = net.addrs();
+            let len = addrs.len();
 
-            prop_assert_eq!(total, addrs.len() as u64);
-            prop_assert_eq!(total, net.addrs().count() as u64);
-            if host_bits == 32 {
-                prop_assert_eq!((usize::MAX, None), addrs.size_hint());
-            } else {
-                prop_assert_eq!((total as usize, Some(total as usize)), addrs.size_hint());
+            prop_assert_eq!(total, len as u64);
+            prop_assert_eq!(len, net.addrs().count());
+            prop_assert_eq!((len, Some(len)), addrs.size_hint());
+        }
+
+        // Draining moves both `len` and the hint in lockstep, so the contract
+        // holds in every state the iterator can reach, not just the initial one.
+        #[cfg(target_pointer_width = "64")]
+        #[test]
+        fn prop_ipv4_addrs_size_hint_equals_len_across_drain(
+            net in arb_ipv4_network(),
+            script in prop::collection::vec(any::<bool>(), 1..48),
+        ) {
+            let host_bits = (!net.mask().to_bits()).count_ones();
+            let mut expected_len = 1u64 << host_bits;
+            let mut addrs = net.addrs();
+
+            for take_front in script {
+                let len = addrs.len();
+                prop_assert_eq!(expected_len, len as u64);
+                prop_assert_eq!((len, Some(len)), addrs.size_hint());
+
+                let yielded = if take_front { addrs.next() } else { addrs.next_back() };
+                if yielded.is_some() {
+                    expected_len -= 1;
+                }
             }
         }
 
@@ -5611,18 +5693,46 @@ mod test {
             }
         }
 
+        // Counts above `usize::MAX` cannot be reported exactly, so the hint
+        // saturates to an honest lower bound with no upper bound.
         #[test]
         fn prop_ipv6_addrs_size_hint_matches_host_count(net in arb_ipv6_network()) {
             let host_bits = (!net.mask().to_bits()).count_ones();
+            let exact = 1u128.checked_shl(host_bits).and_then(|total| usize::try_from(total).ok());
             let addrs = net.addrs();
 
-            if host_bits >= 64 {
-                prop_assert_eq!((usize::MAX, None), addrs.size_hint());
-                prop_assert_eq!(usize::MAX, net.addrs().count());
-            } else {
-                let total = 1usize << host_bits;
-                prop_assert_eq!((total, Some(total)), addrs.size_hint());
-                prop_assert_eq!(total, net.addrs().count());
+            match exact {
+                Some(total) => {
+                    prop_assert_eq!((total, Some(total)), addrs.size_hint());
+                    prop_assert_eq!(total, net.addrs().count());
+                }
+                None => {
+                    prop_assert_eq!((usize::MAX, None), addrs.size_hint());
+                    prop_assert_eq!(usize::MAX, net.addrs().count());
+                }
+            }
+        }
+
+        // Brute-force check that the hint's lower bound never overstates what
+        // the iterator actually yields, in every state of a full drain.
+        #[test]
+        fn prop_ipv6_addrs_size_hint_lower_bound_never_exceeds_yielded_count(net in arb_ipv6_network()) {
+            // Host bits confined to the low byte, so the network is small
+            // enough to drain and count directly.
+            let (addr, mask) = net.to_bits();
+            let net = Ipv6Network::from_bits(addr, mask | !0xFF);
+            let mut addrs = net.addrs();
+
+            loop {
+                let (lower, upper) = addrs.size_hint();
+                let yielded = addrs.collect::<Vec<_>>().len();
+
+                prop_assert_eq!(yielded, lower);
+                prop_assert_eq!(Some(yielded), upper);
+
+                if addrs.next().is_none() {
+                    break;
+                }
             }
         }
 
