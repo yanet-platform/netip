@@ -8,7 +8,7 @@ repository = "https://github.com/yanet-platform/netip"
 documentation = "https://docs.rs/netip"
 readme = "README.md"
 keywords = ["ip", "ipv4", "ipv6", "cidr", "subnet"]
-categories = ["network-programming", "data-structures"]
+categories = ["network-programming", "data-structures", "no-std", "no-std::no-alloc"]
 exclude = ["book/", ".github/"]
 
 [dependencies]
