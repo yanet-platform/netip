@@ -7,8 +7,8 @@ description = "IPv4/IPv6 network types with non-contiguous masks support"
 repository = "https://github.com/yanet-platform/netip"
 documentation = "https://docs.rs/netip"
 readme = "README.md"
-keywords = ["ip", "network", "ipv4", "ipv6"]
-categories = ["network-programming"]
+keywords = ["ip", "ipv4", "ipv6", "cidr", "subnet"]
+categories = ["network-programming", "data-structures"]
 exclude = ["book/", ".github/"]
 
 [dependencies]
