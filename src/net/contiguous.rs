@@ -239,7 +239,7 @@ impl Contiguous<Ipv4Network> {
     /// [`Contiguous`] type invariant, so mask-subset containment collapses
     /// from `mask & mask == mask` to a plain unsigned integer comparison.
     /// This overrides the [`Ipv4Network::contains`] check with that cheaper
-    /// formula; reach the general check for a possibly non-contiguous
+    /// formula. Reach the general check for a possibly non-contiguous
     /// network through [`Deref`], e.g. `(*net).contains(&other)`.
     ///
     /// # Examples
@@ -274,7 +274,7 @@ impl Contiguous<Ipv4Network> {
     /// order. This overrides the [`Ipv4Network::addrs`] iterator with a
     /// leaner one that drops the general iterator's per-item mask-shape
     /// branch (and the `mask` field that branch reads), stepping a plain
-    /// index instead; reach the general iterator for a possibly
+    /// index instead. Reach the general iterator for a possibly
     /// non-contiguous network through [`Deref`], e.g. `(*net).addrs()`.
     ///
     /// The iterator implements [`DoubleEndedIterator`] and
@@ -495,7 +495,7 @@ impl Contiguous<Ipv6Network> {
     /// [`Contiguous`] type invariant, so mask-subset containment collapses
     /// from `mask & mask == mask` to a plain unsigned integer comparison.
     /// This overrides the [`Ipv6Network::contains`] check with that cheaper
-    /// formula; reach the general check for a possibly non-contiguous
+    /// formula. Reach the general check for a possibly non-contiguous
     /// network through [`Deref`], e.g. `(*net).contains(&other)`.
     ///
     /// # Examples
@@ -530,7 +530,7 @@ impl Contiguous<Ipv6Network> {
     /// order. This overrides the [`Ipv6Network::addrs`] iterator with a
     /// leaner one that drops the general iterator's per-item mask-shape
     /// branch (and the `mask` field that branch reads), stepping a plain
-    /// index instead; reach the general iterator for a possibly
+    /// index instead. Reach the general iterator for a possibly
     /// non-contiguous network through [`Deref`], e.g. `(*net).addrs()`.
     ///
     /// The iterator implements [`DoubleEndedIterator`].
@@ -1936,7 +1936,7 @@ mod test {
             let mut nets = nets;
             let result = ipv4_aggregate_contiguous(&mut nets);
             for net in result.iter() {
-                // The wrapper asserts contiguity; confirm the unwrapped network's
+                // The wrapper asserts contiguity. Confirm the unwrapped network's
                 // general check agrees, since the fast path re-wraps merge results
                 // without re-validating.
                 prop_assert!((**net).is_contiguous());

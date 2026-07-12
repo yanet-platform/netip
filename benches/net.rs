@@ -1456,13 +1456,14 @@ fn bench_bicontiguous_aggregate(c: &mut Criterion) {
 
     // Many distinct shapes with real cross-shape containment, sized to keep
     // post-sweep survivor counts in the low-hundreds -- the region the removed
-    // small-N routing threshold (`CONTAINMENT_THRESHOLD`, formerly 96; see
+    // small-N routing threshold (`CONTAINMENT_THRESHOLD`, formerly 96 -- see
     // `bicontiguous_find_containment`'s doc comment in
     // `src/net/bicontiguous.rs`) used to switch paths in. One wildcard
     // ancestor (`hi_prefix` 8, `lo_prefix` 0) contains every even-indexed
-    // descendant; every odd-indexed descendant gets its own distinct shape and
-    // survives, so Phase C's containment sweep does real work against a wide
-    // shape fan instead of trivially passing every network through.
+    // descendant, while every odd-indexed descendant gets its own distinct
+    // shape and survives, so Phase C's containment sweep does real work
+    // against a wide shape fan instead of trivially passing every network
+    // through.
     fn containment_small(count: u64) -> Vec<BiContiguous<Ipv6Network>> {
         let container_mask = shape_mask(8, 0);
         let mut nets = Vec::with_capacity(count as usize);
@@ -1719,7 +1720,7 @@ fn bench_binary_split(c: &mut Criterion) {
 
 // Regression guard: `supernet_for`'s fold is auto-vectorized by LLVM for
 // `Ipv4Network` (8-wide SSE with a byte-shuffle transpose) but stays scalar
-// for `Ipv6Network`; these benches make that per-element cost gap visible so
+// for `Ipv6Network`. These benches make that per-element cost gap visible so
 // a change that silently defeats vectorization (e.g. an early exit) shows up
 // as a measured regression rather than going unnoticed.
 fn bench_supernet_for(c: &mut Criterion) {

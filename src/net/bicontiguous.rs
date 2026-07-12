@@ -59,8 +59,8 @@ impl Error for BiContiguousIpNetParseError {}
 /// `From<Contiguous<Ipv6Network>>`.
 ///
 /// Each specialized method is either strictly faster than the inherited one,
-/// or returns a typed result because the class is closed under the operation;
-/// see each method's "Why overridden?" note for which and why.
+/// or returns a typed result because the class is closed under the operation.
+/// See each method's "Why overridden?" note for which and why.
 ///
 /// Some methods are deliberately NOT specialized and are left to [`Deref`]:
 /// - [`Ipv6Network::merge`] -- the class is not closed under it: an equal-mask
@@ -72,8 +72,8 @@ impl Error for BiContiguousIpNetParseError {}
 ///   cost more.
 /// - No single-prefix accessor equivalent to
 ///   [`Contiguous<Ipv6Network>::prefix`] -- a bi-contiguous mask generally
-///   isn't one prefix length; use [`hi_prefix`](Self::hi_prefix) /
-///   [`lo_prefix`](Self::lo_prefix).
+///   isn't one prefix length. Use [`hi_prefix`](Self::hi_prefix) /
+///   [`lo_prefix`](Self::lo_prefix) instead.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BiContiguous<T>(T);
 
@@ -702,7 +702,7 @@ fn bicontiguous_aggregate(nets: &mut [BiContiguous<Ipv6Network>]) -> usize {
 // the high-half prefix `p` from 64 to 0. A hi-buddy merge re-parents networks
 // from level `p` to `p - 1` and is the only operation that breaks the
 // level-major ordering. Levels without one preserve the ordering and need no
-// re-sort before the next level; a level that does re-parent only disturbs
+// re-sort before the next level. A level that does re-parent only disturbs
 // the order between its own native block at the new level and the survivors
 // it just produced, so only that narrow range is re-sorted, never the whole
 // live slice.
@@ -868,7 +868,7 @@ fn bicontiguous_hi_buddy_merge(
                         let new_mask = (mask & (u64::MAX as u128)) | ((new_hi_mask as u128) << 64);
                         // NOTE: the lower buddy already has bit `64 - p` of its
                         // address clear, so widening its high-half mask to
-                        // prefix `p - 1` leaves the address normalized; the
+                        // prefix `p - 1` leaves the address normalized. The
                         // merged rectangle is bi-contiguous and is re-wrapped
                         // without re-validation.
                         nets[write] = BiContiguous(Ipv6Network::from_bits(addr, new_mask));
@@ -950,9 +950,9 @@ const fn bicontiguous_shape_mask(hi_prefix: u8, lo_prefix: u8) -> u128 {
 
 // Cross-shape containment sweep (Phase C): drops networks strictly contained
 // in another network of the slice, returning the surviving prefix length.
-// `nets[..k]` ends sorted ascending by `(mask, address)`; `nets[k..]` holds the
-// dropped elements. The whole slice stays a permutation of its input (swaps
-// only), so the address union is preserved.
+// `nets[..k]` ends sorted ascending by `(mask, address)`, while `nets[k..]`
+// holds the dropped elements. The whole slice stays a permutation of its
+// input (swaps only), so the address union is preserved.
 //
 // Requires input straight from `bicontiguous_sweep`: within every exact-(hi
 // address, hi prefix) group the low-half blocks are pairwise disjoint, and no
@@ -1003,7 +1003,7 @@ fn bicontiguous_containment_probe(nets: &mut [BiContiguous<Ipv6Network>]) -> usi
 
     // Bit `lo_prefix` of `lo_prefixes_by_hi_prefix[hi_prefix]` is set iff a
     // network with that exact `(hi_prefix, lo_prefix)` shape is present in the
-    // input; bit `hi_prefix` of `hi_prefixes_present` is set iff that row is
+    // input. Bit `hi_prefix` of `hi_prefixes_present` is set iff that row is
     // nonempty. Built in one `O(N)` pass, before any network is dropped.
     let mut lo_prefixes_by_hi_prefix = [0u128; 65];
     let mut hi_prefixes_present = 0u128;
@@ -1302,8 +1302,8 @@ mod test {
     // low half is empty (`q == 0`) or the high half is full (`p == 64`), so the
     // two runs abut with no interior zero. `::/0` (mask zero), `::/1` (a single
     // top bit, low half empty), `::/40` (`q == 0`) and `::/64` (both `p == 64`
-    // and `q == 0`) are the `q == 0` side; `::/65`, `::/96` and `::/128` are the
-    // `p == 64` side.
+    // and `q == 0`) are the `q == 0` side, while `::/65`, `::/96` and `::/128`
+    // are the `p == 64` side.
     #[test]
     fn bicontiguous_ipv6_network_is_contiguous_accepts_degenerate_members() {
         for spec in ["::/0", "::/1", "::/40", "::/64", "::/65", "::/96", "::/128"] {
@@ -1372,7 +1372,7 @@ mod test {
             .unwrap();
         let (base, ..) = (*net).to_bits();
 
-        // The lo half's 4 host bits cycle fastest (inner loop); the hi
+        // The lo half's 4 host bits cycle fastest (inner loop). The hi
         // half's 2 host bits only advance once the lo half wraps.
         let mut expected = Vec::new();
         for hi in 0u128..4 {
@@ -1541,8 +1541,8 @@ mod test {
     }
 
     // Both operands are degenerate (contiguous, `q == 0`) members of the
-    // class, upgraded through `From<Contiguous<Ipv6Network>>`; `b` is a CIDR
-    // subset of `a`, so containment reduces intersection to `b`.
+    // class, upgraded through `From<Contiguous<Ipv6Network>>`, and `b` is a
+    // CIDR subset of `a`, so containment reduces intersection to `b`.
     #[test]
     fn bicontiguous_ipv6_intersection_degenerate_contiguous_members() {
         let a = BiContiguous::<Ipv6Network>::from(Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap());
@@ -2138,8 +2138,8 @@ mod test {
 
     // A container that is not adjacent to what it contains in sort order (an
     // unrelated network sorts between them) is still absorbed by the
-    // containment sweep. `db8:1::/48` is dropped; the disjoint `dead::/32`
-    // survives alongside the container `db8::/32`.
+    // containment sweep. `db8:1::/48` is dropped, while the disjoint
+    // `dead::/32` survives alongside the container `db8::/32`.
     #[test]
     fn bicontiguous_ipv6_aggregate_absorbs_non_adjacent_containment() {
         let mut nets = [bc("2001:db8::/32"), bc("2001:dead::/32"), bc("2001:db8:1::/48")];
@@ -2203,7 +2203,7 @@ mod test {
     // A re-parented survivor must also low-aggregate with a native network
     // already sitting in its new exact-hi run. Two hi-prefix-48 buddies with
     // an identical single low block re-parent to hi-prefix 47 without
-    // touching their low half; a native hi-prefix-47 network at the same high
+    // touching their low half. A native hi-prefix-47 network at the same high
     // address carries an adjacent low block that is this low half's
     // lowest-mask-bit sibling, so level 47's low-half aggregation merges them
     // into one hi-prefix-47, lo-prefix-47 network.
@@ -2264,7 +2264,7 @@ mod test {
         assert_eq!(63 + 8, fast_len);
 
         // Each level's buddy pair re-parents exactly one level up, keeping its
-        // lower buddy's marker bit and empty low half; the 8 inert networks
+        // lower buddy's marker bit and empty low half. The 8 inert networks
         // never merge with anything and survive unchanged.
         let mut expected: Vec<_> = (2u8..=64)
             .map(|p| bc_from_halves(1u64 << (65 - p), bicontiguous_half_prefix_mask(p - 1), 0, 0))
@@ -2374,7 +2374,7 @@ mod test {
         // Set-equality is deliberately NOT asserted: the class-preserving
         // greedy is non-confluent. A network can be simultaneously a lo-buddy
         // of one network and contained in a coarser cross-shape ancestor of
-        // another; the fast path's Phase A merges the lo-buddy pair (widening
+        // another. The fast path's Phase A merges the lo-buddy pair (widening
         // it beyond the ancestor) before the final containment sweep, while a
         // containment-first order absorbs it instead -- two valid closed covers
         // of equal union that differ as sets. What both implementations MUST
@@ -2415,7 +2415,7 @@ mod test {
         // actually runs on. Cross-shape containment (a network strictly
         // contained in another of an unrelated hi/lo shape) is not resolved by
         // `bicontiguous_sweep` itself, so it still arises in the sweep's
-        // output on gridded input; this is not a vacuous check.
+        // output on gridded input. This is not a vacuous check.
         #[test]
         fn prop_bicontiguous_containment_probe_matches_quadratic_on_swept_input(
             nets in arb_gridded_bicontiguous_ipv6_slice_large(),
