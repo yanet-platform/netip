@@ -52,3 +52,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test
+
+  no-std:
+    name: no_std
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+      # `thumbv7em-none-eabihf` has no `std` and a 32-bit `usize`, so this one
+      # job guards both properties. It must be `build`, not `check`: the
+      # `arithmetic_overflow` lint runs during codegen, and `check` skips
+      # codegen — a shift that overflows a 32-bit `usize` passes `check` clean.
+      - run: cargo build --lib --target thumbv7em-none-eabihf
