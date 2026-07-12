@@ -73,6 +73,8 @@ fn bench_net_addrs(c: &mut Criterion) {
 }
 
 fn bench_net_addrs_count(c: &mut Criterion) {
+    use netip::Contiguous;
+
     let mut group = c.benchmark_group("netip");
 
     group.bench_function("Ipv4Network::addrs count /24", |b| {
@@ -103,6 +105,36 @@ fn bench_net_addrs_count(c: &mut Criterion) {
         );
         b.iter(|| {
             core::hint::black_box(net.addrs().count());
+        });
+    });
+
+    // The /0 networks are the counts that do not fit a `u32`/`u128`: the IPv4
+    // one is exactly `2^32`, and the IPv6 one saturates the hint.
+    group.bench_function("Ipv4Network::addrs count /0", |b| {
+        let net = Ipv4Network::parse("0.0.0.0/0").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(net).addrs().count());
+        });
+    });
+
+    group.bench_function("Contiguous<Ipv4Network>::addrs count /0", |b| {
+        let net = Contiguous::<Ipv4Network>::parse("0.0.0.0/0").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(net).addrs().count());
+        });
+    });
+
+    group.bench_function("Ipv6Network::addrs count /0", |b| {
+        let net = Ipv6Network::parse("::/0").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(net).addrs().count());
+        });
+    });
+
+    group.bench_function("Ipv4Network::addrs count non-contiguous 16 host bits", |b| {
+        let net = Ipv4Network::parse("10.0.55.0/255.0.255.0").unwrap();
+        b.iter(|| {
+            core::hint::black_box(core::hint::black_box(net).addrs().count());
         });
     });
 
