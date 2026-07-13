@@ -186,11 +186,11 @@ let mac = MacAddr::parse_ascii(b"aa-bb-cc-dd-ee-ff").unwrap();
 
 ## Roadmap
 
-`netip` is on the path to a stable 1.0. Current version: **0.3.5**.
+`netip` is on the path to a stable 1.0. Current version: **0.3.7**.
 
-- ~~**v0.3** — API cleanup, set-algebra completion, `Contiguous`/`BiContiguous` wrappers, slice aggregation, fast ASCII parsers, performance campaigns~~ ✓
-- **v0.4** — Testing hardening: fuzz targets, exhaustive non-contiguous edge cases
-- **v0.5+** — Documentation polish, API review, CHANGELOG
+- ~~**v0.3** — API cleanup, set-algebra completion, `Contiguous`/`BiContiguous` wrappers, slice aggregation, fast ASCII parsers, `no_std`, performance campaigns~~ ✓
+- **v0.4** — API freeze, the last breaking release: `#[non_exhaustive]` error types, by-value getters. Additive alongside it: non-string constructors for `Contiguous<T>`, `FusedIterator` on the iterators, `IpNetwork` method parity
+- **v0.5+** — Testing hardening and documentation: an independent oracle for the network grammar, non-contiguous coverage across every operation, declared MSRV
 - **v1.0** — Stable release
 
 ## License
