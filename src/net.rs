@@ -2235,6 +2235,16 @@ impl Ipv4NetworkDiff {
     }
 }
 
+/// Marks the calling branch as unlikely, standing in for
+/// `core::hint::cold_path()`, which needs Rust 1.95.
+///
+/// An empty `#[cold]` body is provably side-effect free, so the call itself is
+/// optimized away and only the attribute's block-placement hint survives at the
+/// call site: the cold branch costs nothing on the steps that never take it.
+#[cold]
+#[inline(never)]
+fn cold_path() {}
+
 impl Iterator for Ipv4NetworkDiff {
     type Item = Ipv4Network;
 
@@ -2264,7 +2274,7 @@ impl Iterator for Ipv4NetworkDiff {
                 // guesses. The call keeps the rescue a real branch: a
                 // conditional move would chain the scan back into every
                 // step's dependencies.
-                core::hint::cold_path();
+                cold_path();
                 b = 0x8000_0000u32 >> self.remaining.leading_zeros();
             }
         }
@@ -3957,7 +3967,7 @@ impl Iterator for Ipv6NetworkDiff {
                     // drained `remaining` down past the guesses. The call
                     // keeps the rescue a real branch: a conditional move would
                     // chain the scan back into every step's dependencies.
-                    core::hint::cold_path();
+                    cold_path();
                     b = 0x8000_0000_0000_0000u64 >> remaining.leading_zeros();
                 }
             }
@@ -3991,7 +4001,7 @@ impl Iterator for Ipv6NetworkDiff {
                     return None;
                 }
 
-                core::hint::cold_path();
+                cold_path();
                 b = 0x8000_0000_0000_0000u64 >> remaining.leading_zeros();
             }
         }
