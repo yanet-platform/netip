@@ -767,6 +767,84 @@ impl IpNetwork {
             _ => None,
         }
     }
+
+    /// Embeds this network into IPv6 address space.
+    ///
+    /// An IPv4 network is embedded as its [IPv4-mapped IPv6 address]
+    /// representation, via [`Ipv4Network::to_ipv6_mapped`]. An IPv6 network
+    /// is returned unchanged: this case is the identity, so the result is
+    /// **not** necessarily an IPv4-mapped network — any IPv6 network passes
+    /// through as-is, not only `::ffff:`-prefixed ones.
+    ///
+    /// This is useful for dual-stack comparisons: lifting both operands into
+    /// the common IPv6 space lets [`contains`](Self::contains) and
+    /// [`intersects`](Self::intersects) — which return `false` across
+    /// families on this enum — be evaluated meaningfully.
+    ///
+    /// [IPv4-mapped IPv6 address]: https://tools.ietf.org/html/rfc4291#section-2.5.5.2
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{IpNetwork, Ipv6Network};
+    ///
+    /// // IPv4 network, including a non-contiguous mask.
+    /// let net = IpNetwork::parse("192.168.0.1/255.255.0.255").unwrap();
+    /// let expected =
+    ///     Ipv6Network::parse("::ffff:c0a8:1/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ff").unwrap();
+    /// assert_eq!(expected, net.to_ipv6_mapped());
+    ///
+    /// // IPv6 network: identity, regardless of contiguity.
+    /// let net = IpNetwork::parse("2001:db8::1/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+    /// let expected = Ipv6Network::parse("2001:db8::1/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+    /// assert_eq!(expected, net.to_ipv6_mapped());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn to_ipv6_mapped(&self) -> Ipv6Network {
+        match self {
+            Self::V4(net) => net.to_ipv6_mapped(),
+            Self::V6(net) => *net,
+        }
+    }
+
+    /// Converts this network to its canonical form.
+    ///
+    /// Mirrors [`core::net::IpAddr::to_canonical`]. An IPv4 network is
+    /// returned unchanged. An IPv6 network collapses to the equivalent IPv4
+    /// network when it is IPv4-mapped (see
+    /// [`Ipv6Network::to_ipv4_mapped`]), otherwise it is returned unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::IpNetwork;
+    ///
+    /// // An IPv4-mapped IPv6 network collapses to IPv4, non-contiguous mask included.
+    /// let net = IpNetwork::parse("::ffff:c0a8:1/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ff").unwrap();
+    /// let expected = IpNetwork::parse("192.168.0.1/255.255.0.255").unwrap();
+    /// assert_eq!(expected, net.to_canonical());
+    ///
+    /// // A plain IPv6 network is unaffected.
+    /// let net = IpNetwork::parse("2001:db8::/32").unwrap();
+    /// assert_eq!(net, net.to_canonical());
+    ///
+    /// // IPv4-compatible (not IPv4-mapped) network is unaffected too.
+    /// let net = IpNetwork::parse("::c00a:2ff/128").unwrap();
+    /// assert_eq!(net, net.to_canonical());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn to_canonical(&self) -> Self {
+        match self {
+            Self::V4(..) => *self,
+            // NOTE: use `Option::map`/`unwrap_or` when they become const.
+            Self::V6(net) => match net.to_ipv4_mapped() {
+                Some(net) => Self::V4(net),
+                None => *self,
+            },
+        }
+    }
 }
 
 impl Display for IpNetwork {
@@ -4146,6 +4224,13 @@ impl Display for Ipv6Network {
 impl From<Ipv4Network> for Ipv6Network {
     #[inline]
     fn from(net: Ipv4Network) -> Self {
+        net.to_ipv6_mapped()
+    }
+}
+
+impl From<IpNetwork> for Ipv6Network {
+    #[inline]
+    fn from(net: IpNetwork) -> Self {
         net.to_ipv6_mapped()
     }
 }
@@ -9360,6 +9445,89 @@ mod test {
     }
 
     #[test]
+    fn ipnetwork_to_ipv6_mapped_v4_contiguous() {
+        let net = IpNetwork::parse("192.168.1.0/24").unwrap();
+        let expected = Ipv6Network::parse("::ffff:c0a8:100/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ff00").unwrap();
+        assert_eq!(expected, net.to_ipv6_mapped());
+    }
+
+    #[test]
+    fn ipnetwork_to_ipv6_mapped_v4_non_contiguous() {
+        let net = IpNetwork::parse("192.168.0.1/255.255.0.255").unwrap();
+        let expected = Ipv6Network::parse("::ffff:c0a8:1/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ff").unwrap();
+        assert_eq!(expected, net.to_ipv6_mapped());
+    }
+
+    #[test]
+    fn ipnetwork_to_ipv6_mapped_v6_identity_contiguous() {
+        let net = IpNetwork::parse("2001:db8::/32").unwrap();
+        let expected = Ipv6Network::parse("2001:db8::/32").unwrap();
+        assert_eq!(expected, net.to_ipv6_mapped());
+    }
+
+    #[test]
+    fn ipnetwork_to_ipv6_mapped_v6_identity_non_contiguous() {
+        let net = IpNetwork::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        let expected = Ipv6Network::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        assert_eq!(expected, net.to_ipv6_mapped());
+    }
+
+    #[test]
+    fn ipnetwork_to_canonical_v4_unchanged() {
+        let net = IpNetwork::parse("192.168.0.0/24").unwrap();
+        assert_eq!(net, net.to_canonical());
+    }
+
+    #[test]
+    fn ipnetwork_to_canonical_v6_mapped_contiguous() {
+        let net = IpNetwork::parse("::ffff:c0a8:100/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ff00").unwrap();
+        let expected = IpNetwork::parse("192.168.1.0/24").unwrap();
+        assert_eq!(expected, net.to_canonical());
+    }
+
+    #[test]
+    fn ipnetwork_to_canonical_v6_mapped_non_contiguous() {
+        let net = IpNetwork::parse("::ffff:c0a8:1/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ff").unwrap();
+        let expected = IpNetwork::parse("192.168.0.1/255.255.0.255").unwrap();
+        assert_eq!(expected, net.to_canonical());
+    }
+
+    #[test]
+    fn ipnetwork_to_canonical_v6_non_mapped_unchanged() {
+        let net = IpNetwork::parse("2001:db8::/32").unwrap();
+        assert_eq!(net, net.to_canonical());
+    }
+
+    #[test]
+    fn ipnetwork_to_canonical_v6_ipv4_compatible_not_mapped_unchanged() {
+        // IPv4-compatible (RFC 4291 2.5.5.1), not IPv4-mapped: no `::ffff` prefix.
+        let net = IpNetwork::parse("::c00a:2ff/128").unwrap();
+        assert_eq!(net, net.to_canonical());
+    }
+
+    #[test]
+    fn ipnetwork_to_canonical_v6_address_ffff_prefix_mask_not_pinned_unchanged() {
+        // Address matches the `::ffff` pattern, but the mask does not pin the
+        // top 96 bits, so collapsing to IPv4 would lose addresses.
+        let net = IpNetwork::parse("::ffff:c0a8:1/0:ffff:ffff:ffff:ffff:ffff:ffff:ffff").unwrap();
+        assert_eq!(net, net.to_canonical());
+    }
+
+    #[test]
+    fn ipnetwork_from_for_ipv6network_v4() {
+        let net = IpNetwork::parse("192.168.1.0/24").unwrap();
+        let expected = Ipv6Network::parse("::ffff:c0a8:100/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ff00").unwrap();
+        assert_eq!(expected, Ipv6Network::from(net));
+    }
+
+    #[test]
+    fn ipnetwork_from_for_ipv6network_v6() {
+        let net = IpNetwork::parse("2001:db8::/32").unwrap();
+        let expected = Ipv6Network::parse("2001:db8::/32").unwrap();
+        assert_eq!(expected, Ipv6Network::from(net));
+    }
+
+    #[test]
     fn ipv4_prefix_edge_masks() {
         assert_eq!(Some(0), Ipv4Network::parse("0.0.0.0/0").unwrap().prefix());
         assert_eq!(Some(1), Ipv4Network::parse("128.0.0.0/1").unwrap().prefix());
@@ -10934,6 +11102,61 @@ mod test {
             let recovered = recovered.unwrap();
             let (addr, mask) = (recovered.addr().to_bits(), recovered.mask().to_bits());
             prop_assert_eq!(addr & mask, addr, "net4={}, mapped={}", net4, mapped);
+        }
+
+        #[test]
+        fn ipnetwork_to_ipv6_mapped_v4_matches_inner(net4 in arb_ipv4_network()) {
+            let ip_net = IpNetwork::V4(net4);
+            prop_assert_eq!(net4.to_ipv6_mapped(), ip_net.to_ipv6_mapped());
+        }
+
+        #[test]
+        fn ipnetwork_to_ipv6_mapped_v6_is_identity(net6 in arb_ipv6_network()) {
+            let ip_net = IpNetwork::V6(net6);
+            prop_assert_eq!(net6, ip_net.to_ipv6_mapped());
+        }
+
+        #[test]
+        fn ipnetwork_to_canonical_idempotent_v4(net4 in arb_ipv4_network()) {
+            let canonical = IpNetwork::V4(net4).to_canonical();
+            prop_assert_eq!(canonical, canonical.to_canonical());
+        }
+
+        #[test]
+        fn ipnetwork_to_canonical_idempotent_v6(net6 in arb_ipv6_network()) {
+            let canonical = IpNetwork::V6(net6).to_canonical();
+            prop_assert_eq!(canonical, canonical.to_canonical());
+        }
+
+        #[test]
+        fn ipnetwork_to_canonical_preserves_ipv6_embedding_v4(net4 in arb_ipv4_network()) {
+            let ip_net = IpNetwork::V4(net4);
+            prop_assert_eq!(ip_net.to_ipv6_mapped(), ip_net.to_canonical().to_ipv6_mapped());
+        }
+
+        #[test]
+        fn ipnetwork_to_canonical_preserves_ipv6_embedding_v6(net6 in arb_ipv6_network()) {
+            let ip_net = IpNetwork::V6(net6);
+            prop_assert_eq!(ip_net.to_ipv6_mapped(), ip_net.to_canonical().to_ipv6_mapped());
+        }
+
+        #[test]
+        fn ipnetwork_v4_to_ipv6_mapped_to_canonical_roundtrip(net4 in arb_ipv4_network()) {
+            let ip_net = IpNetwork::V4(net4);
+            let roundtrip = IpNetwork::from(ip_net.to_ipv6_mapped()).to_canonical();
+            prop_assert_eq!(ip_net, roundtrip);
+        }
+
+        // The motivating use case for `to_ipv6_mapped`: lifting IPv4 networks into
+        // IPv6 space must preserve `contains`/`intersects` for dual-stack comparisons.
+        #[test]
+        fn prop_ipv4_to_ipv6_mapped_preserves_contains(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+            prop_assert_eq!(a.contains(&b), a.to_ipv6_mapped().contains(&b.to_ipv6_mapped()));
+        }
+
+        #[test]
+        fn prop_ipv4_to_ipv6_mapped_preserves_intersects(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+            prop_assert_eq!(a.intersects(&b), a.to_ipv6_mapped().intersects(&b.to_ipv6_mapped()));
         }
     }
 
