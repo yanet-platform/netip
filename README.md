@@ -193,7 +193,7 @@ Raising the MSRV is treated as a breaking change: it ships in a minor version bu
 
 ## Roadmap
 
-`netip` is on the path to a stable 1.0. Current version: **0.3.7**.
+`netip` is on the path to a stable 1.0. Current version: **0.3.8**.
 
 - ~~**v0.3** — API cleanup, set-algebra completion, `Contiguous`/`BiContiguous` wrappers, slice aggregation, fast ASCII parsers, `no_std`, performance campaigns~~ ✓
 - **v0.4** — API freeze, the last breaking release: `#[non_exhaustive]` error types, by-value getters. Additive alongside it: non-string constructors for `Contiguous<T>`, `FusedIterator` on the iterators, `IpNetwork` method parity
