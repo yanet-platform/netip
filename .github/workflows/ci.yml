@@ -23,6 +23,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check
 
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+      # The MSRV is a promise about the library, so this checks `--lib` only:
+      # tests and benches pull in dev-dependencies, which track their own,
+      # newer minimum toolchain. Keep the pinned version in sync with
+      # `rust-version` in `Cargo.toml`.
+      - run: cargo check --lib --locked
+
   fmt:
     name: Format
     runs-on: ubuntu-latest
