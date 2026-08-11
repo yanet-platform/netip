@@ -9,6 +9,7 @@
 use core::{
     cmp::Ordering,
     convert::TryFrom,
+    error::Error,
     fmt::{Debug, Display, Formatter},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     ops::{BitAnd, BitOr, BitOrAssign, BitXor, Not, Range},
@@ -37,6 +38,8 @@ impl Display for CidrOverflowError {
         write!(fmt, "invalid CIDR: {from} must be <= {to}")
     }
 }
+
+impl Error for CidrOverflowError {}
 
 /// Returns an [`Ipv4Addr`] that will have exact `cidr` leading bits set to
 /// one.
@@ -7443,6 +7446,28 @@ mod test {
             IpNetParseError::CidrOverflow(CidrOverflowError(129, 128)),
             IpNetwork::parse("::/129").unwrap_err(),
         );
+    }
+
+    #[test]
+    fn cidr_overflow_error_display_v4() {
+        let err = Ipv4Network::try_from((Ipv4Addr::new(10, 0, 0, 0), 33)).unwrap_err();
+        assert_eq!("invalid CIDR: 33 must be <= 32", format!("{err}"));
+    }
+
+    #[test]
+    fn cidr_overflow_error_display_v6() {
+        let err = Ipv6Network::try_from((Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 0, 0, 0, 0, 0), 129)).unwrap_err();
+        assert_eq!("invalid CIDR: 129 must be <= 128", format!("{err}"));
+    }
+
+    #[test]
+    fn cidr_overflow_error_implements_error() {
+        fn assert_error<E: Error>() {}
+        assert_error::<CidrOverflowError>();
+
+        let err = Ipv4Network::try_from((Ipv4Addr::new(10, 0, 0, 0), 33)).unwrap_err();
+        let boxed: Box<dyn Error> = Box::new(err);
+        assert_eq!("invalid CIDR: 33 must be <= 32", boxed.to_string());
     }
 
     #[test]
