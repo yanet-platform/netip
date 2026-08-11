@@ -6,12 +6,12 @@
 use core::{
     error::Error,
     fmt::{Display, Formatter},
-    net::{Ipv4Addr, Ipv6Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     ops::Deref,
     str::FromStr,
 };
 
-use super::{IpNetParseError, IpNetwork, Ipv4Network, Ipv6Network};
+use super::{CidrOverflowError, IpNetParseError, IpNetwork, Ipv4Network, Ipv6Network};
 
 /// An error that occurs when parsing a contiguous IP network.
 #[derive(Debug, PartialEq)]
@@ -707,6 +707,95 @@ impl From<Contiguous<Ipv6Network>> for Contiguous<IpNetwork> {
     }
 }
 
+impl TryFrom<(Ipv4Addr, u8)> for Contiguous<Ipv4Network> {
+    type Error = CidrOverflowError;
+
+    /// Builds a [`Contiguous<Ipv4Network>`] from an address and prefix
+    /// length.
+    ///
+    /// A mask built from a prefix length is contiguous by construction, so
+    /// the contiguity check [`Contiguous::<Ipv4Network>::parse`] performs is
+    /// unnecessary here — this only propagates the overflow error a prefix
+    /// past 32 already produces.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv4Addr;
+    ///
+    /// use netip::{Contiguous, Ipv4Network};
+    ///
+    /// let addr = Ipv4Addr::new(192, 168, 1, 5);
+    /// let net = Contiguous::<Ipv4Network>::try_from((addr, 24)).unwrap();
+    /// assert_eq!(24, net.prefix());
+    ///
+    /// assert!(Contiguous::<Ipv4Network>::try_from((addr, 33)).is_err());
+    /// ```
+    #[inline]
+    fn try_from((addr, cidr): (Ipv4Addr, u8)) -> Result<Self, Self::Error> {
+        Ok(Self(Ipv4Network::try_from((addr, cidr))?))
+    }
+}
+
+impl TryFrom<(Ipv6Addr, u8)> for Contiguous<Ipv6Network> {
+    type Error = CidrOverflowError;
+
+    /// Builds a [`Contiguous<Ipv6Network>`] from an address and prefix
+    /// length.
+    ///
+    /// A mask built from a prefix length is contiguous by construction, so
+    /// the contiguity check [`Contiguous::<Ipv6Network>::parse`] performs is
+    /// unnecessary here — this only propagates the overflow error a prefix
+    /// past 128 already produces.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::{Contiguous, Ipv6Network};
+    ///
+    /// let addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+    /// let net = Contiguous::<Ipv6Network>::try_from((addr, 64)).unwrap();
+    /// assert_eq!(64, net.prefix());
+    ///
+    /// assert!(Contiguous::<Ipv6Network>::try_from((addr, 129)).is_err());
+    /// ```
+    #[inline]
+    fn try_from((addr, cidr): (Ipv6Addr, u8)) -> Result<Self, Self::Error> {
+        Ok(Self(Ipv6Network::try_from((addr, cidr))?))
+    }
+}
+
+impl TryFrom<(IpAddr, u8)> for Contiguous<IpNetwork> {
+    type Error = CidrOverflowError;
+
+    /// Builds a [`Contiguous<IpNetwork>`] from an address and prefix length.
+    ///
+    /// A mask built from a prefix length is contiguous by construction, so
+    /// the contiguity check [`Contiguous::<IpNetwork>::parse`] performs is
+    /// unnecessary here — this only propagates the overflow error the
+    /// per-family prefix bound already produces.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::{IpAddr, Ipv4Addr};
+    ///
+    /// use netip::{Contiguous, IpNetwork};
+    ///
+    /// let addr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5));
+    /// let net = Contiguous::<IpNetwork>::try_from((addr, 24)).unwrap();
+    /// assert_eq!(24, net.prefix());
+    ///
+    /// assert!(Contiguous::<IpNetwork>::try_from((addr, 33)).is_err());
+    /// ```
+    #[inline]
+    fn try_from((addr, cidr): (IpAddr, u8)) -> Result<Self, Self::Error> {
+        Ok(Self(IpNetwork::try_from((addr, cidr))?))
+    }
+}
+
 impl<T> Deref for Contiguous<T> {
     type Target = T;
 
@@ -1332,6 +1421,147 @@ mod test {
 
         assert!(!net_v6.contains(&net_v4));
         assert_eq!(net_v6.contains(&net_v4), (*net_v6).contains(&net_v4));
+    }
+
+    // Non-contiguous-mask coverage does not apply to the `*_tryfrom_*` tests
+    // in this file: a prefix length can only ever produce a contiguous mask,
+    // so there is no non-contiguous input to construct.
+
+    #[test]
+    fn contiguous_ipv4_tryfrom_addr_cidr() {
+        let addr = Ipv4Addr::new(192, 168, 1, 5);
+        let expected = Contiguous(Ipv4Network::new(
+            Ipv4Addr::new(192, 168, 1, 0),
+            Ipv4Addr::new(255, 255, 255, 0),
+        ));
+        assert_eq!(expected, Contiguous::<Ipv4Network>::try_from((addr, 24)).unwrap());
+    }
+
+    #[test]
+    fn contiguous_ipv4_tryfrom_addr_cidr_boundaries() {
+        let addr = Ipv4Addr::new(192, 168, 1, 5);
+
+        let host = Contiguous(Ipv4Network::new(addr, Ipv4Addr::new(255, 255, 255, 255)));
+        assert_eq!(host, Contiguous::<Ipv4Network>::try_from((addr, 32)).unwrap());
+
+        let unspecified = Contiguous(Ipv4Network::new(Ipv4Addr::UNSPECIFIED, Ipv4Addr::UNSPECIFIED));
+        assert_eq!(unspecified, Contiguous::<Ipv4Network>::try_from((addr, 0)).unwrap());
+    }
+
+    #[test]
+    fn contiguous_ipv4_tryfrom_addr_cidr_overflow() {
+        let addr = Ipv4Addr::new(192, 168, 1, 5);
+        assert_eq!(
+            CidrOverflowError(33, 32),
+            Contiguous::<Ipv4Network>::try_from((addr, 33)).unwrap_err()
+        );
+    }
+
+    #[test]
+    fn contiguous_ipv6_tryfrom_addr_cidr() {
+        let addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        let expected = Contiguous(Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0, 0, 0, 0),
+        ));
+        assert_eq!(expected, Contiguous::<Ipv6Network>::try_from((addr, 64)).unwrap());
+    }
+
+    #[test]
+    fn contiguous_ipv6_tryfrom_addr_cidr_boundaries() {
+        let addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+
+        let host = Contiguous(Ipv6Network::new(
+            addr,
+            Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff),
+        ));
+        assert_eq!(host, Contiguous::<Ipv6Network>::try_from((addr, 128)).unwrap());
+
+        let unspecified = Contiguous(Ipv6Network::new(Ipv6Addr::UNSPECIFIED, Ipv6Addr::UNSPECIFIED));
+        assert_eq!(unspecified, Contiguous::<Ipv6Network>::try_from((addr, 0)).unwrap());
+    }
+
+    #[test]
+    fn contiguous_ipv6_tryfrom_addr_cidr_overflow() {
+        let addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        assert_eq!(
+            CidrOverflowError(129, 128),
+            Contiguous::<Ipv6Network>::try_from((addr, 129)).unwrap_err()
+        );
+    }
+
+    #[test]
+    fn contiguous_ip_tryfrom_ipaddr_cidr_v4() {
+        let addr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5));
+        let expected = Contiguous(IpNetwork::V4(Ipv4Network::new(
+            Ipv4Addr::new(192, 168, 1, 0),
+            Ipv4Addr::new(255, 255, 255, 0),
+        )));
+        assert_eq!(expected, Contiguous::<IpNetwork>::try_from((addr, 24)).unwrap());
+    }
+
+    #[test]
+    fn contiguous_ip_tryfrom_ipaddr_cidr_v6() {
+        let addr = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+        let expected = Contiguous(IpNetwork::V6(Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0, 0, 0, 0),
+        )));
+        assert_eq!(expected, Contiguous::<IpNetwork>::try_from((addr, 64)).unwrap());
+    }
+
+    #[test]
+    fn contiguous_ip_tryfrom_ipaddr_cidr_boundaries_v4() {
+        let inner = Ipv4Addr::new(192, 168, 1, 5);
+        let addr = IpAddr::V4(inner);
+
+        let host = Contiguous(IpNetwork::V4(Ipv4Network::new(
+            inner,
+            Ipv4Addr::new(255, 255, 255, 255),
+        )));
+        assert_eq!(host, Contiguous::<IpNetwork>::try_from((addr, 32)).unwrap());
+
+        let unspecified = Contiguous(IpNetwork::V4(Ipv4Network::new(
+            Ipv4Addr::UNSPECIFIED,
+            Ipv4Addr::UNSPECIFIED,
+        )));
+        assert_eq!(unspecified, Contiguous::<IpNetwork>::try_from((addr, 0)).unwrap());
+    }
+
+    #[test]
+    fn contiguous_ip_tryfrom_ipaddr_cidr_boundaries_v6() {
+        let inner = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        let addr = IpAddr::V6(inner);
+
+        let host = Contiguous(IpNetwork::V6(Ipv6Network::new(
+            inner,
+            Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff),
+        )));
+        assert_eq!(host, Contiguous::<IpNetwork>::try_from((addr, 128)).unwrap());
+
+        let unspecified = Contiguous(IpNetwork::V6(Ipv6Network::new(
+            Ipv6Addr::UNSPECIFIED,
+            Ipv6Addr::UNSPECIFIED,
+        )));
+        assert_eq!(unspecified, Contiguous::<IpNetwork>::try_from((addr, 0)).unwrap());
+    }
+
+    #[test]
+    fn contiguous_ip_tryfrom_ipaddr_cidr_overflow_v4() {
+        let addr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5));
+        assert_eq!(
+            CidrOverflowError(33, 32),
+            Contiguous::<IpNetwork>::try_from((addr, 33)).unwrap_err()
+        );
+    }
+
+    #[test]
+    fn contiguous_ip_tryfrom_ipaddr_cidr_overflow_v6() {
+        let addr = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+        assert_eq!(
+            CidrOverflowError(129, 128),
+            Contiguous::<IpNetwork>::try_from((addr, 129)).unwrap_err()
+        );
     }
 
     // Classic fixpoint CIDR aggregation, used as an independent oracle for
@@ -1969,6 +2199,54 @@ mod test {
             b in arb_contiguous_ip_network(),
         ) {
             prop_assert_eq!(a.contains(&b), (*a).contains(&b));
+        }
+
+        #[test]
+        fn prop_contiguous_ipv4_tryfrom_matches_typed(addr in any::<u32>(), cidr in 0u8..=33) {
+            let addr = Ipv4Addr::from_bits(addr);
+            let result = Contiguous::<Ipv4Network>::try_from((addr, cidr));
+
+            prop_assert_eq!(result.is_ok(), cidr <= 32);
+            if let Ok(net) = result {
+                prop_assert_eq!(cidr, net.prefix());
+                prop_assert!((*net).is_contiguous());
+            }
+        }
+
+        #[test]
+        fn prop_contiguous_ipv6_tryfrom_matches_typed(addr in any::<u128>(), cidr in 0u8..=129) {
+            let addr = Ipv6Addr::from_bits(addr);
+            let result = Contiguous::<Ipv6Network>::try_from((addr, cidr));
+
+            prop_assert_eq!(result.is_ok(), cidr <= 128);
+            if let Ok(net) = result {
+                prop_assert_eq!(cidr, net.prefix());
+                prop_assert!((*net).is_contiguous());
+            }
+        }
+
+        #[test]
+        fn prop_contiguous_ip_tryfrom_matches_typed_v4(addr in any::<u32>(), cidr in 0u8..=33) {
+            let addr = IpAddr::V4(Ipv4Addr::from_bits(addr));
+            let result = Contiguous::<IpNetwork>::try_from((addr, cidr));
+
+            prop_assert_eq!(result.is_ok(), cidr <= 32);
+            if let Ok(net) = result {
+                prop_assert_eq!(cidr, net.prefix());
+                prop_assert!((*net).is_contiguous());
+            }
+        }
+
+        #[test]
+        fn prop_contiguous_ip_tryfrom_matches_typed_v6(addr in any::<u128>(), cidr in 0u8..=129) {
+            let addr = IpAddr::V6(Ipv6Addr::from_bits(addr));
+            let result = Contiguous::<IpNetwork>::try_from((addr, cidr));
+
+            prop_assert_eq!(result.is_ok(), cidr <= 128);
+            if let Ok(net) = result {
+                prop_assert_eq!(cidr, net.prefix());
+                prop_assert!((*net).is_contiguous());
+            }
         }
 
         #[test]

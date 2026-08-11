@@ -929,6 +929,18 @@ impl From<IpAddr> for IpNetwork {
     }
 }
 
+impl TryFrom<(IpAddr, u8)> for IpNetwork {
+    type Error = CidrOverflowError;
+
+    #[inline]
+    fn try_from((addr, cidr): (IpAddr, u8)) -> Result<Self, Self::Error> {
+        match addr {
+            IpAddr::V4(addr) => Self::try_from((addr, cidr)),
+            IpAddr::V6(addr) => Self::try_from((addr, cidr)),
+        }
+    }
+}
+
 impl FromStr for IpNetwork {
     type Err = IpNetParseError;
 
@@ -9444,6 +9456,69 @@ mod test {
     }
 
     #[test]
+    fn ipnetwork_tryfrom_ipaddr_cidr_v4() {
+        let addr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5));
+        let expected = IpNetwork::V4(Ipv4Network::new(
+            Ipv4Addr::new(192, 168, 1, 0),
+            Ipv4Addr::new(255, 255, 255, 0),
+        ));
+        assert_eq!(expected, IpNetwork::try_from((addr, 24)).unwrap());
+    }
+
+    #[test]
+    fn ipnetwork_tryfrom_ipaddr_cidr_v6() {
+        let addr = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+        let expected = IpNetwork::V6(Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0, 0, 0, 0),
+        ));
+        assert_eq!(expected, IpNetwork::try_from((addr, 64)).unwrap());
+    }
+
+    #[test]
+    fn ipnetwork_tryfrom_ipaddr_cidr_boundaries_v4() {
+        let addr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5));
+
+        let host = IpNetwork::V4(Ipv4Network::new(
+            Ipv4Addr::new(192, 168, 1, 5),
+            Ipv4Addr::new(255, 255, 255, 255),
+        ));
+        assert_eq!(host, IpNetwork::try_from((addr, 32)).unwrap());
+
+        let unspecified = IpNetwork::V4(Ipv4Network::new(Ipv4Addr::UNSPECIFIED, Ipv4Addr::UNSPECIFIED));
+        assert_eq!(unspecified, IpNetwork::try_from((addr, 0)).unwrap());
+    }
+
+    #[test]
+    fn ipnetwork_tryfrom_ipaddr_cidr_boundaries_v6() {
+        let addr = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+
+        let host = IpNetwork::V6(Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff),
+        ));
+        assert_eq!(host, IpNetwork::try_from((addr, 128)).unwrap());
+
+        let unspecified = IpNetwork::V6(Ipv6Network::new(Ipv6Addr::UNSPECIFIED, Ipv6Addr::UNSPECIFIED));
+        assert_eq!(unspecified, IpNetwork::try_from((addr, 0)).unwrap());
+    }
+
+    #[test]
+    fn ipnetwork_tryfrom_ipaddr_cidr_overflow_v4() {
+        let addr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5));
+        assert_eq!(CidrOverflowError(33, 32), IpNetwork::try_from((addr, 33)).unwrap_err());
+    }
+
+    #[test]
+    fn ipnetwork_tryfrom_ipaddr_cidr_overflow_v6() {
+        let addr = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+        assert_eq!(
+            CidrOverflowError(129, 128),
+            IpNetwork::try_from((addr, 129)).unwrap_err()
+        );
+    }
+
+    #[test]
     fn ipv4_network_to_contiguous_const_fn() {
         const NET: Ipv4Network = Ipv4Network::new(Ipv4Addr::new(192, 168, 0, 1), Ipv4Addr::new(255, 255, 0, 255));
         const CONTIGUOUS: Ipv4Network = NET.to_contiguous();
@@ -9724,6 +9799,26 @@ mod test {
             let mask = ipv6_mask_from_cidr(cidr).unwrap();
             let net = Ipv6Network::new(Ipv6Addr::from_bits(addr), mask);
             prop_assert_eq!(Some(cidr), net.prefix());
+        }
+
+        // The cidr range extends one past each family's valid maximum (33/129)
+        // so the delegation is compared across the whole range, overflow
+        // included. Random sampling does not guarantee hitting that exact
+        // boundary every run, especially on the wide v6 draw;
+        // `ipnetwork_tryfrom_ipaddr_cidr_overflow_v4`/`_v6` own the exact
+        // boundary deterministically.
+        #[test]
+        fn ipnetwork_tryfrom_ipaddr_cidr_matches_typed_v4(addr in any::<u32>(), cidr in 0u8..=33) {
+            let addr = Ipv4Addr::from_bits(addr);
+            let expected = Ipv4Network::try_from((addr, cidr)).map(IpNetwork::V4);
+            prop_assert_eq!(expected, IpNetwork::try_from((IpAddr::V4(addr), cidr)));
+        }
+
+        #[test]
+        fn ipnetwork_tryfrom_ipaddr_cidr_matches_typed_v6(addr in any::<u128>(), cidr in 0u8..=129) {
+            let addr = Ipv6Addr::from_bits(addr);
+            let expected = Ipv6Network::try_from((addr, cidr)).map(IpNetwork::V6);
+            prop_assert_eq!(expected, IpNetwork::try_from((IpAddr::V6(addr), cidr)));
         }
 
         #[test]
