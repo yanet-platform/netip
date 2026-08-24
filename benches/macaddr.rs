@@ -1,4 +1,4 @@
-use std::fmt::Write;
+use core::fmt::Write;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use netip::MacAddr;
