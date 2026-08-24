@@ -12,6 +12,9 @@ keywords = ["ip", "ipv4", "ipv6", "cidr", "subnet"]
 categories = ["network-programming", "data-structures", "no-std", "no-std::no-alloc"]
 exclude = ["book/", ".github/"]
 
+[lints.clippy]
+std_instead_of_core = "deny"
+
 [dependencies]
 
 [dev-dependencies]
