@@ -1,4 +1,4 @@
-import Netip.Impl.Basic
+import Netip.Impl.BiContiguous
 
 /-!
 # `merge` and `merge_by_lowest_mask_bit`
@@ -7,11 +7,15 @@ import Netip.Impl.Basic
 code at both widths), transcribed branch for branch.
 
 Proved, for every input of the width:
-* every `Some` that `merge` returns is normalized and is exactly the union of the
-  two inputs;
+* Every `Some` that `merge` returns is normalized and is exactly the union of the
+  two inputs.
 * `merge_by_lowest_mask_bit` returns `Some` only where `merge` returns the same
-  value, its result is normalized (the `NOTE` on `a1 & a2`), and it keeps
-  contiguous inputs contiguous, which `ipv*_aggregate_contiguous` relies on.
+  value, and its result is normalized (the `NOTE` on `a1 & a2`).
+* Its result mask is an input mask or one with the lowest set bit cleared, which
+  never adds a run of ones: contiguous inputs stay contiguous
+  (`ipv*_aggregate_contiguous` relies on it) and bi-contiguous inputs stay
+  bi-contiguous (`ipv6_aggregate_bicontiguous` relies on it), while a
+  non-contiguous pair can land in the contiguous class.
 
 Still open: the other half of `merge`'s documentation, "`Some(N)` iff the union
 is exactly representable as a single network". It needs a counting argument
@@ -36,7 +40,7 @@ def merge (a1 m1 a2 m2 : BitVec w) : Option (BitVec w × BitVec w) :=
     if a2 &&& m1 = a1 then some (a1, m1) else none
   else none
 
-/-- `merge_by_lowest_mask_bit` on `(addr, mask)` bit patterns; the sibling test is
+/-- `merge_by_lowest_mask_bit` on `(addr, mask)` bit patterns. The sibling test is
 `ipv*_adjacent_by_lowest_mask_bit`, the containment tests are `contains`. -/
 def mergeByLowestMaskBit (a1 m1 a2 m2 : BitVec w) : Option (BitVec w × BitVec w) :=
   if m1 = m2 then
@@ -46,6 +50,32 @@ def mergeByLowestMaskBit (a1 m1 a2 m2 : BitVec w) : Option (BitVec w × BitVec w
   else if a2 &&& m1 = a1 ∧ m2 &&& m1 = m1 then some (a1, m1)
   else if a1 &&& m2 = a2 ∧ m1 &&& m2 = m2 then some (a2, m2)
   else none
+
+/-- The mask `merge_by_lowest_mask_bit` returns is one of the input masks, or the
+shared mask with its lowest set bit cleared. -/
+theorem mergeByLowestMaskBit_mask {a1 m1 a2 m2 a m : BitVec w}
+    (h : mergeByLowestMaskBit a1 m1 a2 m2 = some (a, m)) :
+    m = m1 ∨ m = m2 ∨ (m1 = m2 ∧ m = m1 &&& (m1 - 1)) := by
+  unfold mergeByLowestMaskBit at h
+  split at h
+  · rename_i hm
+    split at h
+    · simp only [Option.some.injEq, Prod.mk.injEq] at h
+      exact Or.inl h.2.symm
+    · split at h
+      · simp only [Option.some.injEq, Prod.mk.injEq] at h
+        exact Or.inr (Or.inr ⟨hm, h.2.symm⟩)
+      · simp at h
+  · split at h
+    · simp only [Option.some.injEq, Prod.mk.injEq] at h
+      exact Or.inl h.2.symm
+    · split at h
+      · simp only [Option.some.injEq, Prod.mk.injEq] at h
+        exact Or.inr (Or.inl h.2.symm)
+      · simp at h
+
+/-- The lowest bit of every run of ones in `m`. Their number is the number of runs. -/
+def runStarts (m : BitVec w) : BitVec w := m &&& ~~~(m <<< 1)
 
 namespace Ipv4
 
@@ -171,6 +201,21 @@ theorem mergeByLowestMaskBit_contiguous {a1 m1 a2 m2 a m : BitVec 32}
         exact c2
       · rw [ite_eq_right hc'] at h
         simp at h
+
+theorem clearLowest_runs_le (m : BitVec 32) :
+    (runStarts (m &&& (m - 1))).cpop ≤ (runStarts m).cpop := by
+  unfold runStarts
+  bv_decide
+
+/-- The example in the documentation: two non-contiguous networks whose
+lowest-mask-bit merge is the contiguous `10.0.0.0/30`. -/
+theorem mergeByLowestMaskBit_tightens :
+    ¬ IsContiguous 0xFFFFFFFD#32 ∧
+    mergeByLowestMaskBit 0x0A000000#32 0xFFFFFFFD#32 0x0A000001#32 0xFFFFFFFD#32 =
+      some (0x0A000000#32, 0xFFFFFFFC#32) ∧
+    IsContiguous 0xFFFFFFFC#32 := by
+  unfold IsContiguous
+  decide
 
 end Ipv4
 
@@ -298,6 +343,20 @@ theorem mergeByLowestMaskBit_contiguous {a1 m1 a2 m2 a m : BitVec 128}
         exact c2
       · rw [ite_eq_right hc'] at h
         simp at h
+
+theorem clearLowest_runs_le (m : BitVec 128) :
+    (runStarts (m &&& (m - 1))).cpop ≤ (runStarts m).cpop := by
+  unfold runStarts
+  bv_decide
+
+theorem mergeByLowestMaskBit_biContiguous {a1 m1 a2 m2 a m : BitVec 128}
+    (c1 : IsBiContiguous m1) (c2 : IsBiContiguous m2)
+    (h : mergeByLowestMaskBit a1 m1 a2 m2 = some (a, m)) : IsBiContiguous m := by
+  rcases mergeByLowestMaskBit_mask h with rfl | rfl | ⟨_, rfl⟩
+  · exact c1
+  · exact c2
+  · unfold IsBiContiguous at *
+    bv_decide
 
 end Ipv6
 
