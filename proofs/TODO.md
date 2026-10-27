@@ -14,7 +14,3 @@ Parsers and formatting are out of scope. Remove an entry once its proof lands.
   bi-contiguous, and no output contains another, is a lowest-mask-bit sibling of
   another, or is a high-half buddy of another with an equal low-half set. This
   includes the level-sweep invariants and the containment probe.
-- [ ] `ipv4_binary_split`, `ipv6_binary_split`: the linear and quadratic
-  candidate searches return the same network (the kill-word identity and the
-  counter-based sliding OR), and the candidate contains a whole window, so the
-  block holds at least half of the slice. Gathering the block is proved.
