@@ -13,8 +13,8 @@ untouched and contain none accepted, the block holds exactly the accepted
 networks of the rest, and the remaining networks follow in their original order
 (`splitBlock_spec`).
 
-Not proved here: that the candidate search of the quadratic and the linear
-implementation agree, and that the candidate contains a whole window.
+The candidate search, the agreement of the quadratic and the linear search, and
+the size of the block are in `BinarySplitSearch`.
 -/
 
 namespace Netip.Impl
