@@ -8,12 +8,6 @@ Parsers and formatting are out of scope. Remove an entry once its proof lands.
 - [ ] `IpNetwork`: every method agrees with the per-family one and handles
   mixed families as documented. `to_ipv6_mapped` and `to_canonical` are proved.
 
-## Iterators (`src/net.rs`, `src/net/contiguous.rs`, `src/net/bicontiguous.rs`)
-
-- [ ] `BiContiguousIpv6Addrs`: `base | (i & lo_mask) | ((i >> split_shift) << 64)`
-  is the `i`-th member in host-index order, strictly increasing, and the same
-  sequence as the general iterator, plus the sentinel and `size_hint`.
-
 ## Slice algorithms
 
 - [ ] `ipv6_aggregate_bicontiguous`: the union is preserved, every output is
