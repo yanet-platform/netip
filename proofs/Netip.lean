@@ -4,6 +4,7 @@ import Netip.Uniqueness
 import Netip.Intersection
 import Netip.Laminar
 import Netip.Interval
+import Netip.HostIndex
 import Netip.Impl.Basic
 import Netip.Impl.IsContiguous
 import Netip.Impl.BiContiguous
