@@ -28,7 +28,7 @@ use core::{
 ///
 /// # Parsing
 ///
-/// Three formats are supported via [`FromStr`] and [`MacAddr::parse_ascii`]:
+/// Two formats are supported via [`FromStr`] and [`MacAddr::parse_ascii`]:
 ///
 /// | Format           | Example             |
 /// |------------------|---------------------|
