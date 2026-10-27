@@ -10,6 +10,9 @@ import Netip.Impl.BiContiguous
 import Netip.Impl.Contiguous
 import Netip.Impl.SetOps
 import Netip.Impl.Merge
+import Netip.Impl.Adjacent
+import Netip.Impl.Supernet
+import Netip.Impl.Conversions
 import Netip.Impl.Addrs
 import Netip.Impl.Difference
 import Netip.Impl.Ord
