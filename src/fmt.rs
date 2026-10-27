@@ -1,8 +1,48 @@
 //! Alternative formatting adapters for network types.
 
-use core::fmt::{Display, Formatter};
+use core::{
+    fmt::{self, Display, Formatter, Write},
+    str,
+};
 
 use crate::net::{IpNetwork, Ipv4Network, Ipv6Network};
+
+/// The longest text a network's [`Display`] writes: an IPv6 address and an
+/// explicit IPv6 mask, both with no zero group to compress.
+const LONGEST_NETWORK: &str = "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
+
+/// A stack buffer that a network's text is written to before
+/// [`Formatter::pad`] applies the width, fill, alignment and precision to it
+/// as a whole, the way `core` displays addresses.
+pub(crate) struct DisplayBuffer {
+    buf: [u8; LONGEST_NETWORK.len()],
+    len: usize,
+}
+
+impl DisplayBuffer {
+    #[inline]
+    pub(crate) const fn new() -> Self {
+        Self {
+            buf: [0; LONGEST_NETWORK.len()],
+            len: 0,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn as_str(&self) -> &str {
+        str::from_utf8(&self.buf[..self.len]).expect("buffer holds only whole `str` writes, always valid UTF-8")
+    }
+}
+
+impl Write for DisplayBuffer {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let end = self.len + s.len();
+        let dst = self.buf.get_mut(self.len..end).ok_or(fmt::Error)?;
+        dst.copy_from_slice(s.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
 
 /// Displays a network using the **compact** representation:
 ///
@@ -37,9 +77,8 @@ impl Display for Compact<Ipv4Network> {
         let Self(net) = self;
         match net.prefix() {
             Some(32) => Display::fmt(net.addr(), fmt),
-            Some(prefix) => fmt.write_fmt(format_args!("{}/{}", net.addr(), prefix)),
-            // This is a non-contiguous network, expand the mask.
-            None => fmt.write_fmt(format_args!("{}/{}", net.addr(), net.mask())),
+            // Every other network reads the same as in the base `Display`.
+            _ => Display::fmt(net, fmt),
         }
     }
 }
@@ -49,9 +88,8 @@ impl Display for Compact<Ipv6Network> {
         let Self(net) = self;
         match net.prefix() {
             Some(128) => Display::fmt(net.addr(), fmt),
-            Some(prefix) => fmt.write_fmt(format_args!("{}/{}", net.addr(), prefix)),
-            // This is a non-contiguous network, expand the mask.
-            None => fmt.write_fmt(format_args!("{}/{}", net.addr(), net.mask())),
+            // Every other network reads the same as in the base `Display`.
+            _ => Display::fmt(net, fmt),
         }
     }
 }
@@ -112,6 +150,18 @@ mod test {
     }
 
     #[test]
+    fn padding_applies_to_every_form() {
+        let host = Ipv4Network::parse("127.0.0.1").unwrap();
+        assert_eq!("[   127.0.0.1]", format!("[{:>12}]", Compact(host)));
+
+        let net = Ipv4Network::parse("10.0.0.0/24").unwrap();
+        assert_eq!("[ 10.0.0.0/24]", format!("[{:>12}]", Compact(net)));
+
+        let net = Ipv6Network::parse("2001:db8::1/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        assert_eq!(format!("[{:<60}]", net.to_string()), format!("[{:<60}]", Compact(net)));
+    }
+
+    #[test]
     fn ip_network_delegates_to_inner() {
         let host = IpNetwork::parse("127.0.0.1").unwrap();
         assert_eq!("127.0.0.1", Compact(host).to_string());
@@ -157,6 +207,22 @@ mod test {
         #[test]
         fn prop_ip_network_compact_delegates(net in arb_ipv4_network()) {
             prop_assert_eq!(Compact(IpNetwork::V4(net)).to_string(), Compact(net).to_string());
+        }
+
+        /// Compact pads and truncates its whole text exactly as `str` does,
+        /// whichever form it takes.
+        #[test]
+        fn prop_ipv4_compact_pads_like_str(net in arb_ipv4_network(), width in 0usize..40, precision in 0usize..40) {
+            let text = Compact(net).to_string();
+            prop_assert_eq!(format!("{:>width$}", Compact(net)), format!("{text:>width$}"));
+            prop_assert_eq!(format!("{:.precision$}", Compact(net)), format!("{text:.precision$}"));
+        }
+
+        #[test]
+        fn prop_ipv6_compact_pads_like_str(net in arb_ipv6_network(), width in 0usize..96, precision in 0usize..96) {
+            let text = Compact(net).to_string();
+            prop_assert_eq!(format!("{:>width$}", Compact(net)), format!("{text:>width$}"));
+            prop_assert_eq!(format!("{:.precision$}", Compact(net)), format!("{text:.precision$}"));
         }
     }
 }
