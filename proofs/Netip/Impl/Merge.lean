@@ -17,11 +17,8 @@ Proved, for every input of the width:
   bi-contiguous (`ipv6_aggregate_bicontiguous` relies on it), while a
   non-contiguous pair can land in the contiguous class.
 
-Still open: the other half of `merge`'s documentation, "`Some(N)` iff the union
-is exactly representable as a single network". It needs a counting argument
-(two faces of different dimension, or two intersecting faces neither of which
-contains the other, never have a union of power-of-two size) and is not a
-bit-blasting goal.
+The other half of `merge`'s documentation, `None` only when the union is not a
+single network, is in `MergeComplete`.
 -/
 
 namespace Netip.Impl
