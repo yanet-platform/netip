@@ -34,3 +34,5 @@ import Netip.Impl.BinarySplitSearch
 import Netip.Impl.RangeRun
 import Netip.Impl.ParseCore
 import Netip.Impl.ParseAddr
+import Netip.Impl.ParseFrame
+import Netip.Impl.ParseNet
