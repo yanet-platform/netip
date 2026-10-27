@@ -21,6 +21,7 @@ import Netip.Impl.AddrsRun
 import Netip.Impl.BiContiguousAddrs
 import Netip.Impl.BiGroup
 import Netip.Impl.BiSweep
+import Netip.Impl.BiProbe
 import Netip.Impl.Difference
 import Netip.Impl.DifferenceRun
 import Netip.Impl.Ord
