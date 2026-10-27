@@ -6199,25 +6199,222 @@ mod test {
         ));
     }
 
-    proptest! {
-        #[test]
-        fn prop_parse_ascii_matches_parse_ipv4(network in arb_ipv4_network()) {
-            let text = std::format!("{network}");
-            prop_assert_eq!(Ipv4Network::parse(&text), Ipv4Network::parse_ascii(text.as_bytes()));
-        }
+    // The documented semantics of the network parsers, built from `core`'s
+    // parsers alone: the address up to the first `/`, then a CIDR suffix as
+    // `u8::from_str` reads it, or else a mask address. The parsers under test
+    // must agree with it on every input, errors included.
 
-        #[test]
-        fn prop_parse_ascii_matches_parse_ipv6(network in arb_ipv6_network()) {
-            let text = std::format!("{network}");
-            prop_assert_eq!(Ipv6Network::parse(&text), Ipv6Network::parse_ascii(text.as_bytes()));
+    fn reference_split(buf: &[u8]) -> (&[u8], Option<&[u8]>) {
+        match buf.iter().position(|&byte| byte == b'/') {
+            Some(index) => (&buf[..index], Some(&buf[index + 1..])),
+            None => (buf, None),
         }
+    }
 
-        #[test]
-        fn prop_parse_ascii_parity_arbitrary_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..48)) {
-            match core::str::from_utf8(&bytes) {
-                Ok(text) => prop_assert_eq!(IpNetwork::parse(text), IpNetwork::parse_ascii(&bytes)),
-                Err(..) => prop_assert!(IpNetwork::parse_ascii(&bytes).is_err()),
+    // Non-UTF-8 bytes are never an address, and every `AddrParseError` of one
+    // family is the same value, so the empty string stands in for them.
+    fn reference_ipv4_addr(bytes: &[u8]) -> Result<Ipv4Addr, core::net::AddrParseError> {
+        core::str::from_utf8(bytes).unwrap_or("").parse()
+    }
+
+    fn reference_ipv6_addr(bytes: &[u8]) -> Result<Ipv6Addr, core::net::AddrParseError> {
+        core::str::from_utf8(bytes).unwrap_or("").parse()
+    }
+
+    fn reference_cidr(bytes: &[u8]) -> Option<u8> {
+        core::str::from_utf8(bytes).ok()?.parse().ok()
+    }
+
+    fn reference_parse_ipv4(buf: &[u8]) -> Result<Ipv4Network, IpNetParseError> {
+        let (addr, mask) = reference_split(buf);
+        let addr = reference_ipv4_addr(addr)?;
+        match mask {
+            None => Ok(Ipv4Network::from(addr)),
+            Some(mask) => match reference_cidr(mask) {
+                Some(cidr) => Ok(Ipv4Network::try_from((addr, cidr))?),
+                None => Ok(Ipv4Network::new(addr, reference_ipv4_addr(mask)?)),
+            },
+        }
+    }
+
+    fn reference_parse_ipv6(buf: &[u8]) -> Result<Ipv6Network, IpNetParseError> {
+        let (addr, mask) = reference_split(buf);
+        let addr = reference_ipv6_addr(addr)?;
+        match mask {
+            None => Ok(Ipv6Network::from(addr)),
+            Some(mask) => match reference_cidr(mask) {
+                Some(cidr) => Ok(Ipv6Network::try_from((addr, cidr))?),
+                None => Ok(Ipv6Network::new(addr, reference_ipv6_addr(mask)?)),
+            },
+        }
+    }
+
+    // A `:` rules out IPv4. Otherwise IPv4 is tried first, and only an
+    // address-shaped error falls through to IPv6.
+    fn reference_parse_ip(buf: &[u8]) -> Result<IpNetwork, IpNetParseError> {
+        if !buf.contains(&b':') {
+            match reference_parse_ipv4(buf) {
+                Ok(net) => return Ok(IpNetwork::V4(net)),
+                Err(IpNetParseError::AddrParseError(..)) => {}
+                Err(err) => return Err(err),
             }
+        }
+        Ok(IpNetwork::V6(reference_parse_ipv6(buf)?))
+    }
+
+    // The end of the maximal leading run of token bytes: `[0-9./+]` for the
+    // IPv4 parser, `[0-9a-fA-F:./+]` for the IPv6 and family-agnostic ones.
+    fn reference_token_end(buf: &[u8], ipv4: bool) -> usize {
+        let in_token = |byte: u8| {
+            matches!(byte, b'0'..=b'9' | b'.' | b'/' | b'+') || !ipv4 && (byte.is_ascii_hexdigit() || byte == b':')
+        };
+        buf.iter().position(|&byte| !in_token(byte)).unwrap_or(buf.len())
+    }
+
+    // Dotted text of 3 to 5 octets: the valid form and its near misses, with
+    // octets over 255, with leading zeros, or of 4 digits.
+    fn arb_ipv4_text() -> impl Strategy<Value = String> {
+        const NEAR_MISSES: &[&str] = &["256", "300", "999", "00", "01", "010", "0255", "1234"];
+        let octet = prop_oneof![
+            6 => (0u16..=255).prop_map(|octet| octet.to_string()),
+            1 => proptest::sample::select(NEAR_MISSES).prop_map(str::to_owned),
+            1 => "[0-9]{1,4}",
+        ];
+        prop_oneof![8 => proptest::collection::vec(octet.clone(), 4), 1 => proptest::collection::vec(octet, 3..=5)]
+            .prop_map(|octets| octets.join("."))
+    }
+
+    // Colon text of an address: 8 group slots, the last 2 optionally taken by
+    // an embedded IPv4 address, with or without a `::` standing for a run of
+    // zero groups. Groups have up to 5 hex digits, and a near miss writes one
+    // group too many or too few.
+    fn arb_ipv6_text() -> impl Strategy<Value = String> {
+        let group = prop_oneof![8 => "[0-9a-fA-F]{1,4}", 1 => "[0-9a-fA-F]{5}"];
+        let near_miss = prop_oneof![4 => Just(0isize), 2 => Just(1), 1 => Just(-1)];
+        // Half the time `::` stands for a single zero group, the tightest fit.
+        let zeros = prop_oneof![Just(0usize), any::<usize>()];
+        (
+            proptest::collection::vec(group, 9),
+            proptest::option::weighted(0.3, arb_ipv4_text()),
+            any::<bool>(),
+            zeros,
+            any::<usize>(),
+            near_miss,
+        )
+            .prop_map(|(groups, ipv4, compressed, zeros, split, near_miss)| {
+                let slots = if ipv4.is_some() { 6 } else { 8 };
+                let written = if compressed { slots - 1 - zeros % slots } else { slots };
+                let written = written.saturating_add_signed(near_miss);
+                let (head, tail) = groups[..written].split_at(if compressed { split % (written + 1) } else { written });
+
+                let mut text = head.join(":");
+                if compressed {
+                    text.push_str("::");
+                }
+                text.push_str(&tail.join(":"));
+                if let Some(ipv4) = ipv4 {
+                    if !text.is_empty() && !text.ends_with(':') {
+                        text.push(':');
+                    }
+                    text.push_str(&ipv4);
+                }
+                text
+            })
+    }
+
+    // Inputs around the accept boundary: an address text with an optional
+    // CIDR or mask suffix and a rest; a displayed network with one byte
+    // replaced or removed and a rest; runs of grammar fragments; arbitrary
+    // bytes.
+    fn arb_network_text() -> impl Strategy<Value = Vec<u8>> {
+        const PIECES: &[&str] = &[
+            "0", "1", "9", "25", "255", "256", "00", "01", "1234", "12345", "ffff", "FfFf", "a", "e", ".", ":", "::",
+            "/", "+", "-", " ", "x", "32", "33", "128", "129", "1.2.3.4", "::ffff:", "/24", "/ffff::",
+        ];
+        const RESTS: &[&str] = &["", "", " to", ",", ":80", "a", "/", "1", "g", "\u{ff}"];
+
+        let suffix = prop_oneof![
+            Just(String::new()),
+            (0u16..=300).prop_map(|cidr| std::format!("/{cidr}")),
+            "/[+]?[0-9]{1,4}",
+            arb_ipv4_text().prop_map(|mask| std::format!("/{mask}")),
+            arb_ipv6_text().prop_map(|mask| std::format!("/{mask}")),
+        ];
+        let structured = (
+            prop_oneof![arb_ipv4_text(), arb_ipv6_text()],
+            suffix,
+            proptest::sample::select(RESTS),
+        )
+            .prop_map(|(addr, suffix, rest)| std::format!("{addr}{suffix}{rest}").into_bytes());
+
+        let displayed = prop_oneof![
+            arb_ipv4_network().prop_map(|net| net.to_string()),
+            arb_ipv6_network().prop_map(|net| net.to_string()),
+        ];
+        let edit = prop_oneof![
+            Just(None),
+            Just(Some(None)),
+            any::<u8>().prop_map(|byte| Some(Some(byte)))
+        ];
+        let mutated = (displayed, any::<usize>(), edit, proptest::sample::select(RESTS)).prop_map(
+            |(text, position, edit, rest)| {
+                let mut bytes = text.into_bytes();
+                let position = position % bytes.len();
+                match edit {
+                    None => {}
+                    Some(None) => {
+                        bytes.remove(position);
+                    }
+                    Some(Some(byte)) => bytes[position] = byte,
+                }
+                bytes.extend_from_slice(rest.as_bytes());
+                bytes
+            },
+        );
+
+        let fragments = proptest::collection::vec(proptest::sample::select(PIECES), 0..12)
+            .prop_map(|pieces| pieces.concat().into_bytes());
+
+        prop_oneof![
+            4 => structured,
+            2 => mutated,
+            2 => fragments,
+            1 => proptest::collection::vec(any::<u8>(), 0..48),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(8192))]
+
+        #[test]
+        fn prop_parse_ascii_round_trips_display_ipv4(network in arb_ipv4_network()) {
+            prop_assert_eq!(Ok(network), Ipv4Network::parse_ascii(network.to_string().as_bytes()));
+        }
+
+        #[test]
+        fn prop_parse_ascii_round_trips_display_ipv6(network in arb_ipv6_network()) {
+            prop_assert_eq!(Ok(network), Ipv6Network::parse_ascii(network.to_string().as_bytes()));
+        }
+
+        #[test]
+        fn prop_parse_ascii_matches_core_reference(buf in arb_network_text()) {
+            prop_assert_eq!(reference_parse_ipv4(&buf), Ipv4Network::parse_ascii(&buf));
+            prop_assert_eq!(reference_parse_ipv6(&buf), Ipv6Network::parse_ascii(&buf));
+            prop_assert_eq!(reference_parse_ip(&buf), IpNetwork::parse_ascii(&buf));
+        }
+
+        /// The leading token is parsed as a whole, never as a shorter prefix.
+        #[test]
+        fn prop_parse_next_ascii_matches_core_reference(buf in arb_network_text()) {
+            let end = reference_token_end(&buf, true);
+            let expected = reference_parse_ipv4(&buf[..end]).map(|net| (net, &buf[end..]));
+            prop_assert_eq!(expected, Ipv4Network::parse_next_ascii(&buf));
+
+            let end = reference_token_end(&buf, false);
+            let expected = reference_parse_ipv6(&buf[..end]).map(|net| (net, &buf[end..]));
+            prop_assert_eq!(expected, Ipv6Network::parse_next_ascii(&buf));
+            let expected = reference_parse_ip(&buf[..end]).map(|net| (net, &buf[end..]));
+            prop_assert_eq!(expected, IpNetwork::parse_next_ascii(&buf));
         }
     }
 
