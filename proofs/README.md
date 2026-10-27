@@ -40,3 +40,7 @@ bit-blasts the goal to SAT, also depend on an auxiliary axiom stating that the
 compiled LRAT checker accepted the solver's certificate, and `#print axioms`
 lists it as `..._native.bv_decide.ax_...`. CI rejects `sorry`, `native_decide` and
 declared axioms.
+
+The parser theorems compare `src/parser.rs` with `core`'s own parsing as
+`Netip/Impl/ParseCore.lean` transcribes it from the Rust 1.99 sources. That
+transcription is trusted like the others.
