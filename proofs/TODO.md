@@ -5,9 +5,6 @@ Parsers and formatting are out of scope. Remove an entry once its proof lands.
 
 ## Set algebra (`src/net.rs`)
 
-- [ ] `merge`: completeness, `None` only when the union is not a single network
-  (the doc's "`Some(N)` iff their union is exactly representable"). Soundness is
-  proved, and `merge` succeeds on every adjacent pair.
 - [ ] `IpNetwork`: every method agrees with the per-family one and handles
   mixed families as documented. `to_ipv6_mapped` and `to_canonical` are proved.
 
@@ -24,12 +21,6 @@ Parsers and formatting are out of scope. Remove an entry once its proof lands.
 - [ ] `BiContiguousIpv6Addrs`: `base | (i & lo_mask) | ((i >> split_shift) << 64)`
   is the `i`-th member in host-index order, strictly increasing, and the same
   sequence as the general iterator, plus the sentinel and `size_hint`.
-- [ ] `Ipv4NetworkDiff`, `Ipv6NetworkDiff`: the statement over a whole run, where
-  any interleaving of `next` and `next_back` yields the item of every bit of `d`
-  exactly once (with `len` and `last`), the subset branch of `new`, and
-  minimality: no family of fewer networks has the union `S(A) \ S(B)`. The
-  decomposition, the per-step invariant, the `predicted` ladder and the disjoint
-  shortcut are proved.
 - [ ] `Ipv4RangeNetworks`, `Ipv6RangeNetworks`: the blocks are CIDR and pairwise
   disjoint, their union is `[first, last]`, and their number is the minimum and
   at most `2n - 2`. The ascending/descending phase split equals the greedy
