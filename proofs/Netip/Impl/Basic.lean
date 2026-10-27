@@ -9,10 +9,12 @@ widths it actually uses, `BitVec 32` for `u32` (IPv4) and `BitVec 128` for
 SAT and the solver's LRAT certificate is checked, so a theorem covers every
 input of the width.
 
-Dictionary: `wrapping_add` / `wrapping_sub` / `wrapping_neg` are the modular
-`+` / `-` / `-x` of `BitVec`; `<` and `≤` on `BitVec` are unsigned;
-`leading_zeros` is `BitVec.clz`; `count_ones` is `BitVec.cpop`;
-`as u64` on a `u128` is `setWidth 64`.
+Dictionary:
+* `wrapping_add` / `wrapping_sub` / `wrapping_neg` are the modular `+` / `-` /
+  `-x` of `BitVec`,
+* `<` and `≤` on `BitVec` are unsigned,
+* `leading_zeros` is `BitVec.clz`, `count_ones` is `BitVec.cpop`,
+* `as u64` on a `u128` is `setWidth 64`.
 
 Trust: besides the usual axioms, every `bv_decide` proof depends on an
 auxiliary axiom asserting that the compiled LRAT checker accepted the

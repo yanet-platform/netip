@@ -6,6 +6,8 @@ import Netip.Laminar
 import Netip.Interval
 import Netip.Impl.Basic
 import Netip.Impl.IsContiguous
+import Netip.Impl.BiContiguous
+import Netip.Impl.Contiguous
 import Netip.Impl.SetOps
 import Netip.Impl.Merge
 import Netip.Impl.Addrs
