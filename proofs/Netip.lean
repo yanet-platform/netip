@@ -15,6 +15,7 @@ import Netip.Impl.MergeComplete
 import Netip.Impl.Adjacent
 import Netip.Impl.Supernet
 import Netip.Impl.Conversions
+import Netip.Impl.IpNetwork
 import Netip.Impl.Addrs
 import Netip.Impl.AddrsRun
 import Netip.Impl.BiContiguousAddrs
