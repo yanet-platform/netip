@@ -23,9 +23,6 @@ Parsers and formatting are out of scope. Remove an entry once its proof lands.
   sequence as the general iterator, plus the sentinel and `size_hint`.
 ## Slice algorithms
 
-- [ ] `ipv4_aggregate`, `ipv6_aggregate` (`ip_aggregate`): the union is
-  preserved, no output network contains or `merge`s with another, and the loops
-  terminate.
 - [ ] `ipv6_aggregate_bicontiguous`: the union is preserved, every output is
   bi-contiguous, and no output contains another, is a lowest-mask-bit sibling of
   another, or is a high-half buddy of another with an equal low-half set. This
