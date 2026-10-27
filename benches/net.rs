@@ -1670,81 +1670,121 @@ fn bench_binary_split(c: &mut Criterion) {
     group.throughput(Throughput::Elements(16));
     group.bench_function("ipv4_binary_split 16x /28", |b| {
         let nets = ipv4_consecutive(16, 28);
-        b.iter(|| {
-            core::hint::black_box(ipv4_binary_split(core::hint::black_box(&nets)));
-        });
+        b.iter_batched(
+            || nets.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv4_binary_split(core::hint::black_box(&mut nets)));
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 
     group.throughput(Throughput::Elements(64));
     group.bench_function("ipv4_binary_split 64x /28", |b| {
         let nets = ipv4_consecutive(64, 28);
-        b.iter(|| {
-            core::hint::black_box(ipv4_binary_split(core::hint::black_box(&nets)));
-        });
+        b.iter_batched(
+            || nets.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv4_binary_split(core::hint::black_box(&mut nets)));
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 
     group.throughput(Throughput::Elements(256));
     group.bench_function("ipv4_binary_split 256x /28", |b| {
         let nets = ipv4_consecutive(256, 28);
-        b.iter(|| {
-            core::hint::black_box(ipv4_binary_split(core::hint::black_box(&nets)));
-        });
+        b.iter_batched(
+            || nets.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv4_binary_split(core::hint::black_box(&mut nets)));
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 
     group.throughput(Throughput::Elements(1024));
     group.bench_function("ipv4_binary_split 1024x /28", |b| {
         let nets = ipv4_consecutive(1024, 28);
-        b.iter(|| {
-            core::hint::black_box(ipv4_binary_split(core::hint::black_box(&nets)));
-        });
+        b.iter_batched(
+            || nets.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv4_binary_split(core::hint::black_box(&mut nets)));
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 
     group.throughput(Throughput::Elements(256));
     group.bench_function("ipv4_binary_split 256x non-contiguous", |b| {
         let nets = ipv4_non_contiguous(256);
-        b.iter(|| {
-            core::hint::black_box(ipv4_binary_split(core::hint::black_box(&nets)));
-        });
+        b.iter_batched(
+            || nets.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv4_binary_split(core::hint::black_box(&mut nets)));
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 
     group.throughput(Throughput::Elements(16));
     group.bench_function("ipv6_binary_split 16x /124", |b| {
         let nets = ipv6_consecutive(16, 124);
-        b.iter(|| {
-            core::hint::black_box(ipv6_binary_split(core::hint::black_box(&nets)));
-        });
+        b.iter_batched(
+            || nets.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv6_binary_split(core::hint::black_box(&mut nets)));
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 
     group.throughput(Throughput::Elements(64));
     group.bench_function("ipv6_binary_split 64x /124", |b| {
         let nets = ipv6_consecutive(64, 124);
-        b.iter(|| {
-            core::hint::black_box(ipv6_binary_split(core::hint::black_box(&nets)));
-        });
+        b.iter_batched(
+            || nets.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv6_binary_split(core::hint::black_box(&mut nets)));
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 
     group.throughput(Throughput::Elements(256));
     group.bench_function("ipv6_binary_split 256x /124", |b| {
         let nets = ipv6_consecutive(256, 124);
-        b.iter(|| {
-            core::hint::black_box(ipv6_binary_split(core::hint::black_box(&nets)));
-        });
+        b.iter_batched(
+            || nets.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv6_binary_split(core::hint::black_box(&mut nets)));
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 
     group.throughput(Throughput::Elements(1024));
     group.bench_function("ipv6_binary_split 1024x /124", |b| {
         let nets = ipv6_consecutive(1024, 124);
-        b.iter(|| {
-            core::hint::black_box(ipv6_binary_split(core::hint::black_box(&nets)));
-        });
+        b.iter_batched(
+            || nets.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv6_binary_split(core::hint::black_box(&mut nets)));
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 
     group.throughput(Throughput::Elements(256));
     group.bench_function("ipv6_binary_split 256x non-contiguous", |b| {
         let nets = ipv6_non_contiguous(256);
-        b.iter(|| {
-            core::hint::black_box(ipv6_binary_split(core::hint::black_box(&nets)));
-        });
+        b.iter_batched(
+            || nets.clone(),
+            |mut nets| {
+                core::hint::black_box(ipv6_binary_split(core::hint::black_box(&mut nets)));
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 
     group.finish();

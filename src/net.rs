@@ -4292,19 +4292,13 @@ impl AsRef<Ipv6Network> for Ipv6Network {
     }
 }
 
-/// Finds the shortest common network for the given slice of networks that
-/// covers at least half of slice.
-///
-/// Shortest means that it will have the shortest segment of subnets, or the
-/// largest mask.
+/// Finds a narrow common supernet of at least half of the given networks and
+/// gathers the networks it contains into one block of the slice.
 ///
 /// Imagine that you are building a radix tree or graph from networks and at
-/// some point you need to split one of the nodes into two parts.
-///
-/// In other words, it is necessary to find the shortest network that contains
-/// at least half of the child networks.
-///
-/// This function implements such an algorithm.
+/// some point you need to split one of the nodes into two parts. The returned
+/// network becomes the new child node, and the networks in the returned block
+/// become its children.
 ///
 /// For example, suppose we have the following tree:
 /// ```text
@@ -4328,16 +4322,17 @@ impl AsRef<Ipv6Network> for Ipv6Network {
 ///
 /// ```text
 /// .
+/// ├─ 10.204.46.50/31
 /// ├─ 10.204.46.54/31
-/// ├─ 10.204.46.68/31
-/// ├─ 10.204.49.12/31
-/// ├─ 10.204.49.14/31
-/// ├─ 10.204.49.18/31
+/// ├─ 10.204.47.22/31
+/// ├─ 10.204.49.24/31
+/// ├─ 10.204.49.26/31
+/// ├─ 10.204.49.28/31
 /// ├─ 10.204.49.32/31
 /// ├─ 10.204.49.34/31
 /// ├─ 10.204.49.36/31
-/// ├─ 10.204.49.38/31
-/// └─ 10.204.49.40/31
+/// ├─ 10.204.50.38/31
+/// └─ 10.204.50.40/31
 /// ```
 ///
 /// After splitting:
@@ -4358,9 +4353,27 @@ impl AsRef<Ipv6Network> for Ipv6Network {
 /// └─ 10.204.50.40/31
 /// ```
 ///
+/// The candidates, in order, are the smallest common supernet of the whole
+/// slice and those of every window of `⌈N/2⌉` consecutive networks, left to
+/// right. The first candidate with the largest mask, compared as an unsigned
+/// integer, is returned.
+///
+/// The returned network can have a non-contiguous mask even when every input
+/// is contiguous (CIDR), and then the networks it contains need not be
+/// consecutive. So the slice is reordered in place: the networks that the
+/// returned network contains are moved into one block that starts where the
+/// first of them was, and both they and the remaining networks keep their
+/// relative order. The returned range is that block. After the call
+/// `range.contains(&idx)` holds exactly when the returned network contains
+/// `nets[idx]`, and the block holds at least half of the slice. If the
+/// contained networks are already consecutive, the slice is left as it is.
+///
+/// Returns [`None`] for fewer than 3 networks.
+///
 /// # Complexity
 ///
-/// This function runs in `O(N)` and requires `O(1)` memory.
+/// Choosing the network takes `O(N)` time, and gathering the block takes
+/// `O(N log N)` element moves. No memory is allocated.
 ///
 /// # Warning
 ///
@@ -4382,7 +4395,7 @@ impl AsRef<Ipv6Network> for Ipv6Network {
 /// nets.sort();
 /// nets.dedup();
 ///
-/// let (supernet, range) = ipv4_binary_split(&nets).unwrap();
+/// let (supernet, range) = ipv4_binary_split(&mut nets).unwrap();
 /// // 127.0.0.2/31 in binary is "0b...10/0b...10", which contains both "127.0.0.2" and "127.0.0.3".
 /// assert_eq!(Ipv4Network::parse("127.0.0.2/31").unwrap(), supernet);
 ///
@@ -4412,35 +4425,53 @@ impl AsRef<Ipv6Network> for Ipv6Network {
 /// nets.sort();
 /// nets.dedup();
 ///
-/// let (supernet, range) = ipv4_binary_split(&nets).unwrap();
+/// let (supernet, range) = ipv4_binary_split(&mut nets).unwrap();
 ///
 /// assert_eq!(Ipv4Network::parse("10.204.49.0/26").unwrap(), supernet);
 ///
 /// for (idx, net) in nets.iter().enumerate() {
 ///     assert_eq!(range.contains(&idx), supernet.contains(net));
 /// }
+///
+/// // A non-contiguous result: `10.0.0.28/30` lies inside it but comes after
+/// // `10.0.0.25/32`, which does not, so it is moved into the block.
+/// let mut nets: Vec<_> = [
+///     "10.0.0.4/32",
+///     "10.0.0.6/31",
+///     "10.0.0.12/31",
+///     "10.0.0.20/31",
+///     "10.0.0.25/32",
+///     "10.0.0.28/30",
+///     "10.0.0.56/30",
+/// ]
+/// .iter()
+/// .map(|net| Ipv4Network::parse(net).unwrap())
+/// .collect();
+///
+/// let (supernet, range) = ipv4_binary_split(&mut nets).unwrap();
+/// assert_eq!(
+///     Ipv4Network::parse("10.0.0.4/255.255.255.228").unwrap(),
+///     supernet
+/// );
+/// assert_eq!(0..5, range);
+/// assert_eq!(Ipv4Network::parse("10.0.0.28/30").unwrap(), nets[4]);
+/// assert_eq!(Ipv4Network::parse("10.0.0.25/32").unwrap(), nets[5]);
 /// ```
 #[must_use]
-pub fn ipv4_binary_split<T>(nets: &[T]) -> Option<(Ipv4Network, Range<usize>)>
+pub fn ipv4_binary_split<T>(nets: &mut [T]) -> Option<(Ipv4Network, Range<usize>)>
 where
     T: AsRef<Ipv4Network>,
 {
     ip_binary_split(nets)
 }
 
-/// Finds the shortest common network for the given slice of networks that
-/// covers at least half of slice.
-///
-/// Shortest means that it will have the shortest segment of subnets, or the
-/// largest mask.
+/// Finds a narrow common supernet of at least half of the given networks and
+/// gathers the networks it contains into one block of the slice.
 ///
 /// Imagine that you are building a radix tree or graph from networks and at
-/// some point you need to split one of the nodes into two parts.
-///
-/// In other words, it is necessary to find the shortest network that contains
-/// at least half of the child networks.
-///
-/// This function implements such an algorithm.
+/// some point you need to split one of the nodes into two parts. The returned
+/// network becomes the new child node, and the networks in the returned block
+/// become its children.
 ///
 /// For example, suppose we have the following tree:
 /// ```text
@@ -4484,7 +4515,7 @@ where
 /// ├─ 2a02:6b8:0:2302::/64
 /// ├─ 2a02:6b8:0:2303::/64
 /// ├─ 2a02:6b8:0:2305::/64
-/// └─ 2a02:6b8:0:2308::/61
+/// ├─ 2a02:6b8:0:2308::/61 [*]
 /// │ ├─ 2a02:6b8:0:2308::/64
 /// │ ├─ 2a02:6b8:0:2309::/64
 /// │ ├─ 2a02:6b8:0:230a::/64
@@ -4495,9 +4526,27 @@ where
 /// └─ 2a02:6b8:0:231f::/64
 /// ```
 ///
+/// The candidates, in order, are the smallest common supernet of the whole
+/// slice and those of every window of `⌈N/2⌉` consecutive networks, left to
+/// right. The first candidate with the largest mask, compared as an unsigned
+/// integer, is returned.
+///
+/// The returned network can have a non-contiguous mask even when every input
+/// is contiguous (CIDR), and then the networks it contains need not be
+/// consecutive. So the slice is reordered in place: the networks that the
+/// returned network contains are moved into one block that starts where the
+/// first of them was, and both they and the remaining networks keep their
+/// relative order. The returned range is that block. After the call
+/// `range.contains(&idx)` holds exactly when the returned network contains
+/// `nets[idx]`, and the block holds at least half of the slice. If the
+/// contained networks are already consecutive, the slice is left as it is.
+///
+/// Returns [`None`] for fewer than 3 networks.
+///
 /// # Complexity
 ///
-/// This function runs in `O(N)` and requires `O(1)` memory.
+/// Choosing the network takes `O(N)` time, and gathering the block takes
+/// `O(N log N)` element moves. No memory is allocated.
 ///
 /// # Warning
 ///
@@ -4520,7 +4569,7 @@ where
 /// // The input must be sorted.
 /// nets.sort();
 ///
-/// let (supernet, range) = ipv6_binary_split(&nets).unwrap();
+/// let (supernet, range) = ipv6_binary_split(&mut nets).unwrap();
 /// // ::2/127 in binary is "0b...10/0b...10", which contains both "::2" and "::3".
 /// assert_eq!(Ipv6Network::parse("::2/127").unwrap(), supernet);
 ///
@@ -4549,7 +4598,7 @@ where
 ///     .collect();
 /// nets.sort();
 ///
-/// let (supernet, range) = ipv6_binary_split(&nets).unwrap();
+/// let (supernet, range) = ipv6_binary_split(&mut nets).unwrap();
 /// assert_eq!(
 ///     Ipv6Network::parse("2a02:6b8:0:2308::/61").unwrap(),
 ///     supernet
@@ -4560,29 +4609,55 @@ where
 /// }
 /// ```
 #[must_use]
-pub fn ipv6_binary_split<T>(nets: &[T]) -> Option<(Ipv6Network, Range<usize>)>
+pub fn ipv6_binary_split<T>(nets: &mut [T]) -> Option<(Ipv6Network, Range<usize>)>
 where
     T: AsRef<Ipv6Network>,
 {
     ip_binary_split(nets)
 }
 
-// Dispatches to the faster of the two implementations below, based on input
-// size.
+// Picks the candidate with the faster of the two searches below, based on
+// input size, then gathers the networks it contains into one block.
 //
-// Both implementations return identical results, so the threshold only affects
+// Both searches return the same candidate, so the threshold only affects
 // speed, never correctness. The crossover is per-family and measured — see
 // `Word::SPLIT_THRESHOLD`.
 #[inline]
-fn ip_binary_split<T, U>(nets: &[T]) -> Option<(U, Range<usize>)>
+fn ip_binary_split<T, U>(nets: &mut [T]) -> Option<(U, Range<usize>)>
 where
     T: AsRef<U>,
     U: BinarySplit + Copy,
 {
-    if nets.len() < U::Bits::SPLIT_THRESHOLD {
+    let candidate = if nets.len() < U::Bits::SPLIT_THRESHOLD {
         ip_binary_split_quadratic(nets)
     } else {
         ip_binary_split_linear(nets)
+    }?;
+
+    // The candidate contains a whole window, so some network is contained.
+    let start = nets.iter().position(|net| candidate.contains(net.as_ref()))?;
+    let len = stable_partition(&mut nets[start..], &mut |net: &T| candidate.contains(net.as_ref()));
+
+    Some((candidate, start..start + len))
+}
+
+// Stably moves the elements that satisfy `pred` to the front, keeping the
+// relative order within both groups, and returns how many satisfy it.
+//
+// Divide and conquer: partition both halves, then rotate the rejects of the
+// left half past the accepts of the right half. `O(N log N)` moves, `O(log N)`
+// recursion depth, no allocation, and `pred` runs once per element.
+fn stable_partition<T>(elems: &mut [T], pred: &mut impl FnMut(&T) -> bool) -> usize {
+    match elems.len() {
+        0 => 0,
+        1 => usize::from(pred(&elems[0])),
+        len => {
+            let mid = len / 2;
+            let left = stable_partition(&mut elems[..mid], pred);
+            let right = stable_partition(&mut elems[mid..], pred);
+            elems[left..mid + right].rotate_left(mid - left);
+            left + right
+        }
     }
 }
 
@@ -4591,7 +4666,7 @@ where
 //
 // O(N^2) time, O(1) memory. Smaller constant factor than
 // `ip_binary_split_linear`, so it wins on small inputs.
-fn ip_binary_split_quadratic<T, U>(nets: &[T]) -> Option<(U, Range<usize>)>
+fn ip_binary_split_quadratic<T, U>(nets: &[T]) -> Option<U>
 where
     T: AsRef<U>,
     U: BinarySplit + Copy,
@@ -4610,26 +4685,17 @@ where
         supernet
     };
 
-    let mut range = 0..nets.len();
     let mut candidate = window_supernet(nets);
 
-    for (idx, window) in nets.windows(window_size).enumerate() {
+    for window in nets.windows(window_size) {
         let supernet = window_supernet(window);
 
         if supernet.mask() > candidate.mask() {
-            range = idx..(idx + window_size);
             candidate = supernet;
         }
     }
 
-    while range.start > 0 && candidate.contains(nets[range.start - 1].as_ref()) {
-        range.start -= 1;
-    }
-    while range.end < nets.len() && candidate.contains(nets[range.end].as_ref()) {
-        range.end += 1;
-    }
-
-    Some((candidate, range))
+    Some(candidate)
 }
 
 // Finds the widest-mask window among all windows of size `window_size` in one
@@ -4639,7 +4705,7 @@ where
 // `!mask_j | (addr_j ^ addr_{j+1})` over its element pairs, AND-ed with the
 // last element's own mask. Per-bit counters keep that OR exact as kill words
 // are added and removed while the window slides. O(N) time, O(1) memory.
-fn ip_binary_split_linear<T, U>(nets: &[T]) -> Option<(U, Range<usize>)>
+fn ip_binary_split_linear<T, U>(nets: &[T]) -> Option<U>
 where
     T: AsRef<U>,
     U: BinarySplit + Copy,
@@ -4674,7 +4740,6 @@ where
 
     let (.., mask_last) = bits(n - 1);
     let mut best_start = 0;
-    let mut best_len = n;
     let mut best_mask = !full_or & mask_last;
 
     // Pass 2: scan windows left to right. Strict `>` keeps the first-seen
@@ -4689,24 +4754,11 @@ where
         let window_mask = !window_or & mask_end;
         if window_mask > best_mask {
             best_start = i;
-            best_len = window_size;
             best_mask = window_mask;
         }
     }
 
-    let mut range = best_start..(best_start + best_len);
-    let candidate = U::from_bits(bits(best_start).0, best_mask);
-
-    // The candidate's mask can match more networks than were in the window it came
-    // from.
-    while range.start > 0 && candidate.contains(nets[range.start - 1].as_ref()) {
-        range.start -= 1;
-    }
-    while range.end < n && candidate.contains(nets[range.end].as_ref()) {
-        range.end += 1;
-    }
-
-    Some((candidate, range))
+    Some(U::from_bits(bits(best_start).0, best_mask))
 }
 
 // Adds a kill word into the sliding-window OR, incrementing the counters of its
@@ -6657,7 +6709,7 @@ mod test {
 
     #[test]
     fn test_ipv4_binary_split_empty() {
-        assert!(ipv4_binary_split::<Ipv4Network>(&[]).is_none());
+        assert!(ipv4_binary_split::<Ipv4Network>(&mut []).is_none());
     }
 
     #[test]
@@ -6667,7 +6719,7 @@ mod test {
         nets.sort();
         nets.dedup();
 
-        assert!(ipv4_binary_split(&nets).is_none());
+        assert!(ipv4_binary_split(&mut nets).is_none());
     }
 
     #[test]
@@ -6677,7 +6729,7 @@ mod test {
         nets.sort();
         nets.dedup();
 
-        let (supernet, range) = ipv4_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv4_binary_split(&mut nets).unwrap();
         // 127.0.0.2/31 in binary is "0b...10/0b...10", which contains both "127.0.0.2"
         // and "127.0.0.3".
         assert_eq!(Ipv4Network::parse("127.0.0.2/31").unwrap(), supernet);
@@ -6716,7 +6768,7 @@ mod test {
         nets.sort();
         nets.dedup();
 
-        let (supernet, range) = ipv4_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv4_binary_split(&mut nets).unwrap();
 
         assert_eq!(Ipv4Network::parse("10.204.49.32/28").unwrap(), supernet);
 
@@ -6756,7 +6808,7 @@ mod test {
         nets.sort();
         nets.dedup();
 
-        let (supernet, range) = ipv4_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv4_binary_split(&mut nets).unwrap();
 
         assert_eq!(Ipv4Network::parse("10.204.49.32/28").unwrap(), supernet);
 
@@ -6798,7 +6850,7 @@ mod test {
         nets.sort();
         nets.dedup();
 
-        let (supernet, range) = ipv4_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv4_binary_split(&mut nets).unwrap();
 
         assert_eq!(Ipv4Network::parse("10.204.49.0/26").unwrap(), supernet);
 
@@ -6809,7 +6861,7 @@ mod test {
 
     #[test]
     fn test_ipv6_binary_split_empty() {
-        assert!(ipv6_binary_split::<Ipv6Network>(&[]).is_none());
+        assert!(ipv6_binary_split::<Ipv6Network>(&mut []).is_none());
     }
 
     #[test]
@@ -6819,7 +6871,7 @@ mod test {
         nets.sort();
         nets.dedup();
 
-        assert!(ipv6_binary_split(&nets).is_none());
+        assert!(ipv6_binary_split(&mut nets).is_none());
     }
 
     #[test]
@@ -6829,7 +6881,7 @@ mod test {
         nets.sort();
         nets.dedup();
 
-        let (supernet, range) = ipv6_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv6_binary_split(&mut nets).unwrap();
         // ::2/127 in binary is "0b...10/0b...10", which contains both "::2" and "::3".
         assert_eq!(Ipv6Network::parse("::2/127").unwrap(), supernet);
 
@@ -6855,7 +6907,7 @@ mod test {
         nets.sort();
         nets.dedup();
 
-        let (supernet, range) = ipv6_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv6_binary_split(&mut nets).unwrap();
 
         assert_eq!(Ipv6Network::parse("2a02:6b8:0:2a10::/60").unwrap(), supernet);
 
@@ -6882,7 +6934,7 @@ mod test {
         nets.sort();
         nets.dedup();
 
-        let (supernet, range) = ipv6_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv6_binary_split(&mut nets).unwrap();
 
         assert_eq!(Ipv6Network::parse("2a02:6b8:0:2300::/61").unwrap(), supernet);
 
@@ -6910,7 +6962,7 @@ mod test {
         nets.sort();
         nets.dedup();
 
-        let (supernet, range) = ipv6_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv6_binary_split(&mut nets).unwrap();
 
         assert_eq!(Ipv6Network::parse("2a02:6b8:0:2308::/61").unwrap(), supernet);
 
@@ -6938,7 +6990,7 @@ mod test {
         nets.sort();
         nets.dedup();
 
-        let (supernet, range) = ipv6_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv6_binary_split(&mut nets).unwrap();
 
         assert_eq!(
             Ipv6Network::parse("2a02:6b8:c00::4510:0:0/ffff:ffff:ff00:0:ffff:fff8::").unwrap(),
@@ -6969,7 +7021,7 @@ mod test {
         nets.sort();
         nets.dedup();
 
-        let (supernet, range) = ipv6_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv6_binary_split(&mut nets).unwrap();
 
         assert_eq!(
             Ipv6Network::parse("2a02:6b8:c00::2308:0:0/ffff:ffff:ff00:0:ffff:fff8::").unwrap(),
@@ -6991,9 +7043,9 @@ mod test {
             "10.1.0.0/16",
             "10.1.0.0/16",
         ];
-        let nets: Vec<_> = nets.iter().map(|net| Ipv4Network::parse(net).unwrap()).collect();
+        let mut nets: Vec<_> = nets.iter().map(|net| Ipv4Network::parse(net).unwrap()).collect();
 
-        let (supernet, range) = ipv4_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv4_binary_split(&mut nets).unwrap();
         assert_eq!(Ipv4Network::parse("10.0.0.0/16").unwrap(), supernet);
         assert_eq!(0..3, range);
     }
@@ -7006,9 +7058,9 @@ mod test {
             "10.1.7.5/255.255.0.255",
             "10.2.0.9/255.0.255.255",
         ];
-        let nets: Vec<_> = nets.iter().map(|net| Ipv4Network::parse(net).unwrap()).collect();
+        let mut nets: Vec<_> = nets.iter().map(|net| Ipv4Network::parse(net).unwrap()).collect();
 
-        let (supernet, range) = ipv4_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv4_binary_split(&mut nets).unwrap();
         assert_eq!(Ipv4Network::parse("10.1.0.5/255.255.0.255").unwrap(), supernet);
         assert_eq!(0..3, range);
     }
@@ -7022,9 +7074,9 @@ mod test {
             "192.168.1.0/24",
             "192.168.1.0/24",
         ];
-        let nets: Vec<_> = nets.iter().map(|net| Ipv4Network::parse(net).unwrap()).collect();
+        let mut nets: Vec<_> = nets.iter().map(|net| Ipv4Network::parse(net).unwrap()).collect();
 
-        let (supernet, range) = ipv4_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv4_binary_split(&mut nets).unwrap();
         assert_eq!(Ipv4Network::parse("192.168.1.0/24").unwrap(), supernet);
         assert_eq!(0..5, range);
     }
@@ -7042,9 +7094,9 @@ mod test {
             "10.0.3.0/24",
             "200.0.0.0/8",
         ];
-        let nets: Vec<_> = nets.iter().map(|net| Ipv4Network::parse(net).unwrap()).collect();
+        let mut nets: Vec<_> = nets.iter().map(|net| Ipv4Network::parse(net).unwrap()).collect();
 
-        let (supernet, range) = ipv4_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv4_binary_split(&mut nets).unwrap();
         assert_eq!(Ipv4Network::parse("10.0.0.0/255.255.252.0").unwrap(), supernet);
         assert_eq!(1..4, range);
     }
@@ -7059,9 +7111,9 @@ mod test {
             "2001:db9::/32",
             "2001:db9::/32",
         ];
-        let nets: Vec<_> = nets.iter().map(|net| Ipv6Network::parse(net).unwrap()).collect();
+        let mut nets: Vec<_> = nets.iter().map(|net| Ipv6Network::parse(net).unwrap()).collect();
 
-        let (supernet, range) = ipv6_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv6_binary_split(&mut nets).unwrap();
         assert_eq!(Ipv6Network::parse("2001:db8::/32").unwrap(), supernet);
         assert_eq!(0..3, range);
     }
@@ -7074,9 +7126,9 @@ mod test {
             "2001:db8:1:2:77:3:4:5/ffff:ffff:ffff:ffff:0:ffff:ffff:ffff",
             "2002:db8:1:2:0:3:4:5/ffff:0:ffff:ffff:ffff:ffff:ffff:ffff",
         ];
-        let nets: Vec<_> = nets.iter().map(|net| Ipv6Network::parse(net).unwrap()).collect();
+        let mut nets: Vec<_> = nets.iter().map(|net| Ipv6Network::parse(net).unwrap()).collect();
 
-        let (supernet, range) = ipv6_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv6_binary_split(&mut nets).unwrap();
         assert_eq!(
             Ipv6Network::parse("2001:db8:1:2:0:3:4:5/ffff:ffff:ffff:ffff:0:ffff:ffff:ffff").unwrap(),
             supernet
@@ -7093,9 +7145,9 @@ mod test {
             "2001:db8::1/64",
             "2001:db8::1/64",
         ];
-        let nets: Vec<_> = nets.iter().map(|net| Ipv6Network::parse(net).unwrap()).collect();
+        let mut nets: Vec<_> = nets.iter().map(|net| Ipv6Network::parse(net).unwrap()).collect();
 
-        let (supernet, range) = ipv6_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv6_binary_split(&mut nets).unwrap();
         assert_eq!(Ipv6Network::parse("2001:db8::1/64").unwrap(), supernet);
         assert_eq!(0..5, range);
     }
@@ -7113,9 +7165,9 @@ mod test {
             "2001:db8:3::/48",
             "9000::/16",
         ];
-        let nets: Vec<_> = nets.iter().map(|net| Ipv6Network::parse(net).unwrap()).collect();
+        let mut nets: Vec<_> = nets.iter().map(|net| Ipv6Network::parse(net).unwrap()).collect();
 
-        let (supernet, range) = ipv6_binary_split(&nets).unwrap();
+        let (supernet, range) = ipv6_binary_split(&mut nets).unwrap();
         assert_eq!(Ipv6Network::parse("2001:db8::/ffff:ffff:fffc::").unwrap(), supernet);
         assert_eq!(1..4, range);
     }
@@ -7270,6 +7322,97 @@ mod test {
         }
     }
 
+    // Checks the contract of the reordering: the prefix before the block is
+    // untouched, the block holds exactly the contained networks of the rest in
+    // their original order, the remaining networks follow in their original
+    // order, and the block holds at least half of the slice.
+    fn check_binary_split_block<U: BinarySplit + Copy + PartialEq + core::fmt::Debug>(
+        original: &[U],
+        reordered: &[U],
+        candidate: U,
+        range: Range<usize>,
+    ) -> Result<(), TestCaseError> {
+        let contained: Vec<U> = original[range.start..]
+            .iter()
+            .copied()
+            .filter(|net| candidate.contains(net))
+            .collect();
+        let rest: Vec<U> = original[range.start..]
+            .iter()
+            .copied()
+            .filter(|net| !candidate.contains(net))
+            .collect();
+        prop_assert!(original[..range.start].iter().all(|net| !candidate.contains(net)));
+        prop_assert_eq!(&original[..range.start], &reordered[..range.start]);
+        prop_assert_eq!(&contained[..], &reordered[range.clone()]);
+        prop_assert_eq!(&rest[..], &reordered[range.end..]);
+        prop_assert!(2 * range.len() >= original.len());
+        Ok(())
+    }
+
+    proptest! {
+        #[test]
+        fn prop_ipv4_binary_split_block_is_exactly_contained(nets in arb_sorted_ipv4_networks()) {
+            let mut reordered = nets.clone();
+            let (candidate, range) = ipv4_binary_split(&mut reordered).unwrap();
+            check_binary_split_block(&nets, &reordered, candidate, range)?;
+        }
+
+        #[test]
+        fn prop_ipv6_binary_split_block_is_exactly_contained(nets in arb_sorted_ipv6_networks()) {
+            let mut reordered = nets.clone();
+            let (candidate, range) = ipv6_binary_split(&mut reordered).unwrap();
+            check_binary_split_block(&nets, &reordered, candidate, range)?;
+        }
+
+        #[test]
+        fn prop_stable_partition_matches_filter(elems in prop::collection::vec(any::<u8>(), 0..64)) {
+            let mut partitioned = elems.clone();
+            let count = stable_partition(&mut partitioned, &mut |x: &u8| x.is_multiple_of(3));
+            let accepted: Vec<u8> = elems.iter().copied().filter(|x| x.is_multiple_of(3)).collect();
+            let rejected: Vec<u8> = elems.iter().copied().filter(|x| !x.is_multiple_of(3)).collect();
+            prop_assert_eq!(accepted.len(), count);
+            prop_assert_eq!(&accepted[..], &partitioned[..count]);
+            prop_assert_eq!(&rejected[..], &partitioned[count..]);
+        }
+    }
+
+    // The supernet of a window can be non-contiguous for CIDR input, and then
+    // a contained network can sit after one that is not: `10.0.0.28/30` after
+    // `10.0.0.25/32` here. It is moved into the block, and both groups keep
+    // their order.
+    #[test]
+    fn test_ipv4_binary_split_gathers_non_consecutive() {
+        let nets = &[
+            "10.0.0.4/32",
+            "10.0.0.6/31",
+            "10.0.0.12/31",
+            "10.0.0.20/31",
+            "10.0.0.25/32",
+            "10.0.0.28/30",
+            "10.0.0.56/30",
+        ];
+        let mut nets: Vec<_> = nets.iter().map(|net| Ipv4Network::parse(net).unwrap()).collect();
+
+        let (supernet, range) = ipv4_binary_split(&mut nets).unwrap();
+        assert_eq!(Ipv4Network::parse("10.0.0.4/255.255.255.228").unwrap(), supernet);
+        assert_eq!(0..5, range);
+
+        let expected: Vec<_> = [
+            "10.0.0.4/32",
+            "10.0.0.6/31",
+            "10.0.0.12/31",
+            "10.0.0.20/31",
+            "10.0.0.28/30",
+            "10.0.0.25/32",
+            "10.0.0.56/30",
+        ]
+        .iter()
+        .map(|net| Ipv4Network::parse(net).unwrap())
+        .collect();
+        assert_eq!(expected, nets);
+    }
+
     // Consecutive /24 networks, deterministic and distinct without needing to
     // sort or dedup: `10.0.0.0/24`, `10.0.1.0/24`, `10.0.2.0/24`, ...
     fn ipv4_boundary_fixture(n: usize) -> Vec<Ipv4Network> {
@@ -7294,11 +7437,11 @@ mod test {
         let threshold = <u32 as Word>::SPLIT_THRESHOLD;
 
         for n in [threshold - 1, threshold, threshold + 1] {
-            let nets = ipv4_boundary_fixture(n);
+            let mut nets = ipv4_boundary_fixture(n);
 
             let quadratic = ip_binary_split_quadratic(&nets);
             let linear = ip_binary_split_linear(&nets);
-            let routed = ipv4_binary_split(&nets);
+            let routed = ipv4_binary_split(&mut nets).map(|(candidate, ..)| candidate);
 
             assert_eq!(quadratic, linear, "quadratic/linear mismatch at n = {n}");
             assert_eq!(routed, linear, "router mismatch at n = {n}");
@@ -7310,11 +7453,11 @@ mod test {
         let threshold = <u128 as Word>::SPLIT_THRESHOLD;
 
         for n in [threshold - 1, threshold, threshold + 1] {
-            let nets = ipv6_boundary_fixture(n);
+            let mut nets = ipv6_boundary_fixture(n);
 
             let quadratic = ip_binary_split_quadratic(&nets);
             let linear = ip_binary_split_linear(&nets);
-            let routed = ipv6_binary_split(&nets);
+            let routed = ipv6_binary_split(&mut nets).map(|(candidate, ..)| candidate);
 
             assert_eq!(quadratic, linear, "quadratic/linear mismatch at n = {n}");
             assert_eq!(routed, linear, "router mismatch at n = {n}");
