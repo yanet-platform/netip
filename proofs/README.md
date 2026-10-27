@@ -1,8 +1,8 @@
 # netip proofs
 
-Machine-checked proofs, in Lean 4, of the network algorithms in `src/`.
-Parsers and formatting are out of scope. [`TODO.md`](TODO.md) lists the claims
-that are not proved yet.
+Machine-checked proofs, in Lean 4, of the network algorithms and the parsers in
+`src/`. Formatting is out of scope. [`TODO.md`](TODO.md) lists the claims that
+are not proved yet.
 
 ## Layout
 
