@@ -19,3 +19,5 @@ import Netip.Impl.Difference
 import Netip.Impl.DifferenceRun
 import Netip.Impl.Ord
 import Netip.Impl.Range
+import Netip.Impl.CidrCover
+import Netip.Impl.AggregateContiguous

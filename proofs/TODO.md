@@ -31,9 +31,6 @@ Parsers and formatting are out of scope. Remove an entry once its proof lands.
 - [ ] `ipv4_aggregate`, `ipv6_aggregate` (`ip_aggregate`): the union is
   preserved, no output network contains or `merge`s with another, and the loops
   terminate.
-- [ ] `ipv4_aggregate_contiguous`, `ipv6_aggregate_contiguous`: the union is
-  preserved, the output is the unique minimum CIDR cover, and the top-only
-  cascade is complete.
 - [ ] `ipv6_aggregate_bicontiguous`: the union is preserved, every output is
   bi-contiguous, and no output contains another, is a lowest-mask-bit sibling of
   another, or is a high-half buddy of another with an equal low-half set. This
