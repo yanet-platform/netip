@@ -21,3 +21,4 @@ import Netip.Impl.Ord
 import Netip.Impl.Range
 import Netip.Impl.CidrCover
 import Netip.Impl.AggregateContiguous
+import Netip.Impl.RangeRun
