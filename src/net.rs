@@ -1722,10 +1722,13 @@ impl Ipv4Network {
     /// by refusing `merge`'s remaining case, a difference at a higher
     /// (non-lowest) mask bit, which would combine the pair into a network
     /// outside the inputs' structural class. Refusing it keeps the result
-    /// in class: a contiguous (CIDR) pair merges to a contiguous parent, a
-    /// non-contiguous pair to a non-contiguous parent, and a containment
-    /// result is simply the larger input, already in class. Whenever it
-    /// returns `Some`, that value equals [`merge`](Self::merge)'s.
+    /// in class: clearing the mask's lowest set bit never adds a run of one
+    /// bits, so a contiguous (CIDR) pair merges to a contiguous parent, and a
+    /// containment result is simply the larger input, already in class. A
+    /// non-contiguous pair can land in the tighter class:
+    /// `10.0.0.0/255.255.255.253` and `10.0.0.1/255.255.255.253` merge into
+    /// `10.0.0.0/30`. Whenever it returns `Some`, that value equals
+    /// [`merge`](Self::merge)'s.
     ///
     /// For a mask made of two contiguous runs (a non-contiguous mask), sibling
     /// merging happens only along the lower run's boundary — the mask's lowest
@@ -3494,11 +3497,13 @@ impl Ipv6Network {
     /// by refusing `merge`'s remaining case, a difference at a higher
     /// (non-lowest) mask bit, which would combine the pair into a network
     /// outside the inputs' structural class. Refusing it keeps the result
-    /// in class: a contiguous (CIDR) pair merges to a contiguous parent, a
-    /// bi-contiguous pair to a bi-contiguous parent, a general
-    /// non-contiguous pair to a non-contiguous parent, and a containment
-    /// result is simply the larger input, already in class. Whenever it
-    /// returns `Some`, that value equals [`merge`](Self::merge)'s.
+    /// in class: clearing the mask's lowest set bit never adds a run of one
+    /// bits, so a contiguous (CIDR) pair merges to a contiguous parent, a
+    /// bi-contiguous pair to a bi-contiguous parent, and a containment result
+    /// is simply the larger input, already in class. A non-contiguous pair can
+    /// land in a tighter class: `2001:db8::` and `2001:db8::1` under the mask
+    /// `ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffd` merge into `2001:db8::/126`.
+    /// Whenever it returns `Some`, that value equals [`merge`](Self::merge)'s.
     ///
     /// For a bi-contiguous mask (one carrying a top-aligned run in each 64-bit
     /// half), sibling merging happens only along the finer low-half boundary —
