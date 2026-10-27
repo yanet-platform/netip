@@ -28,19 +28,9 @@ Parsers and formatting are out of scope. Remove an entry once its proof lands.
   another, or is a high-half buddy of another with an equal low-half set. This
   includes the level-sweep invariants and the containment probe.
 - [ ] `ipv4_binary_split`, `ipv6_binary_split`: the linear and quadratic
-  implementations return identical results (including the kill-word identity
-  and the counter-based sliding OR). For sorted, non-overlapping input the
-  returned network contains every network in `range`, `range` holds at least
-  half of the slice, and it cannot be extended at either end. The doc's
-  "shortest common network" needs a precise statement first.
-- [ ] `ipv4_binary_split`: `range` does not always hold every network that the
-  returned supernet contains, which the doc examples assert for their inputs.
-  The supernet of a window can be non-contiguous even for CIDR input, and the
-  networks it contains are then not consecutive in sorted order. Smallest case
-  found: `10.0.0.4/32, 10.0.0.6/31, 10.0.0.12/31, 10.0.0.20/31, 10.0.0.25/32,
-  10.0.0.28/30, 10.0.0.56/30` gives `10.0.0.4/255.255.255.228` with `range`
-  `0..4`, while `10.0.0.28/30` (index 5) lies inside it. Decide whether this is
-  the intended contract or a bug.
+  candidate searches return the same network (the kill-word identity and the
+  counter-based sliding OR), and the candidate contains a whole window, so the
+  block holds at least half of the slice. Gathering the block is proved.
 
 ## Width-generic mathematics
 
