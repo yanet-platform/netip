@@ -9,10 +9,10 @@ import Std.Tactic.BVDecide
 and `hole a ep eq` is a non-member strictly between the members `a` and `a ∨ ep`.
 
 The witness needs two cases. Flipping bit `eq` of `a` works when that bit of `a`
-is clear; when it is set, the flip lands below `a`, the smallest member, so the
+is clear. When it is set, the flip lands below `a`, the smallest member, so the
 bit is cleared in `a ∨ ep` instead.
 
-Proved for the widths the library uses; a proof for symbolic `n` is still to be
+Proved for the widths the library uses, a proof for symbolic `n` is still to be
 written. Bits are one-hot masks here, so "`eq` sits below `ep`" is `eq < ep`.
 -/
 
