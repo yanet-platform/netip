@@ -1,0 +1,9 @@
+name = "netip"
+defaultTargets = ["Netip"]
+
+[leanOptions]
+autoImplicit = false
+relaxedAutoImplicit = false
+
+[[lean_lib]]
+name = "Netip"
