@@ -10,17 +10,10 @@ Parsers and formatting are out of scope. Remove an entry once its proof lands.
 
 ## Iterators (`src/net.rs`, `src/net/contiguous.rs`, `src/net/bicontiguous.rs`)
 
-- [ ] `Ipv4NetworkAddrs`, `Ipv6NetworkAddrs`: every member is yielded exactly
-  once, in host-index order (index bits deposited into the host positions).
-  `next` and `next_back` interleave and meet, the exhaustion sentinel states are
-  final, and `len`, `size_hint` and `count` equal `2^(host bits)`. The single
-  steps are proved.
-- [ ] `ContiguousIpv4NetworkAddrs`, `ContiguousIpv6NetworkAddrs`: sentinels,
-  remaining counts, and the same sequence as the general iterator. The closed
-  forms are proved.
 - [ ] `BiContiguousIpv6Addrs`: `base | (i & lo_mask) | ((i >> split_shift) << 64)`
   is the `i`-th member in host-index order, strictly increasing, and the same
   sequence as the general iterator, plus the sentinel and `size_hint`.
+
 ## Slice algorithms
 
 - [ ] `ipv6_aggregate_bicontiguous`: the union is preserved, every output is
