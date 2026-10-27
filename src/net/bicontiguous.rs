@@ -616,8 +616,13 @@ impl FromStr for BiContiguous<Ipv6Network> {
 ///
 /// # Complexity
 ///
-/// `O(N * S * log N)` amortized, for `N` the input length and `S` the
-/// number of distinct mask shapes present. All sorting totals `O(N log N)`:
+/// `O(R * N * S * log N)` amortized, for `N` the input length, `S` the
+/// number of distinct mask shapes present and `R` the number of rounds. A
+/// round is the level sweep followed by the containment sweep. Dropping a
+/// contained network can let two high-half buddies merge, so another round
+/// runs whenever the containment sweep drops a network: `R` is at most `N`,
+/// and it is `1` when the first containment sweep drops nothing. Within a
+/// round, all sorting totals `O(N log N)`:
 /// the initial sort, plus one localized re-sort per level that re-parents
 /// networks, each paid for by a distinct network the same level drops, so the
 /// re-sorts cannot outweigh the drops that fund them. Suffix compaction after
@@ -689,10 +694,24 @@ fn bicontiguous_lo_addr(net: &BiContiguous<Ipv6Network>) -> u64 {
 }
 
 // Aggregation driver for `ipv6_aggregate_bicontiguous`: runs the level sweep,
-// then the cross-shape containment sweep, over the same live slice.
+// then the cross-shape containment sweep, over the same live slice, and repeats
+// both while the containment sweep drops networks.
+//
+// A dropped network can leave two high-half buddy groups with equal low-half
+// sets after their level was swept, and only another sweep merges them. A round
+// whose containment sweep drops nothing returns the sweep's output unchanged,
+// which no class-preserving merge can shrink further. Every later round starts
+// from fewer networks, so there are at most `N` rounds.
 fn bicontiguous_aggregate(nets: &mut [BiContiguous<Ipv6Network>]) -> usize {
-    let live = bicontiguous_sweep(nets);
-    bicontiguous_find_containment(&mut nets[..live])
+    let mut live = nets.len();
+    loop {
+        let swept = bicontiguous_sweep(&mut nets[..live]);
+        let kept = bicontiguous_find_containment(&mut nets[..swept]);
+        if kept == swept {
+            return kept;
+        }
+        live = kept;
+    }
 }
 
 // Level sweep for `bicontiguous_aggregate`: returns the number of surviving
@@ -2136,6 +2155,24 @@ mod test {
         assert_eq!(bc("2001:db8::/46"), out[1]);
     }
 
+    // Dropping a contained network can leave two high-half buddies with equal
+    // low halves after their level was swept: `2001:db8::2/128` lies inside
+    // the `/63` high block, and once it is gone `2001:db8::1/128` and
+    // `2001:db8:0:1::1/128` merge, which takes a second round.
+    #[test]
+    fn bicontiguous_ipv6_aggregate_merges_after_containment_drop() {
+        let mut nets = [
+            bc("2001:db8::1/128"),
+            bc("2001:db8::2/128"),
+            bc("2001:db8:0:1::1/128"),
+            bc("2001:db8::2/ffff:ffff:ffff:fffe:ffff:ffff:ffff:ffff"),
+        ];
+        let out = ipv6_aggregate_bicontiguous(&mut nets);
+        assert_eq!(2, out.len());
+        assert_eq!(bc("2001:db8::1/ffff:ffff:ffff:fffe:ffff:ffff:ffff:ffff"), out[0]);
+        assert_eq!(bc("2001:db8::2/ffff:ffff:ffff:fffe:ffff:ffff:ffff:ffff"), out[1]);
+    }
+
     // A container that is not adjacent to what it contains in sort order (an
     // unrelated network sorts between them) is still absorbed by the
     // containment sweep. `db8:1::/48` is dropped, while the disjoint
@@ -2364,6 +2401,33 @@ mod test {
             let mut twice = first.clone();
             let mut second: Vec<BiContiguous<Ipv6Network>> = ipv6_aggregate_bicontiguous(&mut twice).to_vec();
 
+            first.sort_unstable();
+            second.sort_unstable();
+            prop_assert_eq!(first, second);
+        }
+
+        // The same two properties on the dense gridded strategy, where the
+        // containment sweep often drops a network from one of two high-half
+        // buddy groups and leaves their low-half sets equal.
+        #[test]
+        fn prop_bicontiguous_ipv6_aggregate_gridded_is_fixpoint(nets in arb_gridded_bicontiguous_ipv6_slice()) {
+            let mut work = nets.clone();
+            let out = ipv6_aggregate_bicontiguous(&mut work);
+
+            for i in 0..out.len() {
+                for j in 0..out.len() {
+                    if i != j {
+                        prop_assert_eq!((*out[i]).merge_by_lowest_mask_bit(&out[j]), None);
+                    }
+                }
+            }
+
+            let inner: Vec<Ipv6Network> = out.iter().map(|net| **net).collect();
+            prop_assert!(reference_find_hi_group_merge(&inner).is_none());
+
+            let mut first: Vec<BiContiguous<Ipv6Network>> = out.to_vec();
+            let mut twice = first.clone();
+            let mut second: Vec<BiContiguous<Ipv6Network>> = ipv6_aggregate_bicontiguous(&mut twice).to_vec();
             first.sort_unstable();
             second.sort_unstable();
             prop_assert_eq!(first, second);
