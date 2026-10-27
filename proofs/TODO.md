@@ -21,11 +21,6 @@ Parsers and formatting are out of scope. Remove an entry once its proof lands.
 - [ ] `BiContiguousIpv6Addrs`: `base | (i & lo_mask) | ((i >> split_shift) << 64)`
   is the `i`-th member in host-index order, strictly increasing, and the same
   sequence as the general iterator, plus the sentinel and `size_hint`.
-- [ ] `Ipv4RangeNetworks`, `Ipv6RangeNetworks`: the blocks are CIDR and pairwise
-  disjoint, their union is `[first, last]`, and their number is the minimum and
-  at most `2n - 2`. The ascending/descending phase split equals the greedy
-  cover, plus `size_hint` and fusedness. The per-step block arithmetic is proved.
-
 ## Slice algorithms
 
 - [ ] `ipv4_aggregate`, `ipv6_aggregate` (`ip_aggregate`): the union is

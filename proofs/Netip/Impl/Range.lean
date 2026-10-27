@@ -4,8 +4,8 @@ import Netip.Impl.Basic
 # Range-to-CIDR iterators: the block arithmetic
 
 `Ipv4RangeNetworks::next` / `Ipv6RangeNetworks::next`. Proved here are the two
-bit tricks each step relies on, not yet the claims about the whole
-decomposition (minimum cardinality, at most `2n - 2` blocks, the phase split).
+bit tricks each step relies on. The whole decomposition (minimum cardinality, at
+most `2n - 2` blocks, the phase split) is in `RangeRun`.
 
 * Ascending phase: `block = x & -x` is a single bit set in `x` with nothing of `x`
   below it, and `mask = x | -x` is "every bit from `block` up" — the netmask of
