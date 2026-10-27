@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths-ignore:
       - "book/**"
+      - "proofs/**"
   pull_request:
     branches: [main]
     paths-ignore:
       - "book/**"
+      - "proofs/**"
 
 env:
   CARGO_TERM_COLOR: always
