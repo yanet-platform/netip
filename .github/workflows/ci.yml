@@ -41,10 +41,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      # `wrap_comments` and `format_code_in_doc_comments` are nightly-only, and
+      # their output changes between nightlies, so the check runs on a pinned
+      # one. Format locally with the same toolchain, and bump both together.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-08-28
           components: rustfmt
-      - run: cargo +nightly fmt --check
+      - run: cargo +nightly-2026-08-28 fmt --check
 
   clippy:
     name: Clippy
