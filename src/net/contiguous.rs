@@ -420,6 +420,9 @@ impl ExactSizeIterator for ContiguousIpv4NetworkAddrs {
     }
 }
 
+// Once the cursors cross they stay crossed, and both ends return `None`.
+impl core::iter::FusedIterator for ContiguousIpv4NetworkAddrs {}
+
 impl Contiguous<Ipv6Network> {
     /// Parses an IPv6 network from a string and returns a contiguous network.
     pub fn parse(buf: &str) -> Result<Self, ContiguousIpNetParseError> {
@@ -690,6 +693,9 @@ impl DoubleEndedIterator for ContiguousIpv6NetworkAddrs {
         Some(Ipv6Addr::from_bits(addr))
     }
 }
+
+// Once the cursors cross they stay crossed, and both ends return `None`.
+impl core::iter::FusedIterator for ContiguousIpv6NetworkAddrs {}
 
 impl From<Contiguous<Ipv4Network>> for Contiguous<IpNetwork> {
     #[inline]

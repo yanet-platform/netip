@@ -506,6 +506,9 @@ impl DoubleEndedIterator for BiContiguousIpv6Addrs {
     }
 }
 
+// Once the cursors cross they stay crossed, and both ends return `None`.
+impl core::iter::FusedIterator for BiContiguousIpv6Addrs {}
+
 impl TryFrom<Ipv6Network> for BiContiguous<Ipv6Network> {
     type Error = BiContiguousIpNetParseError;
 

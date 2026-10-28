@@ -2188,6 +2188,9 @@ impl ExactSizeIterator for Ipv4NetworkAddrs {
     }
 }
 
+// Once `remaining` is zero it stays zero, and both ends return `None`.
+impl core::iter::FusedIterator for Ipv4NetworkAddrs {}
+
 /// Lazy iterator over [`Ipv4Network`] parts of a set difference.
 ///
 /// Created by [`Ipv4Network::difference`].
@@ -2379,6 +2382,9 @@ impl ExactSizeIterator for Ipv4NetworkDiff {
         self.remaining.count_ones() as usize
     }
 }
+
+// Once `remaining` is empty it stays empty, and both ends return `None`.
+impl core::iter::FusedIterator for Ipv4NetworkDiff {}
 
 /// An iterator over the minimum set of contiguous IPv4 networks (CIDR blocks)
 /// whose union equals the closed address interval `[first, last]`.
@@ -3892,6 +3898,9 @@ impl DoubleEndedIterator for Ipv6NetworkAddrs {
     }
 }
 
+// Once `remaining` is zero it stays zero, and both ends return `None`.
+impl core::iter::FusedIterator for Ipv6NetworkAddrs {}
+
 /// Lazy iterator over [`Ipv6Network`] parts of a set difference.
 ///
 /// Created by [`Ipv6Network::difference`].
@@ -4109,6 +4118,9 @@ impl ExactSizeIterator for Ipv6NetworkDiff {
         self.remaining.count_ones() as usize
     }
 }
+
+// Once `remaining` is empty it stays empty, and both ends return `None`.
+impl core::iter::FusedIterator for Ipv6NetworkDiff {}
 
 /// An iterator over the minimum set of contiguous IPv6 networks (CIDR blocks)
 /// whose union equals the closed address interval `[first, last]`.
@@ -5777,6 +5789,76 @@ mod test {
         assert_eq!(front_then_back, back_only);
         assert_eq!(back_only, back_then_front);
         assert_ne!(front_only, front_then_back);
+    }
+
+    // Drains `iter` by `script`, `true` for `next` and `false` for `next_back`,
+    // repeated until a call returns `None`, then checks that every later call
+    // from either end returns `None` too: the `FusedIterator` promise, kept
+    // from both ends. The iterators tested hold at most 128 items, so 256
+    // calls drain any of them.
+    fn assert_stays_exhausted<I>(mut iter: I, script: &[bool])
+    where
+        I: core::iter::FusedIterator + DoubleEndedIterator,
+    {
+        let call = |iter: &mut I, front: bool| if front { iter.next() } else { iter.next_back() };
+        let mut steps = script.iter().cycle().take(256);
+        assert!(
+            steps.any(|&front| call(&mut iter, front).is_none()),
+            "not drained in 256 calls"
+        );
+        for &front in script {
+            assert!(call(&mut iter, front).is_none());
+        }
+    }
+
+    // A mask with at most five host bits, anywhere in the word, so that a test
+    // can drain the network's members.
+    fn arb_few_host_bits_u32() -> impl Strategy<Value = u32> {
+        prop::collection::vec(0u32..32, 0..6).prop_map(|bits| !bits.into_iter().fold(0, |m, b| m | 1 << b))
+    }
+
+    fn arb_few_host_bits_u128() -> impl Strategy<Value = u128> {
+        prop::collection::vec(0u32..128, 0..6).prop_map(|bits| !bits.into_iter().fold(0, |m, b| m | 1 << b))
+    }
+
+    proptest! {
+        #[test]
+        fn prop_addrs_iterators_stay_exhausted(
+            a4 in any::<u32>(),
+            m4 in arb_few_host_bits_u32(),
+            a6 in any::<u128>(),
+            m6 in arb_few_host_bits_u128(),
+            prefix4 in 27u8..=32,
+            prefix6 in 123u8..=128,
+            hi_prefix in 62u32..=64,
+            lo_prefix in 62u32..=64,
+            script in prop::collection::vec(any::<bool>(), 1..8),
+        ) {
+            assert_stays_exhausted(Ipv4Network::from_bits(a4, m4).addrs(), &script);
+            assert_stays_exhausted(Ipv6Network::from_bits(a6, m6).addrs(), &script);
+
+            let net = Contiguous::<Ipv4Network>::try_from((Ipv4Addr::from_bits(a4), prefix4)).unwrap();
+            assert_stays_exhausted(net.addrs(), &script);
+            let net = Contiguous::<Ipv6Network>::try_from((Ipv6Addr::from_bits(a6), prefix6)).unwrap();
+            assert_stays_exhausted(net.addrs(), &script);
+
+            let half = |prefix: u32| !u64::MAX.checked_shr(prefix).unwrap_or(0);
+            let mask = u128::from(half(hi_prefix)) << 64 | u128::from(half(lo_prefix));
+            let net = BiContiguous::<Ipv6Network>::try_from(Ipv6Network::from_bits(a6, mask)).unwrap();
+            assert_stays_exhausted(net.addrs(), &script);
+        }
+
+        #[test]
+        fn prop_difference_iterators_stay_exhausted(
+            a4 in arb_ipv4_network(),
+            b4 in arb_ipv4_network(),
+            a6 in arb_ipv6_network(),
+            b6 in arb_ipv6_network(),
+            script in prop::collection::vec(any::<bool>(), 1..8),
+        ) {
+            assert_stays_exhausted(a4.difference(&b4), &script);
+            assert_stays_exhausted(a6.difference(&b6), &script);
+        }
     }
 
     proptest! {
