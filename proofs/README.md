@@ -17,6 +17,22 @@ are not proved yet.
 Transcriptions are written by hand and follow the Rust code branch for branch,
 so changing an algorithm in `src/` needs the matching change here.
 
+## Drift
+
+[`pins.txt`](pins.txt) lists every item of `src/` that a transcription follows,
+pinned by a hash of its tokens, with the Lean declarations that transcribe it.
+Comments, doc comments and formatting are not tokens and do not change a pin.
+The Drift workflow runs `drift/` on every change to `src/` or `proofs/`: it fails
+on an item whose code changed, annotating its line with the transcriptions to
+check against the new code, and on a pin that names a missing item or
+declaration. Once the transcriptions and proofs match the code again, re-pin
+from anywhere in the repository with
+
+    cargo run --manifest-path proofs/drift/Cargo.toml -- bless
+
+`-- unpinned` lists the items of `src/` that no pin names: formatting, `MacAddr`,
+and the conversions and accessors no theorem is about.
+
 ## Building
 
 Install [elan](https://github.com/leanprover/elan), then run in this directory:

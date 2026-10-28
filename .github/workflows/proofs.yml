@@ -5,11 +5,15 @@ on:
     branches: [main]
     paths:
       - "proofs/**"
+      - "!proofs/drift/**"
+      - "!proofs/pins.txt"
       - ".github/workflows/proofs.yml"
   pull_request:
     branches: [main]
     paths:
       - "proofs/**"
+      - "!proofs/drift/**"
+      - "!proofs/pins.txt"
       - ".github/workflows/proofs.yml"
 
 jobs:
