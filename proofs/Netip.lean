@@ -22,4 +22,5 @@ import Netip.Impl.Range
 import Netip.Impl.CidrCover
 import Netip.Impl.AggregateContiguous
 import Netip.Impl.Aggregate
+import Netip.Impl.BinarySplit
 import Netip.Impl.RangeRun
