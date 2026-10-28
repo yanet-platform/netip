@@ -43,4 +43,7 @@ declared axioms.
 
 The parser theorems compare `src/parser.rs` with `core`'s own parsing as
 `Netip/Impl/ParseCore.lean` transcribes it from the Rust 1.99 sources. That
-transcription is trusted like the others.
+transcription is trusted like the others. Rust 1.88 to 1.97, which the crate
+supports too, read octets and groups with an older `read_number`, and
+`Netip/Impl/ParseCoreReadNumber.lean` proves that it reads exactly the same, so
+the theorems hold on every supported release.
