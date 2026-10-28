@@ -10,7 +10,7 @@ use core::{
     cmp::Ordering,
     convert::TryFrom,
     error::Error,
-    fmt::{Debug, Display, Formatter},
+    fmt::{Debug, Display, Formatter, Write},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     ops::{BitAnd, BitOr, BitOrAssign, BitXor, Not, Range},
     str::FromStr,
@@ -22,7 +22,10 @@ mod contiguous;
 pub use bicontiguous::{BiContiguous, BiContiguousIpNetParseError, ipv6_aggregate_bicontiguous};
 pub use contiguous::{Contiguous, ContiguousIpNetParseError, ipv4_aggregate_contiguous, ipv6_aggregate_contiguous};
 
-use crate::parser::{self, IpNetParseError};
+use crate::{
+    fmt::DisplayBuffer,
+    parser::{self, IpNetParseError},
+};
 
 pub const IPV4_ALL_BITS: Ipv4Addr = Ipv4Addr::new(0xff, 0xff, 0xff, 0xff);
 pub const IPV6_ALL_BITS: Ipv6Addr = Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff);
@@ -1994,14 +1997,32 @@ impl Display for Ipv4Network {
     ///
     /// The idea is to format using **the most compact** representation, except
     /// for non-contiguous networks, which are formatted explicitly.
+    ///
+    /// Width, fill, alignment and precision apply to the whole text, as for
+    /// [`Ipv4Addr`].
     fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
+        if fmt.width().is_none() && fmt.precision().is_none() {
+            return self.write_text(fmt);
+        }
+
+        let mut buf = DisplayBuffer::new();
+        self.write_text(&mut buf)?;
+        fmt.pad(buf.as_str())
+    }
+}
+
+impl Ipv4Network {
+    /// Writes the text of [`Display`]: `addr/prefix`, or `addr/mask` for a
+    /// non-contiguous mask.
+    #[inline]
+    fn write_text(&self, w: &mut impl Write) -> Result<(), core::fmt::Error> {
         match self {
             Self(addr, mask) => {
                 match self.prefix() {
-                    Some(prefix) => fmt.write_fmt(format_args!("{}/{}", addr, prefix)),
+                    Some(prefix) => write!(w, "{addr}/{prefix}"),
                     None => {
                         // This is a non-contiguous network, expand the mask.
-                        fmt.write_fmt(format_args!("{}/{}", addr, mask))
+                        write!(w, "{addr}/{mask}")
                     }
                 }
             }
@@ -4236,14 +4257,32 @@ impl Display for Ipv6Network {
     ///
     /// The idea is to format using **the most compact** representation, except
     /// for non-contiguous networks, which are formatted explicitly.
+    ///
+    /// Width, fill, alignment and precision apply to the whole text, as for
+    /// [`Ipv6Addr`].
     fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
+        if fmt.width().is_none() && fmt.precision().is_none() {
+            return self.write_text(fmt);
+        }
+
+        let mut buf = DisplayBuffer::new();
+        self.write_text(&mut buf)?;
+        fmt.pad(buf.as_str())
+    }
+}
+
+impl Ipv6Network {
+    /// Writes the text of [`Display`]: `addr/prefix`, or `addr/mask` for a
+    /// non-contiguous mask.
+    #[inline]
+    fn write_text(&self, w: &mut impl Write) -> Result<(), core::fmt::Error> {
         match self {
             Ipv6Network(addr, mask) => {
                 match self.prefix() {
-                    Some(prefix) => fmt.write_fmt(format_args!("{}/{}", addr, prefix)),
+                    Some(prefix) => write!(w, "{addr}/{prefix}"),
                     None => {
                         // This is a non-contiguous network, expand the mask.
-                        fmt.write_fmt(format_args!("{}/{}", addr, mask))
+                        write!(w, "{addr}/{mask}")
                     }
                 }
             }
@@ -6516,6 +6555,50 @@ mod test {
             "ffff:ffff:0:0:ffff:ffff:0:0".parse().unwrap(),
         );
         assert_eq!("2a02:6b8::1234:5678:0:0/ffff:ffff::ffff:ffff:0:0", &format!("{net}"));
+    }
+
+    #[test]
+    fn test_net_display_pads_whole_text() {
+        let net = Ipv4Network::parse("10.0.0.0/24").unwrap();
+        assert_eq!("[10.0.0.0/24   ]", format!("[{net:14}]"));
+        assert_eq!("[   10.0.0.0/24]", format!("[{net:>14}]"));
+        assert_eq!("[*10.0.0.0/24**]", format!("[{net:*^14}]"));
+        assert_eq!("[10.0]", format!("[{net:.4}]"));
+
+        let net = Ipv6Network::parse("2001:db8::/32").unwrap();
+        assert_eq!("[   2001:db8::/32]", format!("[{net:>16}]"));
+
+        let net = IpNetwork::parse("192.168.0.1/255.255.0.255").unwrap();
+        assert_eq!("[192.168.0.1/255.255.0.255  ]", format!("[{net:27}]"));
+
+        // The longest text of any network fills the stack buffer exactly.
+        let net = Ipv6Network::from_bits(u128::MAX - 2, u128::MAX - 2);
+        let text = "ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffd/ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffd";
+        assert_eq!(text, net.to_string());
+        assert_eq!(format!("{text:>90}"), format!("{net:>90}"));
+    }
+
+    proptest! {
+        /// `Display` pads and truncates the whole text exactly as `str` does.
+        #[test]
+        fn prop_ipv4_display_pads_like_str(net in arb_ipv4_network(), width in 0usize..40, precision in 0usize..40) {
+            let text = net.to_string();
+            prop_assert_eq!(format!("{net:width$}"), format!("{text:width$}"));
+            prop_assert_eq!(format!("{net:>width$}"), format!("{text:>width$}"));
+            prop_assert_eq!(format!("{net:*^width$}"), format!("{text:*^width$}"));
+            prop_assert_eq!(format!("{net:.precision$}"), format!("{text:.precision$}"));
+            prop_assert_eq!(format!("{net:>width$.precision$}"), format!("{text:>width$.precision$}"));
+        }
+
+        #[test]
+        fn prop_ipv6_display_pads_like_str(net in arb_ipv6_network(), width in 0usize..96, precision in 0usize..96) {
+            let text = net.to_string();
+            prop_assert_eq!(format!("{net:width$}"), format!("{text:width$}"));
+            prop_assert_eq!(format!("{net:>width$}"), format!("{text:>width$}"));
+            prop_assert_eq!(format!("{net:*^width$}"), format!("{text:*^width$}"));
+            prop_assert_eq!(format!("{net:.precision$}"), format!("{text:.precision$}"));
+            prop_assert_eq!(format!("{net:>width$.precision$}"), format!("{text:>width$.precision$}"));
+        }
     }
 
     #[test]

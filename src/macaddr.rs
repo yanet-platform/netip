@@ -275,7 +275,8 @@ impl Display for MacAddr {
             buf[3 * i + 1] = hex_nibble(octet & 0x0f);
         }
 
-        fmt.write_str(str::from_utf8(&buf).expect("buffer holds only ASCII hex digits and ':', always valid UTF-8"))
+        // `pad` applies width, fill, alignment and precision to the whole text.
+        fmt.pad(str::from_utf8(&buf).expect("buffer holds only ASCII hex digits and ':', always valid UTF-8"))
     }
 }
 
@@ -410,6 +411,14 @@ mod test {
     #[test]
     fn display_broadcast() {
         assert_eq!("ff:ff:ff:ff:ff:ff", MacAddr::BROADCAST.to_string());
+    }
+
+    #[test]
+    fn display_pads_whole_text() {
+        let mac = MacAddr::new(0x3a, 0xac, 0x26, 0x9b, 0x5b, 0xf9);
+        assert_eq!("[3a:ac:26:9b:5b:f9   ]", format!("[{mac:20}]"));
+        assert_eq!("[   3a:ac:26:9b:5b:f9]", format!("[{mac:>20}]"));
+        assert_eq!("[3a:ac]", format!("[{mac:.5}]"));
     }
 
     #[test]
