@@ -1,0 +1,14 @@
+[package]
+name = "drift"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Checks that the Rust items the Lean transcriptions follow have not changed"
+
+# Not a member of any workspace: the crate's own builds never see this tool.
+[workspace]
+
+[dependencies]
+proc-macro2 = { version = "1", default-features = false, features = ["span-locations"] }
+quote = { version = "1", default-features = false }
+syn = { version = "2", default-features = false, features = ["clone-impls", "full", "parsing", "printing"] }

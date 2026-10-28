@@ -1,0 +1,313 @@
+# The Rust items the Lean transcriptions follow, each pinned by a hash of its
+# tokens. Comments, doc comments and formatting are not tokens, so they do not
+# change a pin. Any other change does, and `proofs/drift` then fails until the
+# transcriptions are checked against the new code and the item is re-pinned:
+#
+#     cargo run --manifest-path proofs/drift/Cargo.toml              # check
+#     cargo run --manifest-path proofs/drift/Cargo.toml -- bless     # re-pin
+#
+# A `[file]` line starts the items of a file of `src/`. An item line is
+#
+#     <item> <pin> <lean>...
+#
+# where `<item>` is `name`, `Type::name` or `Type::Trait::name`, without
+# spaces, and each `<lean>` is a file under `proofs/`, optionally followed by
+# `:<declaration>`, that transcribes the item or states a theorem about its code.
+# `cargo run --manifest-path proofs/drift/Cargo.toml -- unpinned` lists the
+# items no line names: formatting, `MacAddr`, the trivial conversions and
+# accessors that no theorem is about.
+
+[src/net.rs]
+
+# Masks and the bit tests every network operation uses.
+IPV4_ALL_BITS                                       5833928495a57ea7  Netip/Impl/ParseNet.lean:Parse.parseIpv4NetworkAscii
+IPV6_ALL_BITS                                       bf5e9b806bda1821  Netip/Impl/ParseNet.lean:Parse.parseIpv6NetworkAscii
+CidrOverflowError                                   2f617189f1a21c72  Netip/Impl/ParseNet.lean:Parse.NetError
+ipv4_mask_from_cidr                                 3e717cbd04b12285  Netip/Impl/Basic.lean:maskFromCidr Netip/Impl/IsContiguous.lean
+ipv6_mask_from_cidr                                 197a1cb40d1b8e95  Netip/Impl/Basic.lean:maskFromCidr Netip/Impl/IsContiguous.lean
+ipv4_adjacent_bit                                   1bbc85b3f65f746a  Netip/Impl/Adjacent.lean:adjacentBit
+ipv6_adjacent_bit                                   2b958f7201c35b22  Netip/Impl/Adjacent.lean:adjacentBit
+ipv4_adjacent_by_lowest_mask_bit                    f2b5df78d285b710  Netip/Impl/Adjacent.lean:AdjacentByLowestMaskBit
+ipv6_adjacent_by_lowest_mask_bit                    7cbfa0a4b5b1a800  Netip/Impl/Adjacent.lean:AdjacentByLowestMaskBit
+
+# `IpNetwork`: the per-family dispatch.
+IpNetwork                                           d6a404c98a78c34c  Netip/Impl/Conversions.lean:IpNet Netip/Impl/ParseNet.lean:Parse.IpNet
+IpNetwork::parse                                    41e87390d4041b75  Netip/Impl/ParseNet.lean:Parse.parseIpNetworkAscii
+IpNetwork::parse_ascii                              cad6768bc96d9f37  Netip/Impl/ParseNet.lean:Parse.parseIpNetworkAscii
+IpNetwork::parse_next_ascii                         d59136afe3e960b8  Netip/Impl/ParseToken.lean:Parse.parseIpNetworkNextAscii
+IpNetwork::addr                                     519ab67d10382cce  Netip/Impl/IpNetwork.lean:IpNet.addr
+IpNetwork::mask                                     5e4b8d7d48bfec91  Netip/Impl/IpNetwork.lean:IpNet.mask
+IpNetwork::contains                                 7db8fecf35afdaad  Netip/Impl/IpNetwork.lean:IpNet.contains
+IpNetwork::to_contiguous                            edd3032413b19439  Netip/Impl/IpNetwork.lean:IpNet.toContiguous
+IpNetwork::is_contiguous                            c4a01d0c05d6fd5e  Netip/Impl/IpNetwork.lean:IpNet.isContiguous
+IpNetwork::prefix                                   302e24256e88a46c  Netip/Impl/IpNetwork.lean:IpNet.prefixLen
+IpNetwork::last_addr                                1a0a70fd38ea445f  Netip/Impl/IpNetwork.lean:IpNet.lastAddr
+IpNetwork::intersects                               3fbc07f4d47841e0  Netip/Impl/IpNetwork.lean:IpNet.intersects
+IpNetwork::is_disjoint                              3d401129e5f0b91b  Netip/Impl/IpNetwork.lean:IpNet.isDisjoint
+IpNetwork::intersection                             4d221133894498ec  Netip/Impl/IpNetwork.lean:IpNet.intersection
+IpNetwork::is_adjacent                              948862eba5f12ea5  Netip/Impl/IpNetwork.lean:IpNet.isAdjacent
+IpNetwork::is_adjacent_by_lowest_mask_bit           b575ecab526d2cd9  Netip/Impl/IpNetwork.lean:IpNet.isAdjacentByLowestMaskBit
+IpNetwork::merge                                    9b5c310dd1da829f  Netip/Impl/IpNetwork.lean:IpNet.merge
+IpNetwork::merge_by_lowest_mask_bit                 ac7a1f3521995dff  Netip/Impl/IpNetwork.lean:IpNet.mergeByLowestMaskBit
+IpNetwork::to_ipv6_mapped                           e099d9b4c5cf4426  Netip/Impl/Conversions.lean:IpNet.toIpv6Mapped
+IpNetwork::to_canonical                             bf0b6fa3d3590933  Netip/Impl/Conversions.lean:IpNet.toCanonical
+IpNetwork::FromStr::from_str                        ab27b4900df7d5c5  Netip/Impl/ParseNet.lean:Parse.parseIpNetworkAscii
+
+# `Ipv4Network`.
+Ipv4Network                                         1fbf1e620ba7459b  Netip/Network.lean Netip/Impl/ParseNet.lean:Parse.Net
+Ipv4Network::new                                    613108d07971d6c5  Netip/Network.lean Netip/Impl/ParseNet.lean:Parse.newNet
+Ipv4Network::parse                                  78b7d3474503b66d  Netip/Impl/ParseNet.lean:Parse.parseIpv4NetworkAscii
+Ipv4Network::parse_ascii                            38e22dc398db36cf  Netip/Impl/ParseNet.lean:Parse.parseIpv4NetworkAscii
+Ipv4Network::parse_next_ascii                       73640e7ef168cf9c  Netip/Impl/ParseToken.lean:Parse.parseIpv4NetworkNextAscii
+Ipv4Network::addr                                   be2f122f01fc28a4  Netip/Impl/Basic.lean
+Ipv4Network::mask                                   51e6065dd9b5f369  Netip/Impl/Basic.lean
+Ipv4Network::from_bits                              d7b1c2d1384f7ccd  Netip/Impl/ParseNet.lean:Parse.newNet Netip/Impl/BinarySplitSearch.lean:linear
+Ipv4Network::to_bits                                d702b2eba3e5a0b6  Netip/Impl/Basic.lean
+Ipv4Network::contains                               3a146409ca26863c  Netip/Impl/SetOps.lean:Ipv4.contains_iff Netip/Impl/Supernet.lean:Contains
+Ipv4Network::intersects                             6462cc13b559d36f  Netip/Impl/IpNetwork.lean:IpNet.intersects
+Ipv4Network::is_disjoint                            f996cb1143de3ebe  Netip/Impl/IpNetwork.lean:IpNet.isDisjoint
+Ipv4Network::intersection                           9322ac507b4562ce  Netip/Impl/SetOps.lean:Ipv4.intersection_iff Netip/Impl/SetOps.lean:Ipv4.intersection_normalized
+Ipv4Network::difference                             d47c974dadcf860b  Netip/Impl/Difference.lean
+Ipv4Network::is_contiguous                          17ce4c14ad5cc8ff  Netip/Impl/Basic.lean:IsContiguous
+Ipv4Network::prefix                                 fd582ff127a3eb54  Netip/Impl/IsContiguous.lean:Ipv4.leadingOnes_eq_popcount Netip/Impl/IpNetwork.lean:IpNet.prefixLen
+Ipv4Network::to_contiguous                          303fcc8ba9c8d4c6  Netip/Impl/Conversions.lean:toContiguous
+Ipv4Network::supernet_for                           80571534383b708e  Netip/Impl/Supernet.lean:supernetMask Netip/Impl/Supernet.lean:Ipv4.bswap
+Ipv4Network::is_adjacent                            4e44bf4382a712a5  Netip/Impl/Adjacent.lean:adjacentBit
+Ipv4Network::is_adjacent_by_lowest_mask_bit         1eeb0aa610f6132d  Netip/Impl/Adjacent.lean:AdjacentByLowestMaskBit
+Ipv4Network::merge                                  113bf18e5c042201  Netip/Impl/Merge.lean:merge
+Ipv4Network::merge_by_lowest_mask_bit               e73a1f9b9cba9057  Netip/Impl/Merge.lean:mergeByLowestMaskBit
+Ipv4Network::to_ipv6_mapped                         5dc9b8f438d44b5f  Netip/Impl/Conversions.lean:Ipv4.toIpv6Mapped
+Ipv4Network::last_addr                              14a3f452f2bc8424  Netip/Impl/SetOps.lean:Ipv4.lastAddr_max
+Ipv4Network::addrs                                  5a7f7f2a4b4fe99b  Netip/Impl/AddrsRun.lean:Ipv4.addrsInit
+Ipv4Network::Ord::cmp                               248fe8dcd53fb18f  Netip/Impl/Ord.lean:Ipv4.ord_key
+Ipv4Network::PartialOrd::partial_cmp                cf3e34e0da9fa5b7  Netip/Impl/Ord.lean:Ipv4.ord_key
+Ipv4Network::TryFrom<(Ipv4Addr,u8)>::try_from       f865684e50008708  Netip/Impl/ParseNet.lean:Parse.tryFromCidr
+Ipv4Network::FromStr::from_str                      185f9c6315974ef9  Netip/Impl/ParseNet.lean:Parse.parseIpv4NetworkAscii
+
+# `Ipv4Network::addrs`, `difference` and `ipv4_range_to_networks`.
+Ipv4NetworkAddrs                                    62b0083bc0ba7277  Netip/Impl/AddrsRun.lean:Addrs
+Ipv4NetworkAddrs::Iterator::next                    698c2dc7d9122307  Netip/Impl/AddrsRun.lean:addrsNext Netip/Impl/Addrs.lean:Ipv4.next_step
+Ipv4NetworkAddrs::Iterator::count                   bbb5251e318051d7  Netip/Impl/AddrsRun.lean:sizeHint
+Ipv4NetworkAddrs::Iterator::size_hint               5dc434b2f10c1ed5  Netip/Impl/AddrsRun.lean:sizeHint
+Ipv4NetworkAddrs::DoubleEndedIterator::next_back    ccbe7c8d86c738b9  Netip/Impl/AddrsRun.lean:addrsNextBack Netip/Impl/Addrs.lean:Ipv4.nextBack_step
+Ipv4NetworkAddrs::ExactSizeIterator::len            06983ad6261708ee  Netip/Impl/AddrsRun.lean:sizeHint
+Ipv4NetworkDiff                                     c255ed5146d419b6  Netip/Impl/Difference.lean:Ipv4.Inv
+Ipv4NetworkDiff::new                                c795fcf83540e441  Netip/Impl/Difference.lean:Ipv4.Inv Netip/Impl/DifferenceRun.lean
+Ipv4NetworkDiff::Iterator::next                     cda18a4275137df9  Netip/Impl/Difference.lean:Ipv4.ladder Netip/Impl/DifferenceRun.lean:Ipv4.diffStep
+Ipv4NetworkDiff::Iterator::count                    0d80add173eeaee3  Netip/Impl/DifferenceRun.lean
+Ipv4NetworkDiff::Iterator::size_hint                2e6271650c05826c  Netip/Impl/DifferenceRun.lean
+Ipv4NetworkDiff::Iterator::last                     2487c785097b37ec  Netip/Impl/DifferenceRun.lean
+Ipv4NetworkDiff::DoubleEndedIterator::next_back     d020688f52a26120  Netip/Impl/DifferenceRun.lean:Ipv4.diffStep
+Ipv4NetworkDiff::ExactSizeIterator::len             1c96eaeae54ac5b8  Netip/Impl/DifferenceRun.lean
+Ipv4RangeNetworks                                   f2e0dfd0f50c6002  Netip/Impl/RangeRun.lean:Ipv4.RangeState
+ipv4_range_to_networks                              8d4fcdac4c0a103e  Netip/Impl/RangeRun.lean:Ipv4.rangeInit
+Ipv4RangeNetworks::Iterator::next                   c59ef081377df002  Netip/Impl/RangeRun.lean:Ipv4.rangeNext Netip/Impl/Range.lean:Ipv4.descending_block
+Ipv4RangeNetworks::Iterator::size_hint              52edae597eb5e039  Netip/Impl/RangeRun.lean
+
+# `Ipv6Network`.
+Ipv6Network                                         0fb2274a62939c19  Netip/Network.lean Netip/Impl/ParseNet.lean:Parse.Net
+Ipv6Network::new                                    73f569070334e335  Netip/Network.lean Netip/Impl/ParseNet.lean:Parse.newNet
+Ipv6Network::parse                                  ccddd16c389138c1  Netip/Impl/ParseNet.lean:Parse.parseIpv6NetworkAscii
+Ipv6Network::parse_ascii                            50b7480ae35b9573  Netip/Impl/ParseNet.lean:Parse.parseIpv6NetworkAscii
+Ipv6Network::parse_next_ascii                       2ef4afe8a4f71d58  Netip/Impl/ParseToken.lean:Parse.parseIpv6NetworkNextAscii
+Ipv6Network::addr                                   6113eb911ff76485  Netip/Impl/Basic.lean
+Ipv6Network::mask                                   ab9fc77ea7e52546  Netip/Impl/Basic.lean
+Ipv6Network::from_bits                              6503ad9e06f2c51f  Netip/Impl/ParseNet.lean:Parse.newNet Netip/Impl/BinarySplitSearch.lean:linear
+Ipv6Network::to_bits                                91e3786f1907a1b4  Netip/Impl/Basic.lean
+Ipv6Network::contains                               758cc16581c7e504  Netip/Impl/SetOps.lean:Ipv6.contains_iff Netip/Impl/Supernet.lean:Contains
+Ipv6Network::intersects                             45bdbf7c1a1eb98d  Netip/Impl/IpNetwork.lean:IpNet.intersects
+Ipv6Network::is_disjoint                            f2c14ee8281acd26  Netip/Impl/IpNetwork.lean:IpNet.isDisjoint
+Ipv6Network::intersection                           c069bc0dd5d83314  Netip/Impl/SetOps.lean:Ipv6.intersection_iff Netip/Impl/SetOps.lean:Ipv6.intersection_normalized
+Ipv6Network::difference                             1f03f74535a8a485  Netip/Impl/Difference.lean
+Ipv6Network::is_contiguous                          2e00029a967367ed  Netip/Impl/Basic.lean:IsContiguous
+Ipv6Network::is_bicontiguous                        c69db1571380d43a  Netip/Impl/BiContiguous.lean:Ipv6.IsBiContiguous
+Ipv6Network::is_ipv4_mapped_ipv6                    d0fa6e6dbe2a072d  Netip/Impl/Conversions.lean:Ipv6.IsIpv4Mapped
+Ipv6Network::to_contiguous                          a4a7e333df97f57c  Netip/Impl/Conversions.lean:toContiguous
+Ipv6Network::to_ipv4_mapped                         00caec9335d6c37f  Netip/Impl/Conversions.lean:Ipv6.toIpv4Mapped
+Ipv6Network::prefix                                 0a7a27bc2ae735aa  Netip/Impl/IsContiguous.lean:Ipv6.leadingOnes_eq_popcount Netip/Impl/IpNetwork.lean:IpNet.prefixLen
+Ipv6Network::supernet_for                           6e1ec4ad29d86430  Netip/Impl/Supernet.lean:supernetMask
+Ipv6Network::is_adjacent                            59e53c9b0046f721  Netip/Impl/Adjacent.lean:adjacentBit
+Ipv6Network::is_adjacent_by_lowest_mask_bit         931f075e4575758d  Netip/Impl/Adjacent.lean:AdjacentByLowestMaskBit
+Ipv6Network::merge                                  95a926763c016b5f  Netip/Impl/Merge.lean:merge
+Ipv6Network::merge_by_lowest_mask_bit               153fefb87c53a88f  Netip/Impl/Merge.lean:mergeByLowestMaskBit
+Ipv6Network::last_addr                              ef9701c864775e1e  Netip/Impl/SetOps.lean:Ipv6.lastAddr_max
+Ipv6Network::addrs                                  4f315930a9aaee5a  Netip/Impl/AddrsRun.lean:Ipv6.addrsInit Netip/Impl/AddrsRun.lean:Ipv6.addrsCount
+Ipv6Network::Ord::cmp                               a310329006178d76  Netip/Impl/AggregateContiguous.lean:aggregate Netip/Impl/Aggregate.lean:aggregateGeneral
+Ipv6Network::PartialOrd::partial_cmp                b45a508084a82159  Netip/Impl/AggregateContiguous.lean:aggregate Netip/Impl/Aggregate.lean:aggregateGeneral
+Ipv6Network::TryFrom<(Ipv6Addr,u8)>::try_from       4631b8292c7e7a4b  Netip/Impl/ParseNet.lean:Parse.tryFromCidr
+Ipv6Network::FromStr::from_str                      4ce19885d93139a1  Netip/Impl/ParseNet.lean:Parse.parseIpv6NetworkAscii
+
+# `Ipv6Network::addrs`, `difference` and `ipv6_range_to_networks`.
+Ipv6NetworkAddrs                                    f358c7a9d3dd91b0  Netip/Impl/AddrsRun.lean:Addrs
+Ipv6NetworkAddrs::Iterator::next                    3174b3b64393e6cb  Netip/Impl/AddrsRun.lean:addrsNext Netip/Impl/Addrs.lean:Ipv6.next_step
+Ipv6NetworkAddrs::Iterator::count                   96e397cb4e172561  Netip/Impl/AddrsRun.lean:sizeHint
+Ipv6NetworkAddrs::Iterator::size_hint               98f2e3f7a98e81c3  Netip/Impl/AddrsRun.lean:sizeHint
+Ipv6NetworkAddrs::DoubleEndedIterator::next_back    bc7c7115d6ca169d  Netip/Impl/AddrsRun.lean:addrsNextBack Netip/Impl/Addrs.lean:Ipv6.nextBack_step
+Ipv6NetworkDiff                                     79ccaaef696d46c4  Netip/Impl/Difference.lean:Ipv6.Inv
+Ipv6NetworkDiff::new                                0c2cfdb70efe0957  Netip/Impl/Difference.lean:Ipv6.Inv Netip/Impl/DifferenceRun.lean
+Ipv6NetworkDiff::Iterator::next                     0abe66e73286ca62  Netip/Impl/Difference.lean:Ipv6.ladder Netip/Impl/DifferenceRun.lean:Ipv6.diffStep
+Ipv6NetworkDiff::Iterator::count                    8096ed6d379b641d  Netip/Impl/DifferenceRun.lean
+Ipv6NetworkDiff::Iterator::size_hint                4caf82b31f44fa36  Netip/Impl/DifferenceRun.lean
+Ipv6NetworkDiff::Iterator::last                     683f765366a70bae  Netip/Impl/DifferenceRun.lean
+Ipv6NetworkDiff::DoubleEndedIterator::next_back     1d9f117eddb82ae4  Netip/Impl/DifferenceRun.lean:Ipv6.diffStep
+Ipv6NetworkDiff::ExactSizeIterator::len             3623d7071b08f23a  Netip/Impl/DifferenceRun.lean
+Ipv6RangeNetworks                                   f7ef7425bbfcd878  Netip/Impl/RangeRun.lean:Ipv6.RangeState
+ipv6_range_to_networks                              14553c7ec6baf3e0  Netip/Impl/RangeRun.lean:Ipv6.rangeInit
+Ipv6RangeNetworks::Iterator::next                   64af0fa504b41854  Netip/Impl/RangeRun.lean:Ipv6.rangeNext Netip/Impl/Range.lean:Ipv6.blockMax
+Ipv6RangeNetworks::Iterator::size_hint              f4152e9f3d3d8107  Netip/Impl/RangeRun.lean
+
+# `ipv*_binary_split`.
+ipv4_binary_split                                   57086b30e9392985  Netip/Impl/BinarySplitSearch.lean:binarySplit
+ipv6_binary_split                                   7464eeae47035e63  Netip/Impl/BinarySplitSearch.lean:binarySplit
+ip_binary_split                                     849103b379e3e4d3  Netip/Impl/BinarySplitSearch.lean:binarySplit Netip/Impl/BinarySplit.lean:splitBlock
+stable_partition                                    b7efc33e4aacfc90  Netip/Impl/BinarySplit.lean:stablePartition
+ip_binary_split_quadratic                           fd11d0b6c7c7c30f  Netip/Impl/BinarySplitSearch.lean:quadratic Netip/Impl/BinarySplitSearch.lean:windowSupernet
+ip_binary_split_linear                              71a4a43dee762c64  Netip/Impl/BinarySplitSearch.lean:linear Netip/Impl/BinarySplitSearch.lean:linearPass1 Netip/Impl/BinarySplitSearch.lean:linearStep
+add_kill                                            d2c2311a99fdc2c2  Netip/Impl/BinarySplitSearch.lean:addKill Netip/Impl/BinarySplitSearch.lean:countUp
+remove_kill                                         b06ff2da5c0e7b8b  Netip/Impl/BinarySplitSearch.lean:removeKill Netip/Impl/BinarySplitSearch.lean:countDown
+Word                                                6c06ab1900a92476  Netip/Impl/BinarySplitSearch.lean:KillFacts
+u32::Word::ZERO                                     a376f7bbd1460703  Netip/Impl/BinarySplitSearch.lean:KillFacts
+u32::Word::SPLIT_THRESHOLD                          0eea90ccdbd5e171  Netip/Impl/BinarySplitSearch.lean:binarySplit
+u32::Word::trailing_zeros                           3490059014236f81  Netip/Impl/BinarySplitSearch.lean:KillFacts
+u32::Word::clear_lowest                             077d611a2719f517  Netip/Impl/BinarySplitSearch.lean:KillFacts
+u32::Word::clear_bit                                1b8bf9ed9ac352ce  Netip/Impl/BinarySplitSearch.lean:countDown
+u128::Word::ZERO                                    84ac5a320c4684d1  Netip/Impl/BinarySplitSearch.lean:KillFacts
+u128::Word::SPLIT_THRESHOLD                         0a105ee54547d5d2  Netip/Impl/BinarySplitSearch.lean:binarySplit
+u128::Word::trailing_zeros                          9f341fe886dd4c43  Netip/Impl/BinarySplitSearch.lean:KillFacts
+u128::Word::clear_lowest                            9dc6e96a71028e4d  Netip/Impl/BinarySplitSearch.lean:KillFacts
+u128::Word::clear_bit                               01649fe28c4ef7d4  Netip/Impl/BinarySplitSearch.lean:countDown
+BinarySplit                                         45549fc5da491985  Netip/Impl/BinarySplitSearch.lean:supernetStep
+Ipv4Network::BinarySplit::Mask                      8ba7c24b03a8fc0b  Netip/Impl/BinarySplitSearch.lean:quadratic
+Ipv4Network::BinarySplit::Bits                      6e8d3ade2fdab87b  Netip/Impl/BinarySplitSearch.lean:linear
+Ipv4Network::BinarySplit::mask                      0a5141bdd9938b6f  Netip/Impl/BinarySplitSearch.lean:quadratic
+Ipv4Network::BinarySplit::contains                  71c8e8c8bc105564  Netip/Impl/BinarySplit.lean:splitBlock
+Ipv4Network::BinarySplit::supernet_for              fc727f556b32ac71  Netip/Impl/BinarySplitSearch.lean:supernetStep
+Ipv4Network::BinarySplit::to_bits                   704648919af321cd  Netip/Impl/BinarySplitSearch.lean:killAt
+Ipv4Network::BinarySplit::from_bits                 c031080efd3e5e44  Netip/Impl/BinarySplitSearch.lean:linear
+Ipv6Network::BinarySplit::Mask                      3678ab96b70b8693  Netip/Impl/BinarySplitSearch.lean:quadratic
+Ipv6Network::BinarySplit::Bits                      32da431aa39ce32d  Netip/Impl/BinarySplitSearch.lean:linear
+Ipv6Network::BinarySplit::mask                      fa819786dc7427e5  Netip/Impl/BinarySplitSearch.lean:quadratic
+Ipv6Network::BinarySplit::contains                  18bf102583b746f6  Netip/Impl/BinarySplit.lean:splitBlock
+Ipv6Network::BinarySplit::supernet_for              d8c228074687e095  Netip/Impl/BinarySplitSearch.lean:supernetStep
+Ipv6Network::BinarySplit::to_bits                   ff3dc5b75bcae723  Netip/Impl/BinarySplitSearch.lean:killAt
+Ipv6Network::BinarySplit::from_bits                 77bfc1d113a2926e  Netip/Impl/BinarySplitSearch.lean:linear
+
+# `ipv*_aggregate`.
+ipv4_aggregate                                      2f30521b482d2d8d  Netip/Impl/Aggregate.lean:aggregateGeneral
+ipv6_aggregate                                      dc9f2fd09819655f  Netip/Impl/Aggregate.lean:aggregateGeneral
+Aggregate                                           df7258636b5603e0  Netip/Impl/Aggregate.lean:mergeB
+Ipv4Network::Aggregate::merge                       9423291730885cb2  Netip/Impl/Aggregate.lean:mergeB
+Ipv6Network::Aggregate::merge                       e3de058ae8a55be0  Netip/Impl/Aggregate.lean:mergeB
+ip_aggregate                                        d149a7cd9e85e50a  Netip/Impl/Aggregate.lean:aggregateGeneral Netip/Impl/Aggregate.lean:aggStep Netip/Impl/Aggregate.lean:rescan
+
+[src/net/contiguous.rs]
+
+Contiguous                                          87426ae4caa7e295  Netip/Impl/Contiguous.lean Netip/Impl/AggregateContiguous.lean:aggregate
+Contiguous<IpNetwork>::contains                     92ef22e47957de10  Netip/Impl/Contiguous.lean:Ipv4.contains_mask_iff_le Netip/Impl/Contiguous.lean:Ipv6.contains_mask_iff_le
+Contiguous<Ipv4Network>::contains                   b3e20cf338b6a39b  Netip/Impl/Contiguous.lean:Ipv4.contains_mask_iff_le
+Contiguous<Ipv6Network>::contains                   81feedc52acf7a59  Netip/Impl/Contiguous.lean:Ipv6.contains_mask_iff_le
+Contiguous<Ipv4Network>::addrs                      ea6d298092bf9cb4  Netip/Impl/AddrsRun.lean:Ipv4.caddrsInit Netip/Impl/Contiguous.lean:Ipv4.addrs_back
+Contiguous<Ipv6Network>::addrs                      20a434f7a30ae8fb  Netip/Impl/AddrsRun.lean:Ipv6.caddrsInit Netip/Impl/Contiguous.lean:Ipv6.addrs_back
+ContiguousIpv4NetworkAddrs                          2be3cc1e09c04d24  Netip/Impl/AddrsRun.lean:Cursor
+ContiguousIpv4NetworkAddrs::remaining               5033fa54b53a7035  Netip/Impl/AddrsRun.lean:cursorCount
+ContiguousIpv4NetworkAddrs::Iterator::next          251e843f3fa661dd  Netip/Impl/AddrsRun.lean:cursorNext
+ContiguousIpv4NetworkAddrs::Iterator::count         ecb3eb3e7d6f71b7  Netip/Impl/AddrsRun.lean:cursorCount
+ContiguousIpv4NetworkAddrs::Iterator::size_hint     ba43edd9273b1a4e  Netip/Impl/AddrsRun.lean:cursorCount
+ContiguousIpv4NetworkAddrs::DoubleEndedIterator::next_back 77b12548f007c28b  Netip/Impl/AddrsRun.lean:cursorNextBack
+ContiguousIpv4NetworkAddrs::ExactSizeIterator::len  01a9c0ad44d0859f  Netip/Impl/AddrsRun.lean:cursorCount
+ContiguousIpv6NetworkAddrs                          ab1923917c8ecaec  Netip/Impl/AddrsRun.lean:Cursor
+ContiguousIpv6NetworkAddrs::enter_wraparound_sentinel de0846852010b126  Netip/Impl/AddrsRun.lean:cursorNext
+ContiguousIpv6NetworkAddrs::Iterator::next          796a3e892830382b  Netip/Impl/AddrsRun.lean:cursorNext
+ContiguousIpv6NetworkAddrs::Iterator::count         d0a3621faabb5cc1  Netip/Impl/AddrsRun.lean:cursorSizeHint128
+ContiguousIpv6NetworkAddrs::Iterator::size_hint     fe8cd25475fdbede  Netip/Impl/AddrsRun.lean:cursorSizeHint128
+ContiguousIpv6NetworkAddrs::DoubleEndedIterator::next_back a4df5c03d9dfac70  Netip/Impl/AddrsRun.lean:cursorNextBack
+ipv4_aggregate_contiguous                           dcd34a15a6915378  Netip/Impl/AggregateContiguous.lean:aggregate
+ipv6_aggregate_contiguous                           9b8bcc81eaba7f36  Netip/Impl/AggregateContiguous.lean:aggregate
+Aggregate                                           df7258636b5603e0  Netip/Impl/AggregateContiguous.lean:mergeLow
+Ipv4Network::Aggregate::merge                       f5712b4f30a1f7e2  Netip/Impl/AggregateContiguous.lean:mergeLow
+Ipv6Network::Aggregate::merge                       1107d2d7f1d2ee48  Netip/Impl/AggregateContiguous.lean:mergeLow
+ip_aggregate                                        a0218a75cfdaa960  Netip/Impl/AggregateContiguous.lean:aggregate Netip/Impl/AggregateContiguous.lean:push
+
+[src/net/bicontiguous.rs]
+
+BiContiguous                                        ec1b647e9f552075  Netip/Impl/BiContiguous.lean Netip/Impl/BiGroup.lean:Ipv6.IsBiNet
+BiContiguous<Ipv6Network>::hi_prefix                feb559b9a8679bc5  Netip/Impl/BiSweep.lean:Ipv6.hiP Netip/Impl/BiContiguous.lean
+BiContiguous<Ipv6Network>::lo_prefix                9d2b286cec1c98b7  Netip/Impl/BiSweep.lean:Ipv6.loP Netip/Impl/BiContiguous.lean
+BiContiguous<Ipv6Network>::is_bicontiguous          a487d10e66043269  Netip/Impl/BiContiguous.lean:Ipv6.IsBiContiguous
+BiContiguous<Ipv6Network>::is_contiguous            f2ed265fe4ea4d4a  Netip/Impl/BiContiguous.lean
+BiContiguous<Ipv6Network>::intersection             cfa6a60916467773  Netip/Impl/BiContiguous.lean
+BiContiguous<Ipv6Network>::addrs                    1aab7384521ee2a0  Netip/Impl/BiContiguousAddrs.lean:Ipv6.baddrsInit Netip/Impl/BiContiguousAddrs.lean:Ipv6.indexBack
+BiContiguous<Ipv6Network>::TryFrom<Ipv6Network>::try_from 9aa8e5c9acf65ac6  Netip/Impl/BiContiguous.lean:Ipv6.IsBiContiguous
+BiContiguous<Ipv6Network>::From<Contiguous<Ipv6Network>>::from 4f3ae7a663c33dfe  Netip/Impl/BiContiguous.lean
+BiContiguousIpv6Addrs                               9a5a7d93f08ad8bc  Netip/Impl/AddrsRun.lean:Cursor Netip/Impl/BiContiguousAddrs.lean
+BiContiguousIpv6Addrs::index_to_addr                3c208a4c4e3f8bfc  Netip/Impl/BiContiguousAddrs.lean:Ipv6.indexToAddr Netip/Impl/BiContiguousAddrs.lean:Ipv6.splitShift Netip/Impl/BiContiguousAddrs.lean:Ipv6.loMask
+BiContiguousIpv6Addrs::enter_wraparound_sentinel    c2ac477003b10936  Netip/Impl/AddrsRun.lean:cursorNext
+BiContiguousIpv6Addrs::Iterator::next               6a2b6c2853498a3b  Netip/Impl/AddrsRun.lean:cursorNext Netip/Impl/BiContiguousAddrs.lean
+BiContiguousIpv6Addrs::Iterator::count              660477532897a70e  Netip/Impl/AddrsRun.lean:cursorSizeHint128
+BiContiguousIpv6Addrs::Iterator::size_hint          eeab1fe473221b83  Netip/Impl/AddrsRun.lean:cursorSizeHint128
+BiContiguousIpv6Addrs::DoubleEndedIterator::next_back 94f03d40f65f46b7  Netip/Impl/AddrsRun.lean:cursorNextBack Netip/Impl/BiContiguousAddrs.lean
+ipv6_aggregate_bicontiguous                         108291bb7c13e3ab  Netip/Impl/BiProbe.lean:Ipv6.aggregateBi
+bicontiguous_level_sort_key                         fb816e440fd76b17  Netip/Impl/BiSweep.lean:Ipv6.levelKey
+bicontiguous_hi_addr                                4f327f53610aab76  Netip/Impl/BiGroup.lean:Ipv6.hiA
+bicontiguous_lo_addr                                274fa0615c47db18  Netip/Impl/BiGroup.lean:Ipv6.loA
+bicontiguous_aggregate                              204842f5e233b826  Netip/Impl/BiProbe.lean:Ipv6.rounds
+bicontiguous_sweep                                  6932279a656d7227  Netip/Impl/BiSweep.lean:Ipv6.sweep Netip/Impl/BiSweep.lean:Ipv6.sweepLevel Netip/Impl/BiSweep.lean:Ipv6.reparent
+bicontiguous_lo_aggregate                           9fbd434dce0ed082  Netip/Impl/BiSweep.lean:Ipv6.loAggregate
+bicontiguous_hi_buddy_merge                         5cd63a51354a8afa  Netip/Impl/BiSweep.lean:Ipv6.hiBuddyMerge Netip/Impl/BiSweep.lean:Ipv6.buddyBit
+bicontiguous_lo_lists_equal                         26fff789eda9b93d  Netip/Impl/BiSweep.lean:Ipv6.loListsEq
+bicontiguous_sort_key                               7c7da9c4991d8a29  Netip/Impl/BiProbe.lean:Ipv6.sortKey
+bicontiguous_half_prefix_mask                       48f63fc2d06588cb  Netip/Impl/BiSweep.lean:Ipv6.halfMask
+bicontiguous_shape_mask                             eb5215441a78a8dc  Netip/Impl/BiProbe.lean:Ipv6.shapeMask
+bicontiguous_find_containment                       a4d9e70acb9a86b3  Netip/Impl/BiProbe.lean:Ipv6.findContainment
+bicontiguous_containment_probe                      f950c69f8d602bdd  Netip/Impl/BiProbe.lean:Ipv6.probe Netip/Impl/BiProbe.lean:Ipv6.probeLoop Netip/Impl/BiProbe.lean:Ipv6.probeChunk
+
+[src/parser.rs]
+
+IpNetParseError                                     c055b7c0219cd108  Netip/Impl/ParseNet.lean:Parse.NetError
+IpNetParseError::From<AddrParseError>::from         d5307ea49bbc2be4  Netip/Impl/ParseNet.lean:Parse.NetError
+IpNetParseError::From<CidrOverflowError>::from      15d3483902bfffac  Netip/Impl/ParseNet.lean:Parse.NetError
+parse_ip_network                                    22fa59b88f56d5d6  Netip/Impl/ParseNet.lean:Parse.parseIpNetworkAscii
+parse_ip_network_ascii                              a335a601715ac667  Netip/Impl/ParseNet.lean:Parse.parseIpNetworkAscii
+parse_ip_network_next_ascii                         f657d15d76596004  Netip/Impl/ParseToken.lean:Parse.parseIpNetworkNextAscii
+parse_ip_network_next_fallback                      679eed7dc1c31d33  Netip/Impl/ParseToken.lean:Parse.parseIpNetworkNextAscii
+token_ends_at                                       1089b23b4870cf2a  Netip/Impl/ParseToken.lean:Parse.tokenEndsAt
+read_cidr_prefix                                    9d43833e4eaa31c0  Netip/Impl/ParseToken.lean:Parse.readCidrPrefix Netip/Impl/ParseToken.lean:Parse.readCidrDigits
+ipv4_token_end                                      10d6664b2bd520bc  Netip/Impl/ParseToken.lean:Parse.tokenEnd
+is_ipv4_token_byte                                  994b18e3b07471eb  Netip/Impl/ParseToken.lean:Parse.isIpv4TokenByte
+ipv6_token_end                                      0ac2d8a34904a01c  Netip/Impl/ParseToken.lean:Parse.tokenEnd
+is_ipv6_token_byte                                  9772af17fc3dec7c  Netip/Impl/ParseToken.lean:Parse.isIpv6TokenByte
+contains_colon                                      06d061cdd627f748  Netip/Impl/ParseNet.lean:Parse.containsColon
+parse_ipv4_network                                  f2cb3057f17c65f8  Netip/Impl/ParseNet.lean:Parse.parseIpv4NetworkAscii
+parse_ipv4_network_ascii                            3d3edc5b213a2023  Netip/Impl/ParseNet.lean:Parse.parseIpv4NetworkAscii
+parse_ipv4_network_next_ascii                       3277151d449d2346  Netip/Impl/ParseToken.lean:Parse.parseIpv4NetworkNextAscii
+parse_ipv4_network_next_fallback                    0a81a8fe4a2fb9cf  Netip/Impl/ParseToken.lean:Parse.parseIpv4NetworkNextAscii
+ipv4_network_next_fused                             3a2a33bb8775b9d8  Netip/Impl/ParseToken.lean:Parse.ipv4NetworkNextFused
+ipv4_network_next_fused_mask                        133c49997eea4e64  Netip/Impl/ParseToken.lean:Parse.ipv4NetworkNextFusedMask
+ipv4_parse_at                                       a90cc8cfa66e43b4  Netip/Impl/ParseAddr.lean:Parse.ipv4ParseAt
+read_ipv4_octet                                     bf542b6e7728341a  Netip/Impl/ParseAddr.lean:Parse.readIpv4Octet
+ascii_digit_value                                   9f8cc1a919f55165  Netip/Impl/ParseAddr.lean:Parse.asciiDigitValue
+ipv4_apply_mask                                     b97135959f7a99ee  Netip/Impl/ParseNet.lean:Parse.ipv4ApplyMask
+parse_cidr_suffix                                   e0dfe7c7bf6c6d36  Netip/Impl/ParseAddr.lean:Parse.parseCidrSuffix Netip/Impl/ParseAddr.lean:Parse.parseCidrSuffixLoop
+parse_ipv4_addr                                     27bcf5b609e86696  Netip/Impl/ParseNet.lean:Parse.parseIpv4Addr
+parse_ipv4_addr_error                               2dedb91547ad253c  Netip/Impl/ParseNet.lean:Parse.parseIpv4AddrError
+ipv4_parse_ascii                                    11f2c4829f7522f5  Netip/Impl/ParseAddr.lean:Parse.ipv4ParseAscii
+parse_ipv4_network_fallback                         c3966797cd4c8e78  Netip/Impl/ParseNet.lean:Parse.parseIpv4NetworkFallback
+split_slash                                         4d48ca182412a5a1  Netip/Impl/ParseNet.lean:Parse.splitSlash
+parse_ipv6_network                                  71695d3a1bbd2aa2  Netip/Impl/ParseNet.lean:Parse.parseIpv6NetworkAscii
+parse_ipv6_network_ascii                            48ecbb56cd7ea581  Netip/Impl/ParseNet.lean:Parse.parseIpv6NetworkAscii
+parse_ipv6_network_next_ascii                       1c8dd0b70f1a61c9  Netip/Impl/ParseToken.lean:Parse.parseIpv6NetworkNextAscii
+parse_ipv6_network_next_fallback                    16df2f28d9675593  Netip/Impl/ParseToken.lean:Parse.parseIpv6NetworkNextAscii
+ipv6_network_next_fused                             b7da71e631d5bebb  Netip/Impl/ParseToken.lean:Parse.ipv6NetworkNextFused
+ipv6_network_next_fused_mask                        ba245c932a35623e  Netip/Impl/ParseToken.lean:Parse.ipv6NetworkNextFusedMask
+ipv6_parse_at                                       852ec3c0fef9b146  Netip/Impl/ParseAddr.lean:Parse.ipv6ParseAt
+read_ipv6_groups                                    1e7931cf9c9a6781  Netip/Impl/ParseAddr.lean:Parse.readIpv6Groups Netip/Impl/ParseAddr.lean:Parse.readIpv6GroupsLoop Netip/Impl/ParseAddr.lean:Parse.separate
+maybe_embedded_ipv4                                 1e4159f12dc634b5  Netip/Impl/ParseAddr.lean:Parse.maybeEmbeddedIpv4
+ipv4_parse_embedded                                 51cc87951f7ecfdc  Netip/Impl/ParseAddr.lean:Parse.readIpv6GroupsLoop
+read_ipv6_group                                     d49123dbd3ac2ec5  Netip/Impl/ParseAddr.lean:Parse.readIpv6Group
+hex_digit_value                                     5b87610cbbbe773e  Netip/Impl/ParseAddr.lean:Parse.hexDigitValue
+assemble_ipv6_groups                                f76e3886934019d4  Netip/Impl/ParseAddr.lean:Parse.assembleIpv6Groups
+ipv6_apply_mask                                     77fe5971618c38a6  Netip/Impl/ParseNet.lean:Parse.ipv6ApplyMask
+parse_ipv6_addr                                     c3df7f9d1346042e  Netip/Impl/ParseNet.lean:Parse.parseIpv6Addr
+parse_ipv6_addr_error                               f00de39c0259c28a  Netip/Impl/ParseNet.lean:Parse.parseIpv6AddrError
+ipv6_parse_ascii                                    eca9f4cb9faa368a  Netip/Impl/ParseAddr.lean:Parse.ipv6ParseAscii
+parse_ipv6_network_fallback                         af8b9a1f06d539d8  Netip/Impl/ParseNet.lean:Parse.parseIpv6NetworkFallback

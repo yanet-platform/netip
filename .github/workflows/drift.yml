@@ -1,0 +1,35 @@
+name: Drift
+
+# The Lean transcriptions in `proofs/` follow items of `src/`, which
+# `proofs/pins.txt` pins by a hash of their tokens. A change on either side can
+# break that correspondence, so the check runs for both.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "proofs/**"
+      - ".github/workflows/drift.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "proofs/**"
+      - ".github/workflows/drift.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  pins:
+    name: Pins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: proofs/drift
+      # Reports each changed item as an annotation on its line, naming the
+      # transcriptions to check against the new code.
+      - run: cargo run --locked --manifest-path proofs/drift/Cargo.toml
