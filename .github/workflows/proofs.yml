@@ -1,0 +1,42 @@
+name: Proofs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "proofs/**"
+      - ".github/workflows/proofs.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "proofs/**"
+      - ".github/workflows/proofs.yml"
+
+jobs:
+  lean:
+    name: Lean
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: proofs
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install elan
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      # A proof that is not checked must not pass: `sorry` is reported as a
+      # warning, which `--wfail` below turns into a failure, and these escape
+      # hatches are rejected outright.
+      - name: Reject unchecked proofs
+        run: |
+          if grep -rnwE "sorry|admit|native_decide|skipKernelTC" --include='*.lean' Netip Netip.lean \
+            || grep -rnE "^\s*((private|protected|noncomputable)\s+)*(axiom|unsafe)\b" --include='*.lean' Netip Netip.lean; then
+            exit 1
+          fi
+
+      - name: Build
+        run: lake build --wfail
