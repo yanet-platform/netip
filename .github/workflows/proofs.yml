@@ -16,6 +16,9 @@ jobs:
   lean:
     name: Lean
     runs-on: ubuntu-latest
+    # The build takes about three minutes. A stalled job fails instead of
+    # holding the PR until GitHub's six-hour limit.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: proofs
@@ -27,6 +30,19 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
             | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      # `lake` fetches the toolchain on first use, and that fetch has stalled
+      # without a line of output on some runs, while it normally takes seconds.
+      # Fetching it up front bounds each attempt and retries.
+      - name: Install the toolchain
+        run: |
+          for attempt in 1 2 3; do
+            if timeout 120 elan toolchain install "$(cat lean-toolchain)"; then
+              exit 0
+            fi
+            echo "::warning::toolchain download attempt $attempt failed or stalled"
+          done
+          exit 1
 
       # A proof that is not checked must not pass: `sorry` is reported as a
       # warning, which `--wfail` below turns into a failure, and these escape
