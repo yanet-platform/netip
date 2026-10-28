@@ -263,7 +263,7 @@ bicontiguous_containment_probe                      f950c69f8d602bdd  Netip/Impl
 
 [src/parser.rs]
 
-IpNetParseError                                     c055b7c0219cd108  Netip/Impl/ParseNet.lean:Parse.NetError
+IpNetParseError                                     0935c0e24b739695  Netip/Impl/ParseNet.lean:Parse.NetError
 IpNetParseError::From<AddrParseError>::from         d5307ea49bbc2be4  Netip/Impl/ParseNet.lean:Parse.NetError
 IpNetParseError::From<CidrOverflowError>::from      15d3483902bfffac  Netip/Impl/ParseNet.lean:Parse.NetError
 parse_ip_network                                    22fa59b88f56d5d6  Netip/Impl/ParseNet.lean:Parse.parseIpNetworkAscii
