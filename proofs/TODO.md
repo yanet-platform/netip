@@ -7,19 +7,9 @@ Parsers and formatting are out of scope. Remove an entry once its proof lands.
 
 - [ ] `merge`: completeness, `None` only when the union is not a single network
   (the doc's "`Some(N)` iff their union is exactly representable"). Soundness is
-  proved.
-- [ ] `supernet_for`: the result contains every input and is contained in every
-  network that contains them all.
-- [ ] `is_adjacent`, `is_adjacent_by_lowest_mask_bit`: adjacent pairs are
-  exactly the equal-mask pairs whose union is one network one bit wider.
-- [ ] `to_contiguous`: the result clears the mask bits after the first zero and
-  contains the input.
-- [ ] `to_ipv6_mapped`, `to_ipv4_mapped`, `is_ipv4_mapped_ipv6`,
-  `IpNetwork::to_canonical`: the mapping is a bijection on address sets and the
-  conversions round-trip.
+  proved, and `merge` succeeds on every adjacent pair.
 - [ ] `IpNetwork`: every method agrees with the per-family one and handles
-  mixed families as documented.
-- [ ] `Ord for Ipv6Network`: lexicographic `(addr, mask)`.
+  mixed families as documented. `to_ipv6_mapped` and `to_canonical` are proved.
 
 ## Iterators (`src/net.rs`, `src/net/contiguous.rs`, `src/net/bicontiguous.rs`)
 
