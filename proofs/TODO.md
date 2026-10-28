@@ -31,11 +31,3 @@ Parsers and formatting are out of scope. Remove an entry once its proof lands.
   candidate searches return the same network (the kill-word identity and the
   counter-based sliding OR), and the candidate contains a whole window, so the
   block holds at least half of the slice. Gathering the block is proved.
-
-## Width-generic mathematics
-
-- [ ] `|S(a, m)| = 2^(n - popcount m)`.
-- [ ] `S(a, m)` is an interval iff `m` is contiguous, for symbolic `n` (proved
-  for 32 and 128 bits).
-- [ ] Host-index order: depositing the index bits into the host positions is a
-  monotone bijection from `BitVec (n - popcount m)` onto `S(a, m)`.
