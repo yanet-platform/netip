@@ -23,7 +23,7 @@ Proved for every input of the width, `A` and `B` intersecting:
 * The disjoint shortcut of `new()` emits the source network itself
   (`disjoint_shortcut`).
 
-Not proved here: that no family of fewer networks has the same union.
+Whole runs and minimality are in `DifferenceRun`.
 -/
 
 namespace Netip.Impl
