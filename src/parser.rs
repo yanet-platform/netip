@@ -16,7 +16,6 @@ use core::{
     error::Error,
     fmt::{Display, Formatter},
     net::{AddrParseError, Ipv4Addr, Ipv6Addr},
-    num::ParseIntError,
     str,
 };
 
@@ -25,16 +24,8 @@ use crate::net::{CidrOverflowError, IPV4_ALL_BITS, IPV6_ALL_BITS, IpNetwork, Ipv
 /// An error that is returned during IP network parsing.
 #[derive(Debug, PartialEq)]
 pub enum IpNetParseError {
-    /// Expected IP network, but got something malformed instead.
-    ExpectedIpNetwork,
-    /// Expected IP address.
-    ExpectedIpAddr,
     /// Failed to parse IP address.
     AddrParseError(AddrParseError),
-    /// Expected CIDR number after `/`.
-    ExpectedIpCidr,
-    /// Failed to parse CIDR mask.
-    CidrParseError(ParseIntError),
     /// CIDR mask is too large.
     CidrOverflow(CidrOverflowError),
 }
@@ -42,20 +33,8 @@ pub enum IpNetParseError {
 impl Display for IpNetParseError {
     fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
         match self {
-            Self::ExpectedIpNetwork => {
-                write!(fmt, "expected IP network")
-            }
-            Self::ExpectedIpAddr => {
-                write!(fmt, "expected IP address")
-            }
             Self::AddrParseError(err) => {
                 write!(fmt, "IP address parse error: {err}")
-            }
-            Self::ExpectedIpCidr => {
-                write!(fmt, "expected IP CIDR")
-            }
-            Self::CidrParseError(err) => {
-                write!(fmt, "CIDR parse error: {err}")
             }
             Self::CidrOverflow(err) => {
                 write!(fmt, "CIDR overflow: {err}")

@@ -20,10 +20,10 @@ by `ParseFrame` `core` reads the same address from the bytes before the `/` alon
 `parse_ipv*_addr` is `core`'s parse, its fallback only supplying the error value
 (`parseIpv4Addr_eq`).
 
-Errors are compared as values. The parsers return only `AddrParseError`, of the
-family that failed, and `CidrOverflow`: the other four variants of `IpNetParseError`
-are never built. `str::from_utf8` is modelled by `validUtf8`, whose answer never
-matters: `core` rejects every input that is not ASCII.
+Errors are compared as values, `NetError` holding the two variants of
+`IpNetParseError`: `AddrParseError`, of the family that failed, and `CidrOverflow`.
+`str::from_utf8` is modelled by `validUtf8`, whose answer never matters: `core`
+rejects every input that is not ASCII.
 -/
 
 namespace Netip.Impl.Parse
