@@ -3,8 +3,8 @@ import Netip.Network
 /-!
 # Contiguous masks
 
-A mask is contiguous when its one bits form a leading run `1^k 0^(n-k)`; `k` is
-the prefix length of CIDR notation.
+A mask is contiguous when its one bits form a leading run `1^k 0^(n-k)`, where
+`k` is the prefix length of CIDR notation.
 -/
 
 namespace Netip

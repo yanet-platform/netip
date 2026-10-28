@@ -10,17 +10,17 @@ of `d = (m₁ ∨ m₂) ∧ ¬m₁`, the bits fixed by `B` but free in `A`. With
 `A ∩ B` on the bits of `d` above `b`, disagrees at `b`, and is free below.
 
 Proved for every input of the width, `A` and `B` intersecting:
-* each item lies in `S(A) \ S(B)` (`item_sub`), the items cover it
-  (`item_cover`), and they are pairwise disjoint (`item_disjoint`);
+* Each item lies in `S(A) \ S(B)` (`item_sub`), the items cover it
+  (`item_cover`), and they are pairwise disjoint (`item_disjoint`).
 * `Inv` describes the iterator state after any mix of `next()` and
   `next_back()`: under it `next()` (highest pending bit) and `next_back()`
   (lowest pending bit) both emit exactly the item of their bit, and both keep
   `Inv` (`inv_init`, `next_emits`, `nextBack_emits`). Each call removes one
-  pending bit, so any interleaving emits the item of every bit of `d` once;
-* the two-rung `predicted` ladder of `next()` returns the highest pending bit,
+  pending bit, so any interleaving emits the item of every bit of `d` once.
+* The two-rung `predicted` ladder of `next()` returns the highest pending bit,
   and both ends keep its invariant (`ladder_*`). The IPv6 ladder runs on 64-bit
-  halves and is transcribed as such;
-* the disjoint shortcut of `new()` emits the source network itself
+  halves and is transcribed as such.
+* The disjoint shortcut of `new()` emits the source network itself
   (`disjoint_shortcut`).
 
 Not proved here: that no family of fewer networks has the same union.
@@ -198,7 +198,7 @@ theorem nextBack_emits (m1 d mask r : BitVec 128) (h : Inv m1 d mask r) (hr : r 
   bv_decide
 
 /-- `Ipv6NetworkDiff::next`'s peel bit and the `predicted` it stores, computed on
-64-bit halves exactly as the Rust code does; `none` once nothing is pending. -/
+64-bit halves exactly as the Rust code does, `none` once nothing is pending. -/
 def ladder (p r : BitVec 128) : Option (BitVec 128 × BitVec 128) :=
   if (r >>> 64).setWidth 64 ≠ 0 then
     if (p >>> 64).setWidth 64 &&& (r >>> 64).setWidth 64 ≠ 0 then

@@ -4,15 +4,15 @@ import Netip.Impl.Basic
 # Range-to-CIDR iterators: the block arithmetic
 
 `Ipv4RangeNetworks::next` / `Ipv6RangeNetworks::next`. Proved here are the two
-bit tricks each step relies on; the claims about the whole decomposition
-(minimum cardinality, at most `2n - 2` blocks, the phase split) are not.
+bit tricks each step relies on, not yet the claims about the whole
+decomposition (minimum cardinality, at most `2n - 2` blocks, the phase split).
 
 * Ascending phase: `block = x & -x` is a single bit set in `x` with nothing of `x`
   below it, and `mask = x | -x` is "every bit from `block` up" — the netmask of
   a `block`-sized CIDR block.
 * Descending phase: `block_max + 1` is the largest power of two not exceeding the
   remaining `size`. IPv4 computes it in `u64` so that `size = 2^32` needs no
-  branch; IPv6 splits `size` into 64-bit words and maps `size = 0` (the full
+  branch. IPv6 splits `size` into 64-bit words and maps `size = 0` (the full
   range, wrapped) to `u128::MAX`.
 -/
 
