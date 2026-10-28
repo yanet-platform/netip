@@ -281,6 +281,14 @@ def deposit (m : BitVec n) (i : Nat) : BitVec n := BitVec.ofNat n (pdepNat (~~~m
 /-- The member of `S(a, m)` with host index `i`, `a ∨ pdep(i, ¬m)`. -/
 def hostAddr (a m : BitVec n) (i : Nat) : BitVec n := a ||| deposit m i
 
+/-- `(!m).count_ones()` is the number of host positions. -/
+theorem cpop_not_eq_hostBits (m : BitVec n) : (~~~m).cpop.toNat = hostBits m := by
+  have := cpop_not_add_cpop m
+  unfold hostBits
+  omega
+
+theorem hostBits_le (m : BitVec n) : hostBits m ≤ n := Nat.sub_le _ _
+
 theorem popNat_not (m : BitVec n) : popNat (~~~m).toNat = hostBits m := by
   have := cpop_not_add_cpop m
   rw [popNat_toNat]
@@ -348,6 +356,14 @@ theorem toNat_hostAddr {a m : BitVec n} (hn : Normalized a m) (i : Nat) :
   unfold hostAddr
   rw [← BitVec.add_eq_or_of_and_eq_zero a (deposit m i) hdisj, BitVec.toNat_add,
     Nat.mod_eq_of_lt (by omega), toNat_deposit]
+
+/-- The member is the sum `a + pdep(i, ¬m)`. -/
+theorem hostAddr_eq_add {a m : BitVec n} (hn : Normalized a m) (i : Nat) :
+    hostAddr a m i = a + deposit m i := by
+  apply BitVec.eq_of_toNat_eq
+  rw [toNat_hostAddr hn, BitVec.toNat_add, toNat_deposit, Nat.mod_eq_of_lt]
+  rw [← toNat_hostAddr hn]
+  exact BitVec.isLt _
 
 /-- Host-index order is numeric order. -/
 theorem hostAddr_lt_hostAddr {a m : BitVec n} (hn : Normalized a m) {i j : Nat} (hij : i < j)
