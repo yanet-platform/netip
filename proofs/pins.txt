@@ -38,6 +38,7 @@ IpNetwork::parse_next_ascii                         d59136afe3e960b8  Netip/Impl
 IpNetwork::addr                                     519ab67d10382cce  Netip/Impl/IpNetwork.lean:IpNet.addr
 IpNetwork::mask                                     5e4b8d7d48bfec91  Netip/Impl/IpNetwork.lean:IpNet.mask
 IpNetwork::contains                                 7db8fecf35afdaad  Netip/Impl/IpNetwork.lean:IpNet.contains
+IpNetwork::contains_addr                            effba7cb2b2015bb  Netip/Network.lean:S
 IpNetwork::to_contiguous                            edd3032413b19439  Netip/Impl/IpNetwork.lean:IpNet.toContiguous
 IpNetwork::is_contiguous                            c4a01d0c05d6fd5e  Netip/Impl/IpNetwork.lean:IpNet.isContiguous
 IpNetwork::prefix                                   302e24256e88a46c  Netip/Impl/IpNetwork.lean:IpNet.prefixLen
@@ -64,6 +65,7 @@ Ipv4Network::mask                                   51e6065dd9b5f369  Netip/Impl
 Ipv4Network::from_bits                              d7b1c2d1384f7ccd  Netip/Impl/ParseNet.lean:Parse.newNet Netip/Impl/BinarySplitSearch.lean:linear
 Ipv4Network::to_bits                                d702b2eba3e5a0b6  Netip/Impl/Basic.lean
 Ipv4Network::contains                               3a146409ca26863c  Netip/Impl/SetOps.lean:Ipv4.contains_iff Netip/Impl/Supernet.lean:Contains
+Ipv4Network::contains_addr                          824dbac86871811a  Netip/Network.lean:S
 Ipv4Network::intersects                             6462cc13b559d36f  Netip/Impl/IpNetwork.lean:IpNet.intersects
 Ipv4Network::is_disjoint                            f996cb1143de3ebe  Netip/Impl/IpNetwork.lean:IpNet.isDisjoint
 Ipv4Network::intersection                           9322ac507b4562ce  Netip/Impl/SetOps.lean:Ipv4.intersection_iff Netip/Impl/SetOps.lean:Ipv4.intersection_normalized
@@ -115,6 +117,7 @@ Ipv6Network::mask                                   ab9fc77ea7e52546  Netip/Impl
 Ipv6Network::from_bits                              6503ad9e06f2c51f  Netip/Impl/ParseNet.lean:Parse.newNet Netip/Impl/BinarySplitSearch.lean:linear
 Ipv6Network::to_bits                                91e3786f1907a1b4  Netip/Impl/Basic.lean
 Ipv6Network::contains                               758cc16581c7e504  Netip/Impl/SetOps.lean:Ipv6.contains_iff Netip/Impl/Supernet.lean:Contains
+Ipv6Network::contains_addr                          eaecc5afdb94971a  Netip/Network.lean:S
 Ipv6Network::intersects                             45bdbf7c1a1eb98d  Netip/Impl/IpNetwork.lean:IpNet.intersects
 Ipv6Network::is_disjoint                            f2c14ee8281acd26  Netip/Impl/IpNetwork.lean:IpNet.isDisjoint
 Ipv6Network::intersection                           c069bc0dd5d83314  Netip/Impl/SetOps.lean:Ipv6.intersection_iff Netip/Impl/SetOps.lean:Ipv6.intersection_normalized

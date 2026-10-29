@@ -393,6 +393,40 @@ impl IpNetwork {
         }
     }
 
+    /// Returns `true` if the specified address belongs to this IP network.
+    ///
+    /// Returns `false` for an address of the other family, as
+    /// [`contains`](Self::contains) does for networks: an IPv4 address is not
+    /// a member of an IPv6 network, even one of IPv4-mapped addresses.
+    /// Convert the address with [`Ipv4Addr::to_ipv6_mapped`] or the network
+    /// with [`IpNetwork::to_ipv6_mapped`] first to compare across families.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    ///
+    /// use netip::IpNetwork;
+    ///
+    /// let net = IpNetwork::parse("192.168.0.0/16").unwrap();
+    /// assert!(net.contains_addr(&IpAddr::V4(Ipv4Addr::new(192, 168, 10, 1))));
+    /// assert!(!net.contains_addr(&IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+    ///
+    /// // Different address families.
+    /// let addr = Ipv4Addr::new(192, 168, 10, 1).to_ipv6_mapped();
+    /// assert!(!net.contains_addr(&IpAddr::V6(addr)));
+    /// assert!(net.to_ipv6_mapped().contains_addr(&addr));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn contains_addr(&self, addr: &IpAddr) -> bool {
+        match (self, addr) {
+            (Self::V4(net), IpAddr::V4(addr)) => net.contains_addr(addr),
+            (Self::V6(net), IpAddr::V6(addr)) => net.contains_addr(addr),
+            _ => false,
+        }
+    }
+
     /// Converts this network to a contiguous network by clearing mask bits
     /// set to one after the first zero bit.
     ///
@@ -1205,6 +1239,38 @@ impl Ipv4Network {
         let (a2, m2) = other.to_bits();
 
         (a2 & m1 == a1) && (m2 & m1 == m1)
+    }
+
+    /// Returns `true` if the specified address belongs to this IPv4 network.
+    ///
+    /// An address belongs to the network when it agrees with the network
+    /// address on every bit the mask sets, `addr & mask == self.addr()`, for
+    /// any mask, contiguous or not. The result equals
+    /// `self.contains(&Ipv4Network::from(*addr))` without building the host
+    /// network.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv4Addr;
+    ///
+    /// use netip::Ipv4Network;
+    ///
+    /// let net = Ipv4Network::parse("192.168.0.0/16").unwrap();
+    /// assert!(net.contains_addr(&Ipv4Addr::new(192, 168, 10, 1)));
+    /// assert!(!net.contains_addr(&Ipv4Addr::new(10, 0, 0, 1)));
+    ///
+    /// // A non-contiguous network: `10.*.0.*`.
+    /// let net = Ipv4Network::parse("10.0.0.0/255.0.255.0").unwrap();
+    /// assert!(net.contains_addr(&Ipv4Addr::new(10, 42, 0, 7)));
+    /// assert!(!net.contains_addr(&Ipv4Addr::new(10, 42, 1, 7)));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn contains_addr(&self, addr: &Ipv4Addr) -> bool {
+        let (a, m) = self.to_bits();
+
+        addr.to_bits() & m == a
     }
 
     /// Returns `true` if this IPv4 network and the specified one share at
@@ -2803,6 +2869,38 @@ impl Ipv6Network {
         let (a2, m2) = other.to_bits();
 
         (a2 & m1 == a1) && (m2 & m1 == m1)
+    }
+
+    /// Returns `true` if the specified address belongs to this IPv6 network.
+    ///
+    /// An address belongs to the network when it agrees with the network
+    /// address on every bit the mask sets, `addr & mask == self.addr()`, for
+    /// any mask, contiguous or not. The result equals
+    /// `self.contains(&Ipv6Network::from(*addr))` without building the host
+    /// network.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::Ipv6Network;
+    ///
+    /// let net = Ipv6Network::parse("2001:db8::/32").unwrap();
+    /// assert!(net.contains_addr(&Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)));
+    /// assert!(!net.contains_addr(&Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 1)));
+    ///
+    /// // A non-contiguous network: `2001:db8:*:*:1:*:*:*`.
+    /// let net = Ipv6Network::parse("2001:db8::1:0:0:0/ffff:ffff::ffff:0:0:0").unwrap();
+    /// assert!(net.contains_addr(&Ipv6Addr::new(0x2001, 0xdb8, 7, 7, 1, 7, 7, 7)));
+    /// assert!(!net.contains_addr(&Ipv6Addr::new(0x2001, 0xdb8, 7, 7, 2, 7, 7, 7)));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn contains_addr(&self, addr: &Ipv6Addr) -> bool {
+        let (a, m) = self.to_bits();
+
+        addr.to_bits() & m == a
     }
 
     /// Returns `true` if this IPv6 network and the specified one share at
@@ -5274,6 +5372,159 @@ mod test {
                 .unwrap()
                 .contains(&Ipv4Network::parse("127.0.0.1").unwrap())
         );
+    }
+
+    #[test]
+    fn ipv4_contains_addr() {
+        let net = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        assert!(net.contains_addr(&Ipv4Addr::new(192, 168, 0, 0)));
+        assert!(net.contains_addr(&Ipv4Addr::new(192, 168, 255, 255)));
+        assert!(!net.contains_addr(&Ipv4Addr::new(192, 169, 0, 0)));
+        assert!(!net.contains_addr(&Ipv4Addr::new(192, 167, 255, 255)));
+    }
+
+    #[test]
+    fn ipv4_contains_addr_boundaries() {
+        assert!(Ipv4Network::UNSPECIFIED.contains_addr(&Ipv4Addr::BROADCAST));
+
+        let host = Ipv4Network::from(Ipv4Addr::new(127, 0, 0, 1));
+        assert!(host.contains_addr(&Ipv4Addr::new(127, 0, 0, 1)));
+        assert!(!host.contains_addr(&Ipv4Addr::new(127, 0, 0, 2)));
+    }
+
+    #[test]
+    fn ipv4_contains_addr_non_contiguous() {
+        // `192.168.*.1`: the third octet is free, the fourth is fixed.
+        let net = Ipv4Network::parse("192.168.0.1/255.255.0.255").unwrap();
+        assert!(net.contains_addr(&Ipv4Addr::new(192, 168, 77, 1)));
+        assert!(!net.contains_addr(&Ipv4Addr::new(192, 168, 77, 2)));
+        assert!(!net.contains_addr(&Ipv4Addr::new(192, 169, 77, 1)));
+    }
+
+    #[test]
+    fn ipv6_contains_addr() {
+        let net = Ipv6Network::parse("2001:db8::/32").unwrap();
+        assert!(net.contains_addr(&Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0)));
+        assert!(net.contains_addr(&Ipv6Addr::new(
+            0x2001, 0xdb8, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff
+        )));
+        assert!(!net.contains_addr(&Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 0)));
+        assert!(!net.contains_addr(&Ipv6Addr::new(
+            0x2001, 0xdb7, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff
+        )));
+    }
+
+    #[test]
+    fn ipv6_contains_addr_boundaries() {
+        assert!(Ipv6Network::UNSPECIFIED.contains_addr(&Ipv6Addr::from_bits(u128::MAX)));
+
+        let host = Ipv6Network::from(Ipv6Addr::LOCALHOST);
+        assert!(host.contains_addr(&Ipv6Addr::LOCALHOST));
+        assert!(!host.contains_addr(&Ipv6Addr::UNSPECIFIED));
+    }
+
+    #[test]
+    fn ipv6_contains_addr_non_contiguous() {
+        // `2001:db8:*:*:1:*:*:*`: only the first two groups and the fifth are
+        // fixed.
+        let net = Ipv6Network::parse("2001:db8::1:0:0:0/ffff:ffff::ffff:0:0:0").unwrap();
+        assert!(net.contains_addr(&Ipv6Addr::new(0x2001, 0xdb8, 7, 7, 1, 7, 7, 7)));
+        assert!(!net.contains_addr(&Ipv6Addr::new(0x2001, 0xdb8, 7, 7, 2, 7, 7, 7)));
+        assert!(!net.contains_addr(&Ipv6Addr::new(0x2001, 0xdb9, 7, 7, 1, 7, 7, 7)));
+    }
+
+    #[test]
+    fn ip_network_contains_addr_dispatches_by_family() {
+        let v4 = IpNetwork::parse("192.168.0.0/16").unwrap();
+        assert!(v4.contains_addr(&IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))));
+        assert!(!v4.contains_addr(&IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+
+        let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
+        assert!(v6.contains_addr(&IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1))));
+        assert!(!v6.contains_addr(&IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 1))));
+    }
+
+    #[test]
+    fn ip_network_contains_addr_mixed_families() {
+        // Each `/0` holds every address of its own family, and none of the
+        // other's.
+        let v4 = IpNetwork::V4(Ipv4Network::UNSPECIFIED);
+        let v6 = IpNetwork::V6(Ipv6Network::UNSPECIFIED);
+        assert!(!v4.contains_addr(&IpAddr::V6(Ipv6Addr::UNSPECIFIED)));
+        assert!(!v6.contains_addr(&IpAddr::V4(Ipv4Addr::UNSPECIFIED)));
+
+        // An IPv4-mapped address is an IPv6 address.
+        let mapped = Ipv4Addr::new(192, 168, 1, 1).to_ipv6_mapped();
+        assert!(!v4.contains_addr(&IpAddr::V6(mapped)));
+    }
+
+    proptest! {
+        #[test]
+        fn prop_ipv4_contains_addr_matches_contains_host(net in arb_ipv4_network(), addr in any::<u32>()) {
+            let addr = Ipv4Addr::from_bits(addr);
+            prop_assert_eq!(net.contains_addr(&addr), net.contains(&Ipv4Network::from(addr)));
+        }
+
+        // A uniform address almost never lands in a network with many mask
+        // bits, so the members are built: the network address with any host
+        // bits set.
+        #[test]
+        fn prop_ipv4_contains_addr_accepts_members(net in arb_ipv4_network(), host in any::<u32>()) {
+            let (addr, mask) = net.to_bits();
+            prop_assert!(net.contains_addr(&Ipv4Addr::from_bits(addr | (host & !mask))));
+        }
+
+        #[test]
+        fn prop_ipv4_contains_addr_rejects_masked_bit_flips(
+            net in arb_ipv4_network(),
+            host in any::<u32>(),
+            bit in 0u32..32,
+        ) {
+            let (addr, mask) = net.to_bits();
+            prop_assume!(mask & (1 << bit) != 0);
+
+            let member = addr | (host & !mask);
+            prop_assert!(!net.contains_addr(&Ipv4Addr::from_bits(member ^ (1 << bit))));
+        }
+
+        #[test]
+        fn prop_ipv6_contains_addr_matches_contains_host(net in arb_ipv6_network(), addr in any::<u128>()) {
+            let addr = Ipv6Addr::from_bits(addr);
+            prop_assert_eq!(net.contains_addr(&addr), net.contains(&Ipv6Network::from(addr)));
+        }
+
+        #[test]
+        fn prop_ipv6_contains_addr_accepts_members(net in arb_ipv6_network(), host in any::<u128>()) {
+            let (addr, mask) = net.to_bits();
+            prop_assert!(net.contains_addr(&Ipv6Addr::from_bits(addr | (host & !mask))));
+        }
+
+        #[test]
+        fn prop_ipv6_contains_addr_rejects_masked_bit_flips(
+            net in arb_ipv6_network(),
+            host in any::<u128>(),
+            bit in 0u32..128,
+        ) {
+            let (addr, mask) = net.to_bits();
+            prop_assume!(mask & (1 << bit) != 0);
+
+            let member = addr | (host & !mask);
+            prop_assert!(!net.contains_addr(&Ipv6Addr::from_bits(member ^ (1 << bit))));
+        }
+
+        #[test]
+        fn prop_ip_network_contains_addr_matches_contains_host(
+            net in prop_oneof![
+                arb_ipv4_network().prop_map(IpNetwork::V4),
+                arb_ipv6_network().prop_map(IpNetwork::V6),
+            ],
+            addr in prop_oneof![
+                any::<u32>().prop_map(|addr| IpAddr::V4(Ipv4Addr::from_bits(addr))),
+                any::<u128>().prop_map(|addr| IpAddr::V6(Ipv6Addr::from_bits(addr))),
+            ],
+        ) {
+            prop_assert_eq!(net.contains_addr(&addr), net.contains(&IpNetwork::from(addr)));
+        }
     }
 
     #[test]
