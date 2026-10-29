@@ -690,7 +690,7 @@ theorem toNat_sub_one (hw : 0 < w) (x : BitVec w) (hx : x.toNat ≠ 0) : (x - 1)
 
 /-- The cursor pair of `ContiguousIpv4NetworkAddrs` (`front`, `back`: host
 indices), `ContiguousIpv6NetworkAddrs` (`current`, `last`: addresses) and
-`BiContiguousIpv6Addrs` (`front`, `back`: host indices). `hi < lo` is exhausted. -/
+`BiContiguousIpv6NetworkAddrs` (`front`, `back`: host indices). `hi < lo` is exhausted. -/
 structure Cursor (w : Nat) where
   lo : BitVec w
   hi : BitVec w
@@ -949,7 +949,7 @@ end Ipv4
 
 /-! ## `ContiguousIpv6NetworkAddrs` -/
 
-/-- `size_hint` of `ContiguousIpv6NetworkAddrs` and `BiContiguousIpv6Addrs`: the
+/-- `size_hint` of `ContiguousIpv6NetworkAddrs` and `BiContiguousIpv6NetworkAddrs`: the
 wrapped count `hi - lo + 1` is `0` only when all `2^128` values are left. -/
 def cursorSizeHint128 (ub : Nat) (c : Cursor 128) : Nat × Option Nat :=
   if c.hi < c.lo then (0, some 0)

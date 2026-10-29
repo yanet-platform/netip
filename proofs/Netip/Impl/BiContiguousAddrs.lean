@@ -2,7 +2,7 @@ import Netip.Impl.AddrsRun
 import Netip.Impl.BiContiguous
 
 /-!
-# `BiContiguousIpv6Addrs`
+# `BiContiguousIpv6NetworkAddrs`
 
 `BiContiguous::<Ipv6Network>::addrs` steps a host index through `0 ..= back` with
 the cursor pair of `AddrsRun` and maps it to an address by the closed form

@@ -307,7 +307,7 @@ impl BiContiguous<Ipv6Network> {
     /// ```
     #[inline]
     #[must_use]
-    pub fn addrs(self) -> BiContiguousIpv6Addrs {
+    pub fn addrs(self) -> BiContiguousIpv6NetworkAddrs {
         match self {
             Self(net) => {
                 let (addr, mask) = net.to_bits();
@@ -325,7 +325,7 @@ impl BiContiguous<Ipv6Network> {
                 let split_shift = 64 - lo_prefix;
                 let lo_mask = (1u128 << split_shift) - 1;
 
-                BiContiguousIpv6Addrs {
+                BiContiguousIpv6NetworkAddrs {
                     base: addr,
                     split_shift,
                     lo_mask,
@@ -397,7 +397,7 @@ impl BiContiguous<Ipv6Network> {
     }
 }
 
-impl BiContiguousIpv6Addrs {
+impl BiContiguousIpv6NetworkAddrs {
     #[inline]
     const fn index_to_addr(&self, index: u128) -> u128 {
         self.base | (index & self.lo_mask) | ((index >> self.split_shift) << 64)
@@ -419,18 +419,19 @@ impl BiContiguousIpv6Addrs {
 /// contiguous runs, one per 64-bit half, so this iterator maps each step's
 /// host index to an address through the 5-op closed form documented on
 /// [`BiContiguous::<Ipv6Network>::addrs`]. Unlike
-/// [`ContiguousIpv6NetworkAddrs`], the index cannot be folded into the
-/// bounds and advanced as a single packed address: the two host-bit runs
-/// live at different bit offsets (`0..split_shift` and `64..64+hi host
-/// bits`), so consecutive indices can "carry" from the low run into the high
-/// run at a bit position other than the next one up. The host index is
-/// therefore kept as its own cursor, paying the closed form's per-step cost.
+/// [`ContiguousIpv6NetworkAddrs`](crate::ContiguousIpv6NetworkAddrs), the index
+/// cannot be folded into the bounds and advanced as a single packed address:
+/// the two host-bit runs live at different bit offsets (`0..split_shift` and
+/// `64..64+hi host bits`), so consecutive indices can "carry" from the low run
+/// into the high run at a bit position other than the next one up. The host
+/// index is therefore kept as its own cursor, paying the closed form's per-step
+/// cost.
 ///
 /// When the iterator is exhausted it enters a sentinel state where
 /// `front > back`, so every subsequent call to [`next`](Iterator::next) or
 /// [`next_back`](DoubleEndedIterator::next_back) returns [`None`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BiContiguousIpv6Addrs {
+pub struct BiContiguousIpv6NetworkAddrs {
     base: u128,
     split_shift: u32,
     lo_mask: u128,
@@ -438,7 +439,7 @@ pub struct BiContiguousIpv6Addrs {
     back: u128,
 }
 
-impl Iterator for BiContiguousIpv6Addrs {
+impl Iterator for BiContiguousIpv6NetworkAddrs {
     type Item = Ipv6Addr;
 
     #[inline]
@@ -486,7 +487,7 @@ impl Iterator for BiContiguousIpv6Addrs {
     }
 }
 
-impl DoubleEndedIterator for BiContiguousIpv6Addrs {
+impl DoubleEndedIterator for BiContiguousIpv6NetworkAddrs {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.front > self.back {
@@ -507,7 +508,7 @@ impl DoubleEndedIterator for BiContiguousIpv6Addrs {
 }
 
 // Once the cursors cross they stay crossed, and both ends return `None`.
-impl core::iter::FusedIterator for BiContiguousIpv6Addrs {}
+impl core::iter::FusedIterator for BiContiguousIpv6NetworkAddrs {}
 
 impl TryFrom<Ipv6Network> for BiContiguous<Ipv6Network> {
     type Error = BiContiguousIpNetParseError;

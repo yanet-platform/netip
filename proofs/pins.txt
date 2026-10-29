@@ -236,16 +236,16 @@ BiContiguous<Ipv6Network>::lo_prefix                9d2b286cec1c98b7  Netip/Impl
 BiContiguous<Ipv6Network>::is_bicontiguous          a487d10e66043269  Netip/Impl/BiContiguous.lean:Ipv6.IsBiContiguous
 BiContiguous<Ipv6Network>::is_contiguous            f2ed265fe4ea4d4a  Netip/Impl/BiContiguous.lean
 BiContiguous<Ipv6Network>::intersection             cfa6a60916467773  Netip/Impl/BiContiguous.lean
-BiContiguous<Ipv6Network>::addrs                    1aab7384521ee2a0  Netip/Impl/BiContiguousAddrs.lean:Ipv6.baddrsInit Netip/Impl/BiContiguousAddrs.lean:Ipv6.indexBack
+BiContiguous<Ipv6Network>::addrs                    7820c5a9d6892f0a  Netip/Impl/BiContiguousAddrs.lean:Ipv6.baddrsInit Netip/Impl/BiContiguousAddrs.lean:Ipv6.indexBack
 BiContiguous<Ipv6Network>::TryFrom<Ipv6Network>::try_from 9aa8e5c9acf65ac6  Netip/Impl/BiContiguous.lean:Ipv6.IsBiContiguous
 BiContiguous<Ipv6Network>::From<Contiguous<Ipv6Network>>::from 4f3ae7a663c33dfe  Netip/Impl/BiContiguous.lean
-BiContiguousIpv6Addrs                               9a5a7d93f08ad8bc  Netip/Impl/AddrsRun.lean:Cursor Netip/Impl/BiContiguousAddrs.lean
-BiContiguousIpv6Addrs::index_to_addr                3c208a4c4e3f8bfc  Netip/Impl/BiContiguousAddrs.lean:Ipv6.indexToAddr Netip/Impl/BiContiguousAddrs.lean:Ipv6.splitShift Netip/Impl/BiContiguousAddrs.lean:Ipv6.loMask
-BiContiguousIpv6Addrs::enter_wraparound_sentinel    c2ac477003b10936  Netip/Impl/AddrsRun.lean:cursorNext
-BiContiguousIpv6Addrs::Iterator::next               6a2b6c2853498a3b  Netip/Impl/AddrsRun.lean:cursorNext Netip/Impl/BiContiguousAddrs.lean
-BiContiguousIpv6Addrs::Iterator::count              660477532897a70e  Netip/Impl/AddrsRun.lean:cursorSizeHint128
-BiContiguousIpv6Addrs::Iterator::size_hint          eeab1fe473221b83  Netip/Impl/AddrsRun.lean:cursorSizeHint128
-BiContiguousIpv6Addrs::DoubleEndedIterator::next_back 94f03d40f65f46b7  Netip/Impl/AddrsRun.lean:cursorNextBack Netip/Impl/BiContiguousAddrs.lean
+BiContiguousIpv6NetworkAddrs                        321d72b02e7a5c7e  Netip/Impl/AddrsRun.lean:Cursor Netip/Impl/BiContiguousAddrs.lean
+BiContiguousIpv6NetworkAddrs::index_to_addr         cb1eadc2b21004fc  Netip/Impl/BiContiguousAddrs.lean:Ipv6.indexToAddr Netip/Impl/BiContiguousAddrs.lean:Ipv6.splitShift Netip/Impl/BiContiguousAddrs.lean:Ipv6.loMask
+BiContiguousIpv6NetworkAddrs::enter_wraparound_sentinel 47fff805e9f48a36  Netip/Impl/AddrsRun.lean:cursorNext
+BiContiguousIpv6NetworkAddrs::Iterator::next        15fa5debeb29ff4d  Netip/Impl/AddrsRun.lean:cursorNext Netip/Impl/BiContiguousAddrs.lean
+BiContiguousIpv6NetworkAddrs::Iterator::count       375ce94b383cdca0  Netip/Impl/AddrsRun.lean:cursorSizeHint128
+BiContiguousIpv6NetworkAddrs::Iterator::size_hint   4307eed2730340dd  Netip/Impl/AddrsRun.lean:cursorSizeHint128
+BiContiguousIpv6NetworkAddrs::DoubleEndedIterator::next_back db36555c3282bf2f  Netip/Impl/AddrsRun.lean:cursorNextBack Netip/Impl/BiContiguousAddrs.lean
 ipv6_aggregate_bicontiguous                         108291bb7c13e3ab  Netip/Impl/BiProbe.lean:Ipv6.aggregateBi
 bicontiguous_level_sort_key                         fb816e440fd76b17  Netip/Impl/BiSweep.lean:Ipv6.levelKey
 bicontiguous_hi_addr                                4f327f53610aab76  Netip/Impl/BiGroup.lean:Ipv6.hiA
