@@ -11,7 +11,9 @@ use core::{
     str::FromStr,
 };
 
-use super::{CidrOverflowError, IpNetParseError, IpNetwork, Ipv4Network, Ipv6Network};
+use super::{
+    CidrOverflowError, IpNetParseError, IpNetwork, Ipv4Network, Ipv6Network, ipv4_mask_from_cidr, ipv6_mask_from_cidr,
+};
 
 /// An error that occurs when parsing a contiguous IP network.
 #[derive(Debug, PartialEq)]
@@ -50,12 +52,47 @@ pub struct Contiguous<T>(pub(crate) T);
 impl Contiguous<IpNetwork> {
     /// Parses an IP network from a string and returns a contiguous network.
     pub fn parse(buf: &str) -> Result<Self, ContiguousIpNetParseError> {
-        let net = IpNetwork::parse(buf)?;
+        Self::try_from(IpNetwork::parse(buf)?)
+    }
 
-        if net.is_contiguous() {
-            Ok(Self(net))
-        } else {
-            Err(ContiguousIpNetParseError::NonContiguousNetwork)
+    /// Builds a contiguous IP network from an address and a prefix length,
+    /// or returns [`None`] if the prefix length is past the address family's
+    /// bound: 32 for IPv4, 128 for IPv6.
+    ///
+    /// Dispatches on the address family to
+    /// [`Contiguous::<Ipv4Network>::from_prefix`] or
+    /// [`Contiguous::<Ipv6Network>::from_prefix`]; see them for the
+    /// normalization and for building constants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    ///
+    /// use netip::{Contiguous, IpNetwork};
+    ///
+    /// let addr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5));
+    /// let net = Contiguous::<IpNetwork>::from_prefix(addr, 24).unwrap();
+    /// assert_eq!("192.168.1.0/24", net.to_string());
+    /// assert_eq!(None, Contiguous::<IpNetwork>::from_prefix(addr, 33));
+    ///
+    /// let addr = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+    /// let net = Contiguous::<IpNetwork>::from_prefix(addr, 64).unwrap();
+    /// assert_eq!("2001:db8::/64", net.to_string());
+    /// assert_eq!(None, Contiguous::<IpNetwork>::from_prefix(addr, 129));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn from_prefix(addr: IpAddr, prefix: u8) -> Option<Self> {
+        match addr {
+            IpAddr::V4(addr) => match Contiguous::<Ipv4Network>::from_prefix(addr, prefix) {
+                Some(Contiguous(net)) => Some(Self(IpNetwork::V4(net))),
+                None => None,
+            },
+            IpAddr::V6(addr) => match Contiguous::<Ipv6Network>::from_prefix(addr, prefix) {
+                Some(Contiguous(net)) => Some(Self(IpNetwork::V6(net))),
+                None => None,
+            },
         }
     }
 
@@ -160,12 +197,48 @@ impl Contiguous<IpNetwork> {
 impl Contiguous<Ipv4Network> {
     /// Parses an IPv4 network from a string and returns a contiguous network.
     pub fn parse(buf: &str) -> Result<Self, ContiguousIpNetParseError> {
-        let net = Ipv4Network::parse(buf)?;
+        Self::try_from(Ipv4Network::parse(buf)?)
+    }
 
-        if net.is_contiguous() {
-            Ok(Self(net))
-        } else {
-            Err(ContiguousIpNetParseError::NonContiguousNetwork)
+    /// Builds a contiguous IPv4 network from an address and a prefix length,
+    /// or returns [`None`] if the prefix length is past 32.
+    ///
+    /// The address is normalized using the mask, as in [`Ipv4Network::new`]:
+    /// `192.168.1.5` with prefix length 24 becomes `192.168.1.0/24`. A mask
+    /// built from a prefix length is contiguous by construction, so no
+    /// contiguity check runs.
+    ///
+    /// The `TryFrom<(Ipv4Addr, u8)>` conversion builds the same network and
+    /// reports an overflowing prefix length as a [`CidrOverflowError`]. This
+    /// one is a `const fn` returning [`Option`] instead, so it also builds
+    /// constants: [`Option::expect`] works in `const` context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv4Addr;
+    ///
+    /// use netip::{Contiguous, Ipv4Network};
+    ///
+    /// const PRIVATE: Contiguous<Ipv4Network> =
+    ///     Contiguous::<Ipv4Network>::from_prefix(Ipv4Addr::new(10, 0, 0, 0), 8)
+    ///         .expect("8 is at most 32");
+    /// assert_eq!(8, PRIVATE.prefix());
+    ///
+    /// let net = Contiguous::<Ipv4Network>::from_prefix(Ipv4Addr::new(192, 168, 1, 5), 24).unwrap();
+    /// assert_eq!("192.168.1.0/24", net.to_string());
+    ///
+    /// assert_eq!(
+    ///     None,
+    ///     Contiguous::<Ipv4Network>::from_prefix(Ipv4Addr::new(10, 0, 0, 0), 33)
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn from_prefix(addr: Ipv4Addr, prefix: u8) -> Option<Self> {
+        match ipv4_mask_from_cidr(prefix) {
+            Ok(mask) => Some(Self(Ipv4Network::new(addr, mask))),
+            Err(..) => None,
         }
     }
 
@@ -426,12 +499,46 @@ impl core::iter::FusedIterator for ContiguousIpv4NetworkAddrs {}
 impl Contiguous<Ipv6Network> {
     /// Parses an IPv6 network from a string and returns a contiguous network.
     pub fn parse(buf: &str) -> Result<Self, ContiguousIpNetParseError> {
-        let net = Ipv6Network::parse(buf)?;
+        Self::try_from(Ipv6Network::parse(buf)?)
+    }
 
-        if net.is_contiguous() {
-            Ok(Self(net))
-        } else {
-            Err(ContiguousIpNetParseError::NonContiguousNetwork)
+    /// Builds a contiguous IPv6 network from an address and a prefix length,
+    /// or returns [`None`] if the prefix length is past 128.
+    ///
+    /// The address is normalized using the mask, as in [`Ipv6Network::new`]:
+    /// `2001:db8::1` with prefix length 64 becomes `2001:db8::/64`. A mask
+    /// built from a prefix length is contiguous by construction, so no
+    /// contiguity check runs.
+    ///
+    /// The `TryFrom<(Ipv6Addr, u8)>` conversion builds the same network and
+    /// reports an overflowing prefix length as a [`CidrOverflowError`]. This
+    /// one is a `const fn` returning [`Option`] instead, so it also builds
+    /// constants: [`Option::expect`] works in `const` context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::{Contiguous, Ipv6Network};
+    ///
+    /// const DOCUMENTATION: Contiguous<Ipv6Network> =
+    ///     Contiguous::<Ipv6Network>::from_prefix(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32)
+    ///         .expect("32 is at most 128");
+    /// assert_eq!(32, DOCUMENTATION.prefix());
+    ///
+    /// let addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+    /// let net = Contiguous::<Ipv6Network>::from_prefix(addr, 64).unwrap();
+    /// assert_eq!("2001:db8::/64", net.to_string());
+    ///
+    /// assert_eq!(None, Contiguous::<Ipv6Network>::from_prefix(addr, 129));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn from_prefix(addr: Ipv6Addr, prefix: u8) -> Option<Self> {
+        match ipv6_mask_from_cidr(prefix) {
+            Ok(mask) => Some(Self(Ipv6Network::new(addr, mask))),
+            Err(..) => None,
         }
     }
 
@@ -802,6 +909,99 @@ impl TryFrom<(IpAddr, u8)> for Contiguous<IpNetwork> {
     }
 }
 
+impl TryFrom<Ipv4Network> for Contiguous<Ipv4Network> {
+    type Error = ContiguousIpNetParseError;
+
+    /// Converts an [`Ipv4Network`] into a [`Contiguous<Ipv4Network>`],
+    /// failing with [`ContiguousIpNetParseError::NonContiguousNetwork`] if the
+    /// network's mask is not contiguous.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, ContiguousIpNetParseError, Ipv4Network};
+    ///
+    /// let net = Ipv4Network::parse("10.0.0.0/8").unwrap();
+    /// assert_eq!(net, *Contiguous::<Ipv4Network>::try_from(net).unwrap());
+    ///
+    /// let net = Ipv4Network::parse("10.0.0.0/255.0.255.0").unwrap();
+    /// assert_eq!(
+    ///     Err(ContiguousIpNetParseError::NonContiguousNetwork),
+    ///     Contiguous::<Ipv4Network>::try_from(net)
+    /// );
+    /// ```
+    #[inline]
+    fn try_from(net: Ipv4Network) -> Result<Self, Self::Error> {
+        if net.is_contiguous() {
+            Ok(Self(net))
+        } else {
+            Err(ContiguousIpNetParseError::NonContiguousNetwork)
+        }
+    }
+}
+
+impl TryFrom<Ipv6Network> for Contiguous<Ipv6Network> {
+    type Error = ContiguousIpNetParseError;
+
+    /// Converts an [`Ipv6Network`] into a [`Contiguous<Ipv6Network>`],
+    /// failing with [`ContiguousIpNetParseError::NonContiguousNetwork`] if the
+    /// network's mask is not contiguous.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, ContiguousIpNetParseError, Ipv6Network};
+    ///
+    /// let net = Ipv6Network::parse("2001:db8::/32").unwrap();
+    /// assert_eq!(net, *Contiguous::<Ipv6Network>::try_from(net).unwrap());
+    ///
+    /// let net = Ipv6Network::parse("2001:db8::/ffff:ffff::ffff:0:0:0").unwrap();
+    /// assert_eq!(
+    ///     Err(ContiguousIpNetParseError::NonContiguousNetwork),
+    ///     Contiguous::<Ipv6Network>::try_from(net)
+    /// );
+    /// ```
+    #[inline]
+    fn try_from(net: Ipv6Network) -> Result<Self, Self::Error> {
+        if net.is_contiguous() {
+            Ok(Self(net))
+        } else {
+            Err(ContiguousIpNetParseError::NonContiguousNetwork)
+        }
+    }
+}
+
+impl TryFrom<IpNetwork> for Contiguous<IpNetwork> {
+    type Error = ContiguousIpNetParseError;
+
+    /// Converts an [`IpNetwork`] into a [`Contiguous<IpNetwork>`], failing
+    /// with [`ContiguousIpNetParseError::NonContiguousNetwork`] if the
+    /// network's mask is not contiguous.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, ContiguousIpNetParseError, IpNetwork};
+    ///
+    /// let net = IpNetwork::parse("10.0.0.0/8").unwrap();
+    /// assert_eq!(net, *Contiguous::<IpNetwork>::try_from(net).unwrap());
+    ///
+    /// let net = IpNetwork::parse("2001:db8::/ffff:ffff::ffff:0:0:0").unwrap();
+    /// assert_eq!(
+    ///     Err(ContiguousIpNetParseError::NonContiguousNetwork),
+    ///     Contiguous::<IpNetwork>::try_from(net)
+    /// );
+    /// ```
+    #[inline]
+    fn try_from(net: IpNetwork) -> Result<Self, Self::Error> {
+        if net.is_contiguous() {
+            Ok(Self(net))
+        } else {
+            Err(ContiguousIpNetParseError::NonContiguousNetwork)
+        }
+    }
+}
+
 impl<T> Deref for Contiguous<T> {
     type Target = T;
 
@@ -1008,7 +1208,7 @@ mod test {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::net::test::{arb_contiguous_ipv6_network, arb_ipv4_network};
+    use crate::net::test::{arb_contiguous_ipv6_network, arb_ipv4_network, arb_ipv6_network};
 
     #[test]
     fn contiguous_ipv4_addrs_slash24_matches_incrementing_u32() {
@@ -1429,9 +1629,10 @@ mod test {
         assert_eq!(net_v6.contains(&net_v4), (*net_v6).contains(&net_v4));
     }
 
-    // Non-contiguous-mask coverage does not apply to the `*_tryfrom_*` tests
-    // in this file: a prefix length can only ever produce a contiguous mask,
-    // so there is no non-contiguous input to construct.
+    // Non-contiguous-mask coverage does not apply to the `*_tryfrom_*_cidr*`
+    // and `*_from_prefix*` tests in this file: a prefix length can only ever
+    // produce a contiguous mask, so there is no non-contiguous input to
+    // construct. The `*_tryfrom_network*` tests below cover both kinds.
 
     #[test]
     fn contiguous_ipv4_tryfrom_addr_cidr() {
@@ -1567,6 +1768,167 @@ mod test {
         assert_eq!(
             CidrOverflowError(129, 128),
             Contiguous::<IpNetwork>::try_from((addr, 129)).unwrap_err()
+        );
+    }
+
+    #[test]
+    fn contiguous_ipv4_from_prefix() {
+        let addr = Ipv4Addr::new(192, 168, 1, 5);
+        let expected = Contiguous(Ipv4Network::new(
+            Ipv4Addr::new(192, 168, 1, 0),
+            Ipv4Addr::new(255, 255, 255, 0),
+        ));
+        assert_eq!(Some(expected), Contiguous::<Ipv4Network>::from_prefix(addr, 24));
+    }
+
+    #[test]
+    fn contiguous_ipv4_from_prefix_boundaries() {
+        let addr = Ipv4Addr::new(192, 168, 1, 5);
+
+        let host = Contiguous(Ipv4Network::new(addr, Ipv4Addr::new(255, 255, 255, 255)));
+        assert_eq!(Some(host), Contiguous::<Ipv4Network>::from_prefix(addr, 32));
+
+        let unspecified = Contiguous(Ipv4Network::new(Ipv4Addr::UNSPECIFIED, Ipv4Addr::UNSPECIFIED));
+        assert_eq!(Some(unspecified), Contiguous::<Ipv4Network>::from_prefix(addr, 0));
+    }
+
+    #[test]
+    fn contiguous_ipv4_from_prefix_overflow() {
+        let addr = Ipv4Addr::new(192, 168, 1, 5);
+        assert_eq!(None, Contiguous::<Ipv4Network>::from_prefix(addr, 33));
+        assert_eq!(None, Contiguous::<Ipv4Network>::from_prefix(addr, u8::MAX));
+    }
+
+    #[test]
+    fn contiguous_ipv4_from_prefix_in_const() {
+        const NET: Contiguous<Ipv4Network> =
+            Contiguous::<Ipv4Network>::from_prefix(Ipv4Addr::new(10, 1, 2, 3), 8).expect("8 is at most 32");
+        assert_eq!(Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap(), NET);
+    }
+
+    #[test]
+    fn contiguous_ipv6_from_prefix() {
+        let addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        let expected = Contiguous(Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0, 0, 0, 0),
+        ));
+        assert_eq!(Some(expected), Contiguous::<Ipv6Network>::from_prefix(addr, 64));
+    }
+
+    #[test]
+    fn contiguous_ipv6_from_prefix_boundaries() {
+        let addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+
+        let host = Contiguous(Ipv6Network::new(
+            addr,
+            Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff),
+        ));
+        assert_eq!(Some(host), Contiguous::<Ipv6Network>::from_prefix(addr, 128));
+
+        let unspecified = Contiguous(Ipv6Network::new(Ipv6Addr::UNSPECIFIED, Ipv6Addr::UNSPECIFIED));
+        assert_eq!(Some(unspecified), Contiguous::<Ipv6Network>::from_prefix(addr, 0));
+    }
+
+    #[test]
+    fn contiguous_ipv6_from_prefix_overflow() {
+        let addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        assert_eq!(None, Contiguous::<Ipv6Network>::from_prefix(addr, 129));
+        assert_eq!(None, Contiguous::<Ipv6Network>::from_prefix(addr, u8::MAX));
+    }
+
+    #[test]
+    fn contiguous_ipv6_from_prefix_in_const() {
+        const NET: Contiguous<Ipv6Network> =
+            Contiguous::<Ipv6Network>::from_prefix(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 32)
+                .expect("32 is at most 128");
+        assert_eq!(Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap(), NET);
+    }
+
+    #[test]
+    fn contiguous_ip_from_prefix_dispatches_by_family() {
+        let v4 = Ipv4Addr::new(192, 168, 1, 5);
+        assert_eq!(
+            Contiguous::<Ipv4Network>::from_prefix(v4, 24).map(Contiguous::<IpNetwork>::from),
+            Contiguous::<IpNetwork>::from_prefix(IpAddr::V4(v4), 24)
+        );
+
+        let v6 = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        assert_eq!(
+            Contiguous::<Ipv6Network>::from_prefix(v6, 64).map(Contiguous::<IpNetwork>::from),
+            Contiguous::<IpNetwork>::from_prefix(IpAddr::V6(v6), 64)
+        );
+    }
+
+    #[test]
+    fn contiguous_ip_from_prefix_overflow_is_per_family() {
+        // 33 overflows IPv4 but not IPv6.
+        let v4 = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5));
+        assert_eq!(None, Contiguous::<IpNetwork>::from_prefix(v4, 33));
+
+        let v6 = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+        assert_eq!(33, Contiguous::<IpNetwork>::from_prefix(v6, 33).unwrap().prefix());
+        assert_eq!(None, Contiguous::<IpNetwork>::from_prefix(v6, 129));
+    }
+
+    #[test]
+    fn contiguous_ip_from_prefix_in_const() {
+        const NET: Contiguous<IpNetwork> =
+            Contiguous::<IpNetwork>::from_prefix(IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3)), 8).expect("8 is at most 32");
+        assert_eq!(Contiguous::<IpNetwork>::parse("10.0.0.0/8").unwrap(), NET);
+    }
+
+    #[test]
+    fn contiguous_ipv4_tryfrom_network() {
+        let net = Ipv4Network::parse("192.168.0.0/16").unwrap();
+        assert_eq!(Ok(Contiguous(net)), Contiguous::<Ipv4Network>::try_from(net));
+    }
+
+    #[test]
+    fn contiguous_ipv4_tryfrom_network_non_contiguous() {
+        let net = Ipv4Network::parse("192.168.0.1/255.255.0.255").unwrap();
+        assert_eq!(
+            Err(ContiguousIpNetParseError::NonContiguousNetwork),
+            Contiguous::<Ipv4Network>::try_from(net)
+        );
+    }
+
+    #[test]
+    fn contiguous_ipv6_tryfrom_network() {
+        let net = Ipv6Network::parse("2001:db8::/32").unwrap();
+        assert_eq!(Ok(Contiguous(net)), Contiguous::<Ipv6Network>::try_from(net));
+    }
+
+    #[test]
+    fn contiguous_ipv6_tryfrom_network_non_contiguous() {
+        let net = Ipv6Network::parse("2001:db8::/ffff:ffff::ffff:0:0:0").unwrap();
+        assert_eq!(
+            Err(ContiguousIpNetParseError::NonContiguousNetwork),
+            Contiguous::<Ipv6Network>::try_from(net)
+        );
+    }
+
+    #[test]
+    fn contiguous_ip_tryfrom_network() {
+        let v4 = IpNetwork::parse("192.168.0.0/16").unwrap();
+        assert_eq!(Ok(Contiguous(v4)), Contiguous::<IpNetwork>::try_from(v4));
+
+        let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
+        assert_eq!(Ok(Contiguous(v6)), Contiguous::<IpNetwork>::try_from(v6));
+    }
+
+    #[test]
+    fn contiguous_ip_tryfrom_network_non_contiguous() {
+        let v4 = IpNetwork::parse("192.168.0.1/255.255.0.255").unwrap();
+        assert_eq!(
+            Err(ContiguousIpNetParseError::NonContiguousNetwork),
+            Contiguous::<IpNetwork>::try_from(v4)
+        );
+
+        let v6 = IpNetwork::parse("2001:db8::/ffff:ffff::ffff:0:0:0").unwrap();
+        assert_eq!(
+            Err(ContiguousIpNetParseError::NonContiguousNetwork),
+            Contiguous::<IpNetwork>::try_from(v6)
         );
     }
 
@@ -1962,6 +2324,31 @@ mod test {
         ]
     }
 
+    // Contiguous and non-contiguous masks in equal measure. A uniformly random
+    // mask is almost never contiguous, which would leave the accepting branch
+    // of the `TryFrom` network conversions untested.
+    fn arb_mixed_ipv4_network() -> impl Strategy<Value = Ipv4Network> {
+        prop_oneof![arb_ipv4_network(), arb_contiguous_ipv4_network().prop_map(|net| *net)]
+    }
+
+    fn arb_mixed_ipv6_network() -> impl Strategy<Value = Ipv6Network> {
+        prop_oneof![arb_ipv6_network(), arb_contiguous_ipv6_network().prop_map(|net| *net)]
+    }
+
+    fn arb_mixed_ip_network() -> impl Strategy<Value = IpNetwork> {
+        prop_oneof![
+            arb_mixed_ipv4_network().prop_map(IpNetwork::V4),
+            arb_mixed_ipv6_network().prop_map(IpNetwork::V6),
+        ]
+    }
+
+    fn arb_ip_addr() -> impl Strategy<Value = IpAddr> {
+        prop_oneof![
+            any::<u32>().prop_map(|addr| IpAddr::V4(Ipv4Addr::from_bits(addr))),
+            any::<u128>().prop_map(|addr| IpAddr::V6(Ipv6Addr::from_bits(addr))),
+        ]
+    }
+
     // Bounded to at most 8 host bits (256 addresses) so `addrs()` can be
     // fully collected/brute-forced in a proptest case without allocating an
     // unbounded amount of memory.
@@ -2252,6 +2639,72 @@ mod test {
             if let Ok(net) = result {
                 prop_assert_eq!(cidr, net.prefix());
                 prop_assert!((*net).is_contiguous());
+            }
+        }
+
+        // `from_prefix` must build exactly the network the `(addr, prefix)`
+        // conversion builds, and accept exactly the prefix lengths it accepts,
+        // so the conversion's properties above carry over. The address it was
+        // given stays a member: normalization clears only host bits.
+        #[test]
+        fn prop_contiguous_ipv4_from_prefix_matches_tryfrom(addr in any::<u32>(), prefix in 0u8..=33) {
+            let addr = Ipv4Addr::from_bits(addr);
+            let net = Contiguous::<Ipv4Network>::from_prefix(addr, prefix);
+
+            prop_assert_eq!(net, Contiguous::<Ipv4Network>::try_from((addr, prefix)).ok());
+            if let Some(net) = net {
+                prop_assert!((*net).contains(&Ipv4Network::from(addr)));
+            }
+        }
+
+        #[test]
+        fn prop_contiguous_ipv6_from_prefix_matches_tryfrom(addr in any::<u128>(), prefix in 0u8..=129) {
+            let addr = Ipv6Addr::from_bits(addr);
+            let net = Contiguous::<Ipv6Network>::from_prefix(addr, prefix);
+
+            prop_assert_eq!(net, Contiguous::<Ipv6Network>::try_from((addr, prefix)).ok());
+            if let Some(net) = net {
+                prop_assert!((*net).contains(&Ipv6Network::from(addr)));
+            }
+        }
+
+        #[test]
+        fn prop_contiguous_ip_from_prefix_matches_tryfrom(addr in arb_ip_addr(), prefix in 0u8..=129) {
+            let net = Contiguous::<IpNetwork>::from_prefix(addr, prefix);
+
+            prop_assert_eq!(net, Contiguous::<IpNetwork>::try_from((addr, prefix)).ok());
+            if let Some(net) = net {
+                prop_assert!((*net).contains(&IpNetwork::from(addr)));
+            }
+        }
+
+        #[test]
+        fn prop_contiguous_ipv4_tryfrom_network_matches_is_contiguous(net in arb_mixed_ipv4_network()) {
+            let result = Contiguous::<Ipv4Network>::try_from(net);
+
+            prop_assert_eq!(result.is_ok(), net.is_contiguous());
+            if let Ok(converted) = result {
+                prop_assert_eq!(*converted, net);
+            }
+        }
+
+        #[test]
+        fn prop_contiguous_ipv6_tryfrom_network_matches_is_contiguous(net in arb_mixed_ipv6_network()) {
+            let result = Contiguous::<Ipv6Network>::try_from(net);
+
+            prop_assert_eq!(result.is_ok(), net.is_contiguous());
+            if let Ok(converted) = result {
+                prop_assert_eq!(*converted, net);
+            }
+        }
+
+        #[test]
+        fn prop_contiguous_ip_tryfrom_network_matches_is_contiguous(net in arb_mixed_ip_network()) {
+            let result = Contiguous::<IpNetwork>::try_from(net);
+
+            prop_assert_eq!(result.is_ok(), net.is_contiguous());
+            if let Ok(converted) = result {
+                prop_assert_eq!(*converted, net);
             }
         }
 
