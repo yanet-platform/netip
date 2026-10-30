@@ -573,6 +573,35 @@ impl<T> Deref for BiContiguous<T> {
     }
 }
 
+impl<T> AsRef<T> for BiContiguous<T> {
+    /// Borrows the wrapped network, as [`Deref`] does.
+    ///
+    /// This lets a slice of bi-contiguous networks go to the functions that
+    /// take a slice of any `T: AsRef<Ipv6Network>`, such as
+    /// [`ipv6_binary_split`](crate::ipv6_binary_split).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{BiContiguous, Ipv6Network, ipv6_binary_split};
+    ///
+    /// let mut nets: Vec<_> = ["2001:db8::1", "2001:db8::2", "2001:db8::3"]
+    ///     .iter()
+    ///     .map(|net| BiContiguous::<Ipv6Network>::parse(net).unwrap())
+    ///     .collect();
+    ///
+    /// let (supernet, range) = ipv6_binary_split(&mut nets).unwrap();
+    /// assert_eq!(Ipv6Network::parse("2001:db8::2/127").unwrap(), supernet);
+    /// assert_eq!(1..3, range);
+    /// ```
+    #[inline]
+    fn as_ref(&self) -> &T {
+        match self {
+            Self(net) => net,
+        }
+    }
+}
+
 impl<T> Display for BiContiguous<T>
 where
     T: Display,
@@ -1162,7 +1191,10 @@ mod test {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::net::test::{arb_contiguous_ipv6_network, arb_ipv6_network};
+    use crate::{
+        ipv6_binary_split,
+        net::test::{arb_contiguous_ipv6_network, arb_ipv6_network},
+    };
 
     // The two motivating masks from the `BiContiguous` design (one hi/lo pair
     // per 64-bit half of the address) accepted via every constructor.
@@ -1292,6 +1324,36 @@ mod test {
     fn bicontiguous_ipv6_network_deref() {
         let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
         assert_eq!(Ipv6Network::parse("2a02:6b8:c00::/40").unwrap(), *net);
+    }
+
+    #[test]
+    fn bicontiguous_ipv6_network_as_ref_borrows_the_wrapped_network() {
+        let net =
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        assert!(core::ptr::eq(&*net, net.as_ref()));
+    }
+
+    // Bi-contiguous networks with non-contiguous masks that differ only in the
+    // fifth group, 1, 2 and 3. Split as a slice of `BiContiguous`, the last
+    // two make the block.
+    #[test]
+    fn bicontiguous_ipv6_binary_split_through_as_ref() {
+        let nets = &[
+            "2001:db8::1:0:0:0/ffff:ffff:0:0:ffff:ffff:0:0",
+            "2001:db8::2:0:0:0/ffff:ffff:0:0:ffff:ffff:0:0",
+            "2001:db8::3:0:0:0/ffff:ffff:0:0:ffff:ffff:0:0",
+        ];
+        let mut nets: Vec<_> = nets
+            .iter()
+            .map(|net| BiContiguous::<Ipv6Network>::parse(net).unwrap())
+            .collect();
+
+        let (supernet, range) = ipv6_binary_split(&mut nets).unwrap();
+        assert_eq!(
+            Ipv6Network::parse("2001:db8::2:0:0:0/ffff:ffff:0:0:fffe:ffff:0:0").unwrap(),
+            supernet
+        );
+        assert_eq!(1..3, range);
     }
 
     #[test]
@@ -1695,6 +1757,20 @@ mod test {
         fn prop_bicontiguous_ipv6_from_contiguous_preserves_value(net in arb_contiguous_ipv6_network()) {
             let converted = BiContiguous::<Ipv6Network>::from(net);
             prop_assert_eq!(*converted, *net);
+        }
+
+        // Through `AsRef`, a slice of `BiContiguous` splits exactly as the
+        // networks it wraps: the same supernet, the same block and the same
+        // reordering. The gridded masks are mostly non-contiguous.
+        #[test]
+        fn prop_bicontiguous_ipv6_binary_split_matches_inner(nets in arb_gridded_bicontiguous_ipv6_slice()) {
+            let mut nets = nets;
+            nets.sort();
+            nets.dedup();
+            let mut inner: Vec<Ipv6Network> = nets.iter().map(|net| **net).collect();
+
+            prop_assert_eq!(ipv6_binary_split(&mut inner), ipv6_binary_split(&mut nets));
+            prop_assert_eq!(inner, nets.iter().map(|net| **net).collect::<Vec<_>>());
         }
     }
 
