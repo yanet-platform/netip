@@ -849,6 +849,11 @@ impl IpNetwork {
     /// [`intersects`](Self::intersects) — which return `false` across
     /// families on this enum — be evaluated meaningfully.
     ///
+    /// [`Ipv6Network`] has no `From<IpNetwork>`: it would turn an IPv4 network
+    /// and its IPv4-mapped counterpart into the same value, losing the family.
+    /// To take an IPv6 network out without embedding an IPv4 one, match on
+    /// [`IpNetwork::V6`].
+    ///
     /// [IPv4-mapped IPv6 address]: https://tools.ietf.org/html/rfc4291#section-2.5.5.2
     ///
     /// # Examples
@@ -866,6 +871,15 @@ impl IpNetwork {
     /// let net = IpNetwork::parse("2001:db8::1/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
     /// let expected = Ipv6Network::parse("2001:db8::1/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
     /// assert_eq!(expected, net.to_ipv6_mapped());
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use netip::{IpNetwork, Ipv6Network};
+    ///
+    /// fn widen(net: IpNetwork) -> Ipv6Network {
+    ///     // No `From`: write `net.to_ipv6_mapped()`, or match on `IpNetwork::V6`.
+    ///     Ipv6Network::from(net)
+    /// }
     /// ```
     #[inline]
     #[must_use]
@@ -1951,6 +1965,11 @@ impl Ipv4Network {
 
     /// Converts this network to an IPv4-mapped IPv6 network.
     ///
+    /// [`Ipv6Network`] has no `From<Ipv4Network>`: IPv4-mapped `::ffff:0:0/96`
+    /// is one of several places for IPv4 inside IPv6, next to the
+    /// IPv4-compatible `::/96` and the NAT64 `64:ff9b::/96`, so the call names
+    /// the one it means.
+    ///
     /// # Examples
     ///
     /// ```
@@ -1965,6 +1984,15 @@ impl Ipv4Network {
     /// let expected =
     ///     Ipv6Network::parse("::ffff:c0a8:0/ffff:ffff:ffff:ffff:ffff:ffff:ffff:fc00").unwrap();
     /// assert_eq!(expected, net.to_ipv6_mapped());
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use netip::{Ipv4Network, Ipv6Network};
+    ///
+    /// fn widen(net: Ipv4Network) -> Ipv6Network {
+    ///     // No `From`: write `net.to_ipv6_mapped()`.
+    ///     Ipv6Network::from(net)
+    /// }
     /// ```
     #[inline]
     #[must_use]
@@ -4494,20 +4522,6 @@ impl Ipv6Network {
                 }
             }
         }
-    }
-}
-
-impl From<Ipv4Network> for Ipv6Network {
-    #[inline]
-    fn from(net: Ipv4Network) -> Self {
-        net.to_ipv6_mapped()
-    }
-}
-
-impl From<IpNetwork> for Ipv6Network {
-    #[inline]
-    fn from(net: IpNetwork) -> Self {
-        net.to_ipv6_mapped()
     }
 }
 
@@ -10528,20 +10542,6 @@ mod test {
         // top 96 bits, so collapsing to IPv4 would lose addresses.
         let net = IpNetwork::parse("::ffff:c0a8:1/0:ffff:ffff:ffff:ffff:ffff:ffff:ffff").unwrap();
         assert_eq!(net, net.to_canonical());
-    }
-
-    #[test]
-    fn ipnetwork_from_for_ipv6network_v4() {
-        let net = IpNetwork::parse("192.168.1.0/24").unwrap();
-        let expected = Ipv6Network::parse("::ffff:c0a8:100/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ff00").unwrap();
-        assert_eq!(expected, Ipv6Network::from(net));
-    }
-
-    #[test]
-    fn ipnetwork_from_for_ipv6network_v6() {
-        let net = IpNetwork::parse("2001:db8::/32").unwrap();
-        let expected = Ipv6Network::parse("2001:db8::/32").unwrap();
-        assert_eq!(expected, Ipv6Network::from(net));
     }
 
     #[test]
