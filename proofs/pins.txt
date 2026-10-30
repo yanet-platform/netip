@@ -203,6 +203,12 @@ ip_aggregate                                        d149a7cd9e85e50a  Netip/Impl
 [src/net/contiguous.rs]
 
 Contiguous                                          87426ae4caa7e295  Netip/Impl/Contiguous.lean Netip/Impl/AggregateContiguous.lean:aggregate
+Contiguous<IpNetwork>::from_prefix                  06362f38ba164039  Netip/Impl/IsContiguous.lean:Ipv4.isContiguous_maskFromCidr Netip/Impl/IsContiguous.lean:Ipv6.isContiguous_maskFromCidr
+Contiguous<Ipv4Network>::from_prefix                84a1d02366a2f8df  Netip/Impl/IsContiguous.lean:Ipv4.isContiguous_maskFromCidr
+Contiguous<Ipv6Network>::from_prefix                bb809c9cef98f7df  Netip/Impl/IsContiguous.lean:Ipv6.isContiguous_maskFromCidr
+Contiguous<IpNetwork>::TryFrom<IpNetwork>::try_from 6eee4391af684786  Netip/Impl/IpNetwork.lean:IpNet.isContiguous
+Contiguous<Ipv4Network>::TryFrom<Ipv4Network>::try_from 7c07992264b51064  Netip/Impl/Basic.lean:IsContiguous
+Contiguous<Ipv6Network>::TryFrom<Ipv6Network>::try_from 3cd810206ea5d392  Netip/Impl/Basic.lean:IsContiguous
 Contiguous<IpNetwork>::contains                     92ef22e47957de10  Netip/Impl/Contiguous.lean:Ipv4.contains_mask_iff_le Netip/Impl/Contiguous.lean:Ipv6.contains_mask_iff_le
 Contiguous<Ipv4Network>::contains                   b3e20cf338b6a39b  Netip/Impl/Contiguous.lean:Ipv4.contains_mask_iff_le
 Contiguous<Ipv6Network>::contains                   81feedc52acf7a59  Netip/Impl/Contiguous.lean:Ipv6.contains_mask_iff_le
