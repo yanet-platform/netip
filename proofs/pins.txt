@@ -41,6 +41,7 @@ IpNetwork::contains                                 7db8fecf35afdaad  Netip/Impl
 IpNetwork::to_contiguous                            edd3032413b19439  Netip/Impl/IpNetwork.lean:IpNet.toContiguous
 IpNetwork::is_contiguous                            c4a01d0c05d6fd5e  Netip/Impl/IpNetwork.lean:IpNet.isContiguous
 IpNetwork::prefix                                   302e24256e88a46c  Netip/Impl/IpNetwork.lean:IpNet.prefixLen
+IpNetwork::host_bits                                fe3cc9b67fa65000  Netip/HostIndex.lean:cpop_not_eq_hostBits Netip/HostIndex.lean:card_S
 IpNetwork::last_addr                                1a0a70fd38ea445f  Netip/Impl/IpNetwork.lean:IpNet.lastAddr
 IpNetwork::intersects                               3fbc07f4d47841e0  Netip/Impl/IpNetwork.lean:IpNet.intersects
 IpNetwork::is_disjoint                              3d401129e5f0b91b  Netip/Impl/IpNetwork.lean:IpNet.isDisjoint
@@ -70,6 +71,7 @@ Ipv4Network::intersection                           9322ac507b4562ce  Netip/Impl
 Ipv4Network::difference                             d47c974dadcf860b  Netip/Impl/Difference.lean
 Ipv4Network::is_contiguous                          17ce4c14ad5cc8ff  Netip/Impl/Basic.lean:IsContiguous
 Ipv4Network::prefix                                 fd582ff127a3eb54  Netip/Impl/IsContiguous.lean:Ipv4.leadingOnes_eq_popcount Netip/Impl/IpNetwork.lean:IpNet.prefixLen
+Ipv4Network::host_bits                              02faf166524233a5  Netip/HostIndex.lean:cpop_not_eq_hostBits Netip/HostIndex.lean:card_S
 Ipv4Network::to_contiguous                          303fcc8ba9c8d4c6  Netip/Impl/Conversions.lean:toContiguous
 Ipv4Network::supernet_for                           80571534383b708e  Netip/Impl/Supernet.lean:supernetMask Netip/Impl/Supernet.lean:Ipv4.bswap
 Ipv4Network::is_adjacent                            4e44bf4382a712a5  Netip/Impl/Adjacent.lean:adjacentBit
@@ -125,6 +127,7 @@ Ipv6Network::is_ipv4_mapped_ipv6                    d0fa6e6dbe2a072d  Netip/Impl
 Ipv6Network::to_contiguous                          a4a7e333df97f57c  Netip/Impl/Conversions.lean:toContiguous
 Ipv6Network::to_ipv4_mapped                         00caec9335d6c37f  Netip/Impl/Conversions.lean:Ipv6.toIpv4Mapped
 Ipv6Network::prefix                                 0a7a27bc2ae735aa  Netip/Impl/IsContiguous.lean:Ipv6.leadingOnes_eq_popcount Netip/Impl/IpNetwork.lean:IpNet.prefixLen
+Ipv6Network::host_bits                              091cad8996d6e10b  Netip/HostIndex.lean:cpop_not_eq_hostBits Netip/HostIndex.lean:card_S
 Ipv6Network::supernet_for                           6e1ec4ad29d86430  Netip/Impl/Supernet.lean:supernetMask
 Ipv6Network::is_adjacent                            59e53c9b0046f721  Netip/Impl/Adjacent.lean:adjacentBit
 Ipv6Network::is_adjacent_by_lowest_mask_bit         931f075e4575758d  Netip/Impl/Adjacent.lean:AdjacentByLowestMaskBit

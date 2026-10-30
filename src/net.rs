@@ -457,6 +457,29 @@ impl IpNetwork {
         }
     }
 
+    /// Returns the number of host bits: the bits where the mask is zero.
+    ///
+    /// The network holds exactly `2^host_bits()` addresses. See
+    /// [`Ipv4Network::host_bits`] and [`Ipv6Network::host_bits`] for turning
+    /// that into an address count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::IpNetwork;
+    ///
+    /// assert_eq!(8, IpNetwork::parse("192.168.1.0/24").unwrap().host_bits());
+    /// assert_eq!(88, IpNetwork::parse("2a02:6b8::/40").unwrap().host_bits());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn host_bits(&self) -> u32 {
+        match self {
+            Self::V4(net) => net.host_bits(),
+            Self::V6(net) => net.host_bits(),
+        }
+    }
+
     /// Returns the last address in this IP network.
     ///
     /// For contiguous networks, this is the broadcast address.
@@ -1434,6 +1457,38 @@ impl Ipv4Network {
         } else {
             None
         }
+    }
+
+    /// Returns the number of host bits: the bits where the mask is zero.
+    ///
+    /// The network holds exactly `2^host_bits()` addresses, the number of
+    /// items [`addrs`](Self::addrs) yields, for any mask: a host bit takes
+    /// either value, every other bit is fixed by the network address. For a
+    /// contiguous network this is `32 - prefix`.
+    ///
+    /// The count comes as its base-2 logarithm because it does not fit a
+    /// `u32`: the `/0` network holds `2^32` addresses. It always fits a `u64`,
+    /// as `1u64 << net.host_bits()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv4Network;
+    ///
+    /// let net = Ipv4Network::parse("192.168.1.0/24").unwrap();
+    /// assert_eq!(8, net.host_bits());
+    /// assert_eq!(256, 1u64 << net.host_bits());
+    ///
+    /// // The non-contiguous `192.168.*.1`: only the third octet is free.
+    /// let net = Ipv4Network::parse("192.168.0.1/255.255.0.255").unwrap();
+    /// assert_eq!(8, net.host_bits());
+    ///
+    /// assert_eq!(32, Ipv4Network::UNSPECIFIED.host_bits());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn host_bits(&self) -> u32 {
+        (!self.mask().to_bits()).count_ones()
     }
 
     /// Converts this network to a contiguous network by clearing mask bits set
@@ -3202,6 +3257,43 @@ impl Ipv6Network {
         } else {
             None
         }
+    }
+
+    /// Returns the number of host bits: the bits where the mask is zero.
+    ///
+    /// The network holds exactly `2^host_bits()` addresses, the number of
+    /// items [`addrs`](Self::addrs) yields, for any mask: a host bit takes
+    /// either value, every other bit is fixed by the network address. For a
+    /// contiguous network this is `128 - prefix`.
+    ///
+    /// The count comes as its base-2 logarithm because it does not fit a
+    /// `u128` for the `/0` network, which holds `2^128` addresses.
+    /// `1u128.checked_shl(net.host_bits())` gives the count, or `None` for
+    /// that network.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv6Network;
+    ///
+    /// let net = Ipv6Network::parse("2001:db8::/64").unwrap();
+    /// assert_eq!(64, net.host_bits());
+    /// assert_eq!(Some(1 << 64), 1u128.checked_shl(net.host_bits()));
+    ///
+    /// // The non-contiguous `2001:db8:*:*:1:*:*:*`.
+    /// let net = Ipv6Network::parse("2001:db8::1:0:0:0/ffff:ffff::ffff:0:0:0").unwrap();
+    /// assert_eq!(80, net.host_bits());
+    ///
+    /// assert_eq!(128, Ipv6Network::UNSPECIFIED.host_bits());
+    /// assert_eq!(
+    ///     None,
+    ///     1u128.checked_shl(Ipv6Network::UNSPECIFIED.host_bits())
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn host_bits(&self) -> u32 {
+        (!self.mask().to_bits()).count_ones()
     }
 
     /// Calculates and returns the `Ipv6Network`, which will be a supernet, i.e.
@@ -10177,6 +10269,89 @@ mod test {
                 .unwrap()
                 .prefix()
         );
+    }
+
+    #[test]
+    fn ipv4_host_bits_edge_masks() {
+        assert_eq!(32, Ipv4Network::parse("0.0.0.0/0").unwrap().host_bits());
+        assert_eq!(31, Ipv4Network::parse("128.0.0.0/1").unwrap().host_bits());
+        assert_eq!(8, Ipv4Network::parse("192.168.1.0/24").unwrap().host_bits());
+        assert_eq!(0, Ipv4Network::parse("10.0.0.1/32").unwrap().host_bits());
+        // Non-contiguous masks: the host bits need not be a trailing run.
+        assert_eq!(16, Ipv4Network::parse("10.0.0.1/255.0.0.255").unwrap().host_bits());
+        assert_eq!(1, Ipv4Network::parse("0.0.0.0/127.255.255.255").unwrap().host_bits());
+    }
+
+    #[test]
+    fn ipv6_host_bits_edge_masks() {
+        assert_eq!(128, Ipv6Network::parse("::/0").unwrap().host_bits());
+        assert_eq!(127, Ipv6Network::parse("8000::/1").unwrap().host_bits());
+        assert_eq!(64, Ipv6Network::parse("2001:db8::/64").unwrap().host_bits());
+        assert_eq!(0, Ipv6Network::parse("2001:db8::1/128").unwrap().host_bits());
+        // Non-contiguous masks: the host bits need not be a trailing run.
+        assert_eq!(
+            80,
+            Ipv6Network::parse("2001:db8::1/ffff:ffff::ffff").unwrap().host_bits()
+        );
+        assert_eq!(
+            1,
+            Ipv6Network::parse("::/7fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")
+                .unwrap()
+                .host_bits()
+        );
+    }
+
+    #[test]
+    fn ip_network_host_bits_dispatches_by_family() {
+        assert_eq!(8, IpNetwork::parse("192.168.1.0/24").unwrap().host_bits());
+        assert_eq!(88, IpNetwork::parse("2a02:6b8::/40").unwrap().host_bits());
+        assert_eq!(32, IpNetwork::V4(Ipv4Network::UNSPECIFIED).host_bits());
+        assert_eq!(128, IpNetwork::V6(Ipv6Network::UNSPECIFIED).host_bits());
+    }
+
+    proptest! {
+        // The members are counted by draining `addrs` through `next` alone,
+        // which the proofs show visits each member once; `count` and `len`
+        // are overridden from the same popcount, so they would not be an
+        // independent oracle. The masks keep at most five host bits, anywhere
+        // in the word.
+        #[test]
+        fn prop_ipv4_host_bits_counts_members(addr in any::<u32>(), mask in arb_few_host_bits_u32()) {
+            let net = Ipv4Network::from_bits(addr, mask);
+            let mut members = 0u64;
+            for _ in net.addrs() {
+                members += 1;
+            }
+            prop_assert_eq!(1u64 << net.host_bits(), members);
+        }
+
+        #[test]
+        fn prop_ipv6_host_bits_counts_members(addr in any::<u128>(), mask in arb_few_host_bits_u128()) {
+            let net = Ipv6Network::from_bits(addr, mask);
+            let mut members = 0u128;
+            for _ in net.addrs() {
+                members += 1;
+            }
+            prop_assert_eq!(1u128 << net.host_bits(), members);
+        }
+
+        #[test]
+        fn prop_ipv4_host_bits_complements_prefix(net in arb_ipv4_network()) {
+            let net = net.to_contiguous();
+            prop_assert_eq!(32 - u32::from(net.prefix().unwrap()), net.host_bits());
+        }
+
+        #[test]
+        fn prop_ipv6_host_bits_complements_prefix(net in arb_ipv6_network()) {
+            let net = net.to_contiguous();
+            prop_assert_eq!(128 - u32::from(net.prefix().unwrap()), net.host_bits());
+        }
+
+        #[test]
+        fn prop_ip_network_host_bits_matches_family(v4 in arb_ipv4_network(), v6 in arb_ipv6_network()) {
+            prop_assert_eq!(v4.host_bits(), IpNetwork::V4(v4).host_bits());
+            prop_assert_eq!(v6.host_bits(), IpNetwork::V6(v6).host_bits());
+        }
     }
 
     // Shared with `net::contiguous`'s test module: `arb_contiguous_ipv4_network`
