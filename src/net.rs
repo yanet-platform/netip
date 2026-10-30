@@ -2129,6 +2129,170 @@ impl Ipv4Network {
             remaining: 1u64 << host_bits,
         }
     }
+
+    /// Returns a double-ended iterator over the subnets of this network with
+    /// the given mask, or [`None`] if `mask` does not cover this network's
+    /// mask.
+    ///
+    /// A subnet keeps every bit this network fixes, so `mask` must have every
+    /// bit of this network's mask set. The bits that `mask` adds take every
+    /// combination of values: `k` added bits give `2^k` subnets, and every
+    /// address of this network lies in exactly one of them. A `mask` equal to
+    /// this network's mask yields the network itself. To split by a prefix
+    /// length, see [`subnets_with_prefix`](Self::subnets_with_prefix).
+    ///
+    /// Either mask may be non-contiguous. The added bits are filled the way
+    /// [`addrs`](Self::addrs) fills host bits, so the subnets come in
+    /// ascending order of their addresses, which is also their [`Ord`] order,
+    /// since they share the mask. When both masks are contiguous, the subnets
+    /// are consecutive ranges of addresses. Otherwise their addresses can
+    /// interleave: `0.0.0.0/0` splits by `0.0.0.1` into the even addresses and
+    /// the odd ones.
+    ///
+    /// The iterator always implements [`DoubleEndedIterator`], and implements
+    /// [`ExactSizeIterator`] on 64-bit targets only: splitting the /0 network
+    /// into /32 networks yields `2^32` subnets, one more than a 32-bit `usize`
+    /// can represent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv4Addr;
+    ///
+    /// use netip::Ipv4Network;
+    ///
+    /// let net = Ipv4Network::parse("192.168.0.0/22").unwrap();
+    /// let subnets: Vec<_> = net
+    ///     .subnets(Ipv4Addr::new(255, 255, 255, 0))
+    ///     .unwrap()
+    ///     .collect();
+    /// assert_eq!(
+    ///     vec![
+    ///         Ipv4Network::parse("192.168.0.0/24").unwrap(),
+    ///         Ipv4Network::parse("192.168.1.0/24").unwrap(),
+    ///         Ipv4Network::parse("192.168.2.0/24").unwrap(),
+    ///         Ipv4Network::parse("192.168.3.0/24").unwrap(),
+    ///     ],
+    ///     subnets
+    /// );
+    ///
+    /// // Fixing the last octet as well splits `10.0.0.0/8` into the 256
+    /// // non-contiguous networks `10.*.*.x`.
+    /// let net = Ipv4Network::parse("10.0.0.0/8").unwrap();
+    /// let mut subnets = net.subnets(Ipv4Addr::new(255, 0, 0, 255)).unwrap();
+    ///
+    /// assert_eq!(256, subnets.len());
+    /// assert_eq!(
+    ///     Some(Ipv4Network::parse("10.0.0.0/255.0.0.255").unwrap()),
+    ///     subnets.next()
+    /// );
+    /// assert_eq!(
+    ///     Some(Ipv4Network::parse("10.0.0.1/255.0.0.255").unwrap()),
+    ///     subnets.next()
+    /// );
+    /// assert_eq!(
+    ///     Some(Ipv4Network::parse("10.0.0.255/255.0.0.255").unwrap()),
+    ///     subnets.next_back()
+    /// );
+    ///
+    /// // An equal mask yields the network itself.
+    /// let mut subnets = net.subnets(Ipv4Addr::new(255, 0, 0, 0)).unwrap();
+    /// assert_eq!(Some(net), subnets.next());
+    /// assert_eq!(None, subnets.next());
+    ///
+    /// // A mask that drops a bit of the network's mask yields nothing.
+    /// assert_eq!(None, net.subnets(Ipv4Addr::new(254, 255, 0, 0)));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn subnets(self, mask: Ipv4Addr) -> Option<Ipv4NetworkSubnets> {
+        let (addr, m1) = self.to_bits();
+        let m2 = mask.to_bits();
+
+        if m2 & m1 != m1 {
+            return None;
+        }
+
+        // The subnet addresses are this network's address with every
+        // combination of the added bits: the members of the network
+        // `(addr, !extra)`, which `addrs` yields in ascending order. That
+        // network is normalized: the added bits are host bits of this one, so
+        // `addr` is clear on them. Its members are normalized under `m2`, as
+        // `addr` and the added bits both lie inside it.
+        let extra = m2 & !m1;
+        let addrs = Self(Ipv4Addr::from_bits(addr), Ipv4Addr::from_bits(!extra)).addrs();
+
+        Some(Ipv4NetworkSubnets { addrs, mask })
+    }
+
+    /// Returns a double-ended iterator over the subnets of this network with
+    /// the given prefix length, or [`None`] if there are none.
+    ///
+    /// This is [`subnets`](Self::subnets) with the mask of `prefix` leading
+    /// ones, so every subnet is a [`Contiguous`] network. It returns [`None`]
+    /// if `prefix` is past 32, or if this network's mask has a bit set past
+    /// the first `prefix` bits: a `/prefix` network leaves that bit free, so
+    /// no such network lies inside this one. For a contiguous `/n` network
+    /// that rules out every `prefix` below `n`, and `n` itself yields the
+    /// network.
+    ///
+    /// A non-contiguous network splits as well, once `prefix` covers its
+    /// mask: `10.0.0.0/255.0.255.0` consists of the 256 networks
+    /// `10.x.0.0/24`.
+    ///
+    /// The iterator always implements [`DoubleEndedIterator`], and implements
+    /// [`ExactSizeIterator`] on 64-bit targets only: splitting the /0 network
+    /// into /32 networks yields `2^32` subnets, one more than a 32-bit `usize`
+    /// can represent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, Ipv4Network};
+    ///
+    /// let net = Ipv4Network::parse("10.0.0.0/8").unwrap();
+    /// let mut subnets = net.subnets_with_prefix(16).unwrap();
+    ///
+    /// assert_eq!(256, subnets.len());
+    /// assert_eq!(
+    ///     Some(Contiguous::<Ipv4Network>::parse("10.0.0.0/16").unwrap()),
+    ///     subnets.next()
+    /// );
+    /// assert_eq!(
+    ///     Some(Contiguous::<Ipv4Network>::parse("10.1.0.0/16").unwrap()),
+    ///     subnets.next()
+    /// );
+    /// assert_eq!(
+    ///     Some(Contiguous::<Ipv4Network>::parse("10.255.0.0/16").unwrap()),
+    ///     subnets.next_back()
+    /// );
+    ///
+    /// // The network's own prefix length yields the network itself.
+    /// let mut subnets = net.subnets_with_prefix(8).unwrap();
+    /// assert_eq!(Some(net), subnets.next().map(|subnet| *subnet));
+    /// assert_eq!(None, subnets.next());
+    ///
+    /// // A shorter prefix length, or one past 32, yields nothing.
+    /// assert_eq!(None, net.subnets_with_prefix(7));
+    /// assert_eq!(None, net.subnets_with_prefix(33));
+    ///
+    /// // The non-contiguous `10.*.0.*` consists of the networks `10.x.0.0/24`,
+    /// // and no /16 network lies inside it.
+    /// let net = Ipv4Network::parse("10.0.0.0/255.0.255.0").unwrap();
+    /// let subnets: Vec<_> = net.subnets_with_prefix(24).unwrap().collect();
+    /// assert_eq!(256, subnets.len());
+    /// assert_eq!("10.0.0.0/24", subnets[0].to_string());
+    /// assert_eq!("10.255.0.0/24", subnets[255].to_string());
+    /// assert_eq!(None, net.subnets_with_prefix(16));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn subnets_with_prefix(self, prefix: u8) -> Option<Ipv4NetworkPrefixSubnets> {
+        let mask = ipv4_mask_from_cidr(prefix).ok()?;
+        let subnets = self.subnets(mask)?;
+
+        Some(Ipv4NetworkPrefixSubnets { subnets })
+    }
 }
 
 // Total order on the address and mask packed into a single `u64` key, in
@@ -2358,6 +2522,130 @@ impl ExactSizeIterator for Ipv4NetworkAddrs {
 
 // Once `remaining` is zero it stays zero, and both ends return `None`.
 impl core::iter::FusedIterator for Ipv4NetworkAddrs {}
+
+/// Bidirectional iterator over the subnets of an [`Ipv4Network`] with a given
+/// mask.
+///
+/// Created by [`Ipv4Network::subnets`].
+///
+/// Yields the subnets in ascending order of their addresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ipv4NetworkSubnets {
+    /// The addresses of the subnets, in ascending order: the members of the
+    /// network whose host bits are the bits the subnet mask adds.
+    addrs: Ipv4NetworkAddrs,
+    /// The mask of every subnet.
+    mask: Ipv4Addr,
+}
+
+impl Iterator for Ipv4NetworkSubnets {
+    type Item = Ipv4Network;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        // NOTE: the address is already normalized, see `Ipv4Network::subnets`.
+        self.addrs.next().map(|addr| Ipv4Network(addr, self.mask))
+    }
+
+    #[inline]
+    fn count(self) -> usize {
+        self.addrs.count()
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.addrs.size_hint()
+    }
+
+    #[inline]
+    fn last(mut self) -> Option<Self::Item> {
+        // The last item in forward order is the one at the back end, which
+        // `next_back` reaches in O(1) instead of the default's full walk.
+        self.next_back()
+    }
+}
+
+impl DoubleEndedIterator for Ipv4NetworkSubnets {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        // NOTE: the address is already normalized, see `Ipv4Network::subnets`.
+        self.addrs.next_back().map(|addr| Ipv4Network(addr, self.mask))
+    }
+}
+
+// Implemented only where every count fits a `usize`, as for
+// `Ipv4NetworkAddrs`, whose count this is.
+#[cfg(target_pointer_width = "64")]
+impl ExactSizeIterator for Ipv4NetworkSubnets {
+    #[inline]
+    fn len(&self) -> usize {
+        self.addrs.len()
+    }
+}
+
+// `Ipv4NetworkAddrs` is fused, and this maps its items one to one.
+impl core::iter::FusedIterator for Ipv4NetworkSubnets {}
+
+/// Bidirectional iterator over the [`Contiguous`] subnets of an
+/// [`Ipv4Network`] with a given prefix length.
+///
+/// Created by [`Ipv4Network::subnets_with_prefix`].
+///
+/// Yields the networks that [`Ipv4NetworkSubnets`] yields for the mask of the
+/// prefix length, in the same ascending order, as [`Contiguous`] networks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ipv4NetworkPrefixSubnets {
+    subnets: Ipv4NetworkSubnets,
+}
+
+impl Iterator for Ipv4NetworkPrefixSubnets {
+    type Item = Contiguous<Ipv4Network>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        // The subnets share a mask of leading ones, see
+        // `Ipv4Network::subnets_with_prefix`.
+        self.subnets.next().map(Contiguous)
+    }
+
+    #[inline]
+    fn count(self) -> usize {
+        self.subnets.count()
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.subnets.size_hint()
+    }
+
+    #[inline]
+    fn last(mut self) -> Option<Self::Item> {
+        // O(1) through `next_back`, as for `Ipv4NetworkSubnets`.
+        self.next_back()
+    }
+}
+
+impl DoubleEndedIterator for Ipv4NetworkPrefixSubnets {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        // The subnets share a mask of leading ones, see
+        // `Ipv4Network::subnets_with_prefix`.
+        self.subnets.next_back().map(Contiguous)
+    }
+}
+
+// Implemented only where every count fits a `usize`, as for
+// `Ipv4NetworkSubnets`.
+#[cfg(target_pointer_width = "64")]
+impl ExactSizeIterator for Ipv4NetworkPrefixSubnets {
+    #[inline]
+    fn len(&self) -> usize {
+        self.subnets.len()
+    }
+}
+
+// `Ipv4NetworkSubnets` is fused, and this maps its items one to one.
+impl core::iter::FusedIterator for Ipv4NetworkPrefixSubnets {}
 
 /// Lazy iterator over [`Ipv4Network`] parts of a set difference.
 ///
@@ -3997,6 +4285,171 @@ impl Ipv6Network {
             remaining,
         }
     }
+
+    /// Returns a double-ended iterator over the subnets of this network with
+    /// the given mask, or [`None`] if `mask` does not cover this network's
+    /// mask.
+    ///
+    /// A subnet keeps every bit this network fixes, so `mask` must have every
+    /// bit of this network's mask set. The bits that `mask` adds take every
+    /// combination of values: `k` added bits give `2^k` subnets, and every
+    /// address of this network lies in exactly one of them. A `mask` equal to
+    /// this network's mask yields the network itself. To split by a prefix
+    /// length, see [`subnets_with_prefix`](Self::subnets_with_prefix).
+    ///
+    /// Either mask may be non-contiguous. The added bits are filled the way
+    /// [`addrs`](Self::addrs) fills host bits, so the subnets come in
+    /// ascending order of their addresses, which is also their [`Ord`] order,
+    /// since they share the mask. When both masks are contiguous, the subnets
+    /// are consecutive ranges of addresses. Otherwise their addresses can
+    /// interleave: `::/0` splits by `::1` into the even addresses and the odd
+    /// ones.
+    ///
+    /// The iterator implements [`DoubleEndedIterator`], but not
+    /// [`ExactSizeIterator`]: splitting the /0 network into /128 networks
+    /// yields `2^128` subnets, more than a `usize` can represent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::Ipv6Network;
+    ///
+    /// let net = Ipv6Network::parse("2001:db8::/46").unwrap();
+    /// let mask = Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0, 0, 0, 0, 0);
+    /// let subnets: Vec<_> = net.subnets(mask).unwrap().collect();
+    /// assert_eq!(
+    ///     vec![
+    ///         Ipv6Network::parse("2001:db8::/48").unwrap(),
+    ///         Ipv6Network::parse("2001:db8:1::/48").unwrap(),
+    ///         Ipv6Network::parse("2001:db8:2::/48").unwrap(),
+    ///         Ipv6Network::parse("2001:db8:3::/48").unwrap(),
+    ///     ],
+    ///     subnets
+    /// );
+    ///
+    /// // Fixing the last group as well splits `2001:db8::/48` into the 65536
+    /// // non-contiguous networks `2001:db8:0:*:*:*:*:x`.
+    /// let net = Ipv6Network::parse("2001:db8::/48").unwrap();
+    /// let mask = Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0, 0, 0, 0, 0xffff);
+    /// let mut subnets = net.subnets(mask).unwrap();
+    ///
+    /// assert_eq!((65536, Some(65536)), subnets.size_hint());
+    /// assert_eq!(
+    ///     Some(Ipv6Network::parse("2001:db8::/ffff:ffff:ffff::ffff").unwrap()),
+    ///     subnets.next()
+    /// );
+    /// assert_eq!(
+    ///     Some(Ipv6Network::parse("2001:db8::1/ffff:ffff:ffff::ffff").unwrap()),
+    ///     subnets.next()
+    /// );
+    /// assert_eq!(
+    ///     Some(Ipv6Network::parse("2001:db8::ffff/ffff:ffff:ffff::ffff").unwrap()),
+    ///     subnets.next_back()
+    /// );
+    ///
+    /// // A mask that drops a bit of the network's mask yields nothing.
+    /// assert_eq!(
+    ///     None,
+    ///     net.subnets(Ipv6Addr::new(0xffff, 0, 0, 0, 0, 0, 0, 0xffff))
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn subnets(self, mask: Ipv6Addr) -> Option<Ipv6NetworkSubnets> {
+        let (addr, m1) = self.to_bits();
+        let m2 = mask.to_bits();
+
+        if m2 & m1 != m1 {
+            return None;
+        }
+
+        // The subnet addresses are this network's address with every
+        // combination of the added bits: the members of the network
+        // `(addr, !extra)`, which `addrs` yields in ascending order. That
+        // network is normalized: the added bits are host bits of this one, so
+        // `addr` is clear on them. Its members are normalized under `m2`, as
+        // `addr` and the added bits both lie inside it.
+        let extra = m2 & !m1;
+        let addrs = Self(Ipv6Addr::from_bits(addr), Ipv6Addr::from_bits(!extra)).addrs();
+
+        Some(Ipv6NetworkSubnets { addrs, mask })
+    }
+
+    /// Returns a double-ended iterator over the subnets of this network with
+    /// the given prefix length, or [`None`] if there are none.
+    ///
+    /// This is [`subnets`](Self::subnets) with the mask of `prefix` leading
+    /// ones, so every subnet is a [`Contiguous`] network. It returns [`None`]
+    /// if `prefix` is past 128, or if this network's mask has a bit set past
+    /// the first `prefix` bits: a `/prefix` network leaves that bit free, so
+    /// no such network lies inside this one. For a contiguous `/n` network
+    /// that rules out every `prefix` below `n`, and `n` itself yields the
+    /// network.
+    ///
+    /// A non-contiguous network splits as well, once `prefix` covers its
+    /// mask: `2001:db8::/ffff:ffff:0:ffff::` consists of the 65536 networks
+    /// `2001:db8:x::/64`.
+    ///
+    /// The iterator implements [`DoubleEndedIterator`], but not
+    /// [`ExactSizeIterator`]: splitting the /0 network into /128 networks
+    /// yields `2^128` subnets, more than a `usize` can represent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, Ipv6Network};
+    ///
+    /// let net = Ipv6Network::parse("2001:db8::/32").unwrap();
+    /// let mut subnets = net.subnets_with_prefix(48).unwrap();
+    ///
+    /// assert_eq!((65536, Some(65536)), subnets.size_hint());
+    /// assert_eq!(
+    ///     Some(Contiguous::<Ipv6Network>::parse("2001:db8::/48").unwrap()),
+    ///     subnets.next()
+    /// );
+    /// assert_eq!(
+    ///     Some(Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap()),
+    ///     subnets.next()
+    /// );
+    /// assert_eq!(
+    ///     Some(Contiguous::<Ipv6Network>::parse("2001:db8:ffff::/48").unwrap()),
+    ///     subnets.next_back()
+    /// );
+    ///
+    /// // The network's own prefix length yields the network itself.
+    /// let mut subnets = net.subnets_with_prefix(32).unwrap();
+    /// assert_eq!(Some(net), subnets.next().map(|subnet| *subnet));
+    /// assert_eq!(None, subnets.next());
+    ///
+    /// // A shorter prefix length, or one past 128, yields nothing.
+    /// assert_eq!(None, net.subnets_with_prefix(31));
+    /// assert_eq!(None, net.subnets_with_prefix(129));
+    ///
+    /// // The non-contiguous network that fixes the first, second and fourth
+    /// // groups consists of the networks `2001:db8:x::/64`, and no /48
+    /// // network lies inside it.
+    /// let net = Ipv6Network::parse("2001:db8::/ffff:ffff:0:ffff::").unwrap();
+    /// let mut subnets = net.subnets_with_prefix(64).unwrap();
+    ///
+    /// assert_eq!((65536, Some(65536)), subnets.size_hint());
+    /// assert_eq!("2001:db8::/64", subnets.next().unwrap().to_string());
+    /// assert_eq!("2001:db8:1::/64", subnets.next().unwrap().to_string());
+    /// assert_eq!(
+    ///     "2001:db8:ffff::/64",
+    ///     subnets.next_back().unwrap().to_string()
+    /// );
+    /// assert_eq!(None, net.subnets_with_prefix(48));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn subnets_with_prefix(self, prefix: u8) -> Option<Ipv6NetworkPrefixSubnets> {
+        let mask = ipv6_mask_from_cidr(prefix).ok()?;
+        let subnets = self.subnets(mask)?;
+
+        Some(Ipv6NetworkPrefixSubnets { subnets })
+    }
 }
 
 // Total order on the `(addr, mask)` pair compared as `u128`s, in place of the
@@ -4151,6 +4604,110 @@ impl DoubleEndedIterator for Ipv6NetworkAddrs {
 
 // Once `remaining` is zero it stays zero, and both ends return `None`.
 impl core::iter::FusedIterator for Ipv6NetworkAddrs {}
+
+/// Bidirectional iterator over the subnets of an [`Ipv6Network`] with a given
+/// mask.
+///
+/// Created by [`Ipv6Network::subnets`].
+///
+/// Yields the subnets in ascending order of their addresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ipv6NetworkSubnets {
+    /// The addresses of the subnets, in ascending order: the members of the
+    /// network whose host bits are the bits the subnet mask adds.
+    addrs: Ipv6NetworkAddrs,
+    /// The mask of every subnet.
+    mask: Ipv6Addr,
+}
+
+impl Iterator for Ipv6NetworkSubnets {
+    type Item = Ipv6Network;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        // NOTE: the address is already normalized, see `Ipv6Network::subnets`.
+        self.addrs.next().map(|addr| Ipv6Network(addr, self.mask))
+    }
+
+    #[inline]
+    fn count(self) -> usize {
+        self.addrs.count()
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.addrs.size_hint()
+    }
+
+    #[inline]
+    fn last(mut self) -> Option<Self::Item> {
+        // The last item in forward order is the one at the back end, which
+        // `next_back` reaches in O(1) instead of the default's full walk.
+        self.next_back()
+    }
+}
+
+impl DoubleEndedIterator for Ipv6NetworkSubnets {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        // NOTE: the address is already normalized, see `Ipv6Network::subnets`.
+        self.addrs.next_back().map(|addr| Ipv6Network(addr, self.mask))
+    }
+}
+
+// `Ipv6NetworkAddrs` is fused, and this maps its items one to one.
+impl core::iter::FusedIterator for Ipv6NetworkSubnets {}
+
+/// Bidirectional iterator over the [`Contiguous`] subnets of an
+/// [`Ipv6Network`] with a given prefix length.
+///
+/// Created by [`Ipv6Network::subnets_with_prefix`].
+///
+/// Yields the networks that [`Ipv6NetworkSubnets`] yields for the mask of the
+/// prefix length, in the same ascending order, as [`Contiguous`] networks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ipv6NetworkPrefixSubnets {
+    subnets: Ipv6NetworkSubnets,
+}
+
+impl Iterator for Ipv6NetworkPrefixSubnets {
+    type Item = Contiguous<Ipv6Network>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        // The subnets share a mask of leading ones, see
+        // `Ipv6Network::subnets_with_prefix`.
+        self.subnets.next().map(Contiguous)
+    }
+
+    #[inline]
+    fn count(self) -> usize {
+        self.subnets.count()
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.subnets.size_hint()
+    }
+
+    #[inline]
+    fn last(mut self) -> Option<Self::Item> {
+        // O(1) through `next_back`, as for `Ipv6NetworkSubnets`.
+        self.next_back()
+    }
+}
+
+impl DoubleEndedIterator for Ipv6NetworkPrefixSubnets {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        // The subnets share a mask of leading ones, see
+        // `Ipv6Network::subnets_with_prefix`.
+        self.subnets.next_back().map(Contiguous)
+    }
+}
+
+// `Ipv6NetworkSubnets` is fused, and this maps its items one to one.
+impl core::iter::FusedIterator for Ipv6NetworkPrefixSubnets {}
 
 /// Lazy iterator over [`Ipv6Network`] parts of a set difference.
 ///
@@ -10714,6 +11271,669 @@ mod test {
         fn prop_ip_network_host_bits_matches_family(v4 in arb_ipv4_network(), v6 in arb_ipv6_network()) {
             prop_assert_eq!(v4.host_bits(), IpNetwork::V4(v4).host_bits());
             prop_assert_eq!(v6.host_bits(), IpNetwork::V6(v6).host_bits());
+        }
+    }
+
+    #[test]
+    fn ipv4_subnets_split_contiguous_by_longer_mask() {
+        let net = Ipv4Network::parse("192.168.0.0/22").unwrap();
+        let mask = Ipv4Addr::new(255, 255, 255, 0);
+        let expected: Vec<_> = (0..4)
+            .map(|k| Ipv4Network::new(Ipv4Addr::new(192, 168, k, 0), mask))
+            .collect();
+
+        assert_eq!(expected, net.subnets(mask).unwrap().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn ipv4_subnets_by_own_mask_yield_network() {
+        for text in ["0.0.0.0/0", "10.0.0.0/8", "10.0.0.1/32", "10.0.0.1/255.0.0.255"] {
+            let net = Ipv4Network::parse(text).unwrap();
+            assert_eq!(vec![net], net.subnets(*net.mask()).unwrap().collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn ipv4_subnets_reject_mask_not_covering() {
+        let net = Ipv4Network::parse("10.1.2.0/24").unwrap();
+        // A shorter prefix.
+        assert_eq!(None, net.subnets(Ipv4Addr::new(255, 255, 0, 0)));
+        // One mask bit dropped, the host bits all added.
+        assert_eq!(None, net.subnets(Ipv4Addr::new(255, 255, 254, 255)));
+        // No mask bit kept.
+        assert_eq!(None, net.subnets(Ipv4Addr::new(0, 0, 0, 255)));
+
+        // A non-contiguous network losing its lowest mask bit.
+        let net = Ipv4Network::parse("10.0.0.1/255.0.0.255").unwrap();
+        assert_eq!(None, net.subnets(Ipv4Addr::new(255, 255, 0, 254)));
+    }
+
+    #[test]
+    fn ipv4_subnets_non_contiguous_pin_forward_and_reverse_order() {
+        // `10.*.*.1` split on the top bit of the second octet and the lowest
+        // bit of the third: the lower added bit cycles fastest.
+        let net = Ipv4Network::parse("10.0.0.1/255.0.0.255").unwrap();
+        let mask = Ipv4Addr::new(255, 128, 1, 255);
+        let expected = [
+            Ipv4Network::new(Ipv4Addr::new(10, 0, 0, 1), mask),
+            Ipv4Network::new(Ipv4Addr::new(10, 0, 1, 1), mask),
+            Ipv4Network::new(Ipv4Addr::new(10, 128, 0, 1), mask),
+            Ipv4Network::new(Ipv4Addr::new(10, 128, 1, 1), mask),
+        ];
+
+        assert_eq!(expected.to_vec(), net.subnets(mask).unwrap().collect::<Vec<_>>());
+        let mut reversed: Vec<_> = net.subnets(mask).unwrap().rev().collect();
+        reversed.reverse();
+        assert_eq!(expected.to_vec(), reversed);
+        assert_eq!(4, net.subnets(mask).unwrap().count());
+        assert_eq!(Some(expected[3]), net.subnets(mask).unwrap().last());
+
+        let mut subnets = net.subnets(mask).unwrap();
+        assert_eq!(Some(expected[0]), subnets.next());
+        assert_eq!(Some(expected[3]), subnets.next_back());
+        assert_eq!((2, Some(2)), subnets.size_hint());
+        assert_eq!(Some(expected[2]), subnets.last());
+        assert_eq!(Some(expected[1]), subnets.next());
+        assert_eq!(Some(expected[2]), subnets.next_back());
+        assert_eq!((0, Some(0)), subnets.size_hint());
+        assert_eq!(None, subnets.next());
+        assert_eq!(None, subnets.next_back());
+        assert_eq!(None, subnets.last());
+    }
+
+    // The /0 network's 2^32 host routes only fit a 64-bit `usize`, which is
+    // also the only target family where `ExactSizeIterator` is implemented.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn ipv4_subnets_unspecified_into_hosts_pin_ends_and_len() {
+        let host = |a: u8, b: u8, c: u8, d: u8| Ipv4Network::from(Ipv4Addr::new(a, b, c, d));
+        let total = 1usize << 32;
+        let mut subnets = Ipv4Network::UNSPECIFIED.subnets(IPV4_ALL_BITS).unwrap();
+
+        assert_eq!(total, subnets.len());
+        assert_eq!((total, Some(total)), subnets.size_hint());
+        assert_eq!(total, subnets.count());
+        assert_eq!(Some(host(0, 0, 0, 0)), subnets.next());
+        assert_eq!(Some(host(0, 0, 0, 1)), subnets.next());
+        assert_eq!(Some(host(255, 255, 255, 255)), subnets.next_back());
+        assert_eq!(total - 3, subnets.len());
+        assert_eq!(Some(host(255, 255, 255, 254)), subnets.last());
+
+        let mut subnets = Ipv4Network::UNSPECIFIED.subnets_with_prefix(32).unwrap();
+        assert_eq!(total, subnets.len());
+        assert_eq!(
+            Contiguous::<Ipv4Network>::try_from(host(0, 0, 0, 0)).ok(),
+            subnets.next()
+        );
+        assert_eq!(
+            Contiguous::<Ipv4Network>::try_from(host(255, 255, 255, 255)).ok(),
+            subnets.next_back()
+        );
+        assert_eq!(total - 2, subnets.len());
+        assert_eq!(
+            Contiguous::<Ipv4Network>::try_from(host(255, 255, 255, 254)).ok(),
+            subnets.last()
+        );
+    }
+
+    #[test]
+    fn ipv4_subnets_with_prefix_contiguous() {
+        let net = Ipv4Network::parse("10.0.0.0/8").unwrap();
+        for prefix in 0..=u8::MAX {
+            assert_eq!(
+                (8..=32).contains(&prefix),
+                net.subnets_with_prefix(prefix).is_some(),
+                "/{prefix}"
+            );
+        }
+
+        let expected: Vec<_> = [0, 64, 128, 192]
+            .into_iter()
+            .map(|b| Contiguous::<Ipv4Network>::from_prefix(Ipv4Addr::new(10, b, 0, 0), 10).unwrap())
+            .collect();
+        assert_eq!(expected, net.subnets_with_prefix(10).unwrap().collect::<Vec<_>>());
+
+        let unspecified = Contiguous::<Ipv4Network>::try_from(Ipv4Network::UNSPECIFIED).ok();
+        assert_eq!(
+            unspecified,
+            Ipv4Network::UNSPECIFIED.subnets_with_prefix(0).unwrap().next()
+        );
+    }
+
+    #[test]
+    fn ipv4_subnets_with_prefix_non_contiguous() {
+        // `10.*.0.*`: the lowest mask bit is the lowest bit of the third
+        // octet, so the prefix lengths from 24 on fit.
+        let net = Ipv4Network::parse("10.0.0.0/255.0.255.0").unwrap();
+        for prefix in 0..=32 {
+            assert_eq!(prefix >= 24, net.subnets_with_prefix(prefix).is_some(), "/{prefix}");
+        }
+        let expected: Vec<_> = (0..=255)
+            .map(|k| Contiguous::<Ipv4Network>::from_prefix(Ipv4Addr::new(10, k, 0, 0), 24).unwrap())
+            .collect();
+        assert_eq!(expected, net.subnets_with_prefix(24).unwrap().collect::<Vec<_>>());
+
+        // `192.168.*.1` fixes the lowest bit, so only its host routes fit.
+        let net = Ipv4Network::parse("192.168.0.1/255.255.0.255").unwrap();
+        assert_eq!(None, net.subnets_with_prefix(31));
+        let hosts: Vec<_> = net
+            .subnets_with_prefix(32)
+            .unwrap()
+            .map(|subnet| *subnet.addr())
+            .collect();
+        assert_eq!(net.addrs().collect::<Vec<_>>(), hosts);
+    }
+
+    #[test]
+    fn ipv6_subnets_split_contiguous_by_longer_mask() {
+        let net = Ipv6Network::parse("2001:db8::/46").unwrap();
+        let mask = Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0, 0, 0, 0, 0);
+        let expected: Vec<_> = (0..4)
+            .map(|k| Ipv6Network::new(Ipv6Addr::new(0x2001, 0xdb8, k, 0, 0, 0, 0, 0), mask))
+            .collect();
+
+        assert_eq!(expected, net.subnets(mask).unwrap().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn ipv6_subnets_by_own_mask_yield_network() {
+        for text in [
+            "::/0",
+            "2001:db8::/32",
+            "2001:db8::1/128",
+            "2001:db8::1/ffff:ffff::ffff",
+        ] {
+            let net = Ipv6Network::parse(text).unwrap();
+            assert_eq!(vec![net], net.subnets(*net.mask()).unwrap().collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn ipv6_subnets_reject_mask_not_covering() {
+        let net = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+        // A shorter prefix.
+        assert_eq!(None, net.subnets(Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0)));
+        // One mask bit dropped, the host bits all added.
+        let mask = Ipv6Addr::new(0xffff, 0xffff, 0xfffe, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff);
+        assert_eq!(None, net.subnets(mask));
+
+        // A non-contiguous network losing its lowest mask bit.
+        let net = Ipv6Network::parse("2001:db8::1/ffff:ffff::ffff").unwrap();
+        assert_eq!(None, net.subnets(Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0xfffe)));
+    }
+
+    #[test]
+    fn ipv6_subnets_non_contiguous_pin_forward_and_reverse_order() {
+        // `2001:db8:*:*:*:*:*:1` split on the lowest bit of the fourth group
+        // and of the seventh: the lower added bit cycles fastest.
+        let net = Ipv6Network::parse("2001:db8::1/ffff:ffff::ffff").unwrap();
+        let mask = Ipv6Addr::new(0xffff, 0xffff, 0, 1, 0, 0, 1, 0xffff);
+        let at = |d: u16, g: u16| Ipv6Network::new(Ipv6Addr::new(0x2001, 0xdb8, 0, d, 0, 0, g, 1), mask);
+        let expected = [at(0, 0), at(0, 1), at(1, 0), at(1, 1)];
+
+        assert_eq!(expected.to_vec(), net.subnets(mask).unwrap().collect::<Vec<_>>());
+        let mut reversed: Vec<_> = net.subnets(mask).unwrap().rev().collect();
+        reversed.reverse();
+        assert_eq!(expected.to_vec(), reversed);
+        assert_eq!(4, net.subnets(mask).unwrap().count());
+        assert_eq!(Some(expected[3]), net.subnets(mask).unwrap().last());
+
+        let mut subnets = net.subnets(mask).unwrap();
+        assert_eq!(Some(expected[0]), subnets.next());
+        assert_eq!(Some(expected[3]), subnets.next_back());
+        assert_eq!((2, Some(2)), subnets.size_hint());
+        assert_eq!(Some(expected[2]), subnets.last());
+        assert_eq!(Some(expected[1]), subnets.next());
+        assert_eq!(Some(expected[2]), subnets.next_back());
+        assert_eq!((0, Some(0)), subnets.size_hint());
+        assert_eq!(None, subnets.next());
+        assert_eq!(None, subnets.next_back());
+        assert_eq!(None, subnets.last());
+    }
+
+    #[test]
+    fn ipv6_subnets_unspecified_into_hosts_pin_ends_and_size_hint() {
+        let host = |bits: u128| Ipv6Network::from(Ipv6Addr::from_bits(bits));
+        let mut subnets = Ipv6Network::UNSPECIFIED.subnets(IPV6_ALL_BITS).unwrap();
+
+        assert_eq!((usize::MAX, None), subnets.size_hint());
+        assert_eq!(Some(host(0)), subnets.next());
+        assert_eq!(Some(host(1)), subnets.next());
+        assert_eq!(Some(host(u128::MAX)), subnets.next_back());
+        assert_eq!((usize::MAX, None), subnets.size_hint());
+        assert_eq!(Some(host(u128::MAX - 1)), subnets.last());
+
+        let mut subnets = Ipv6Network::UNSPECIFIED.subnets_with_prefix(128).unwrap();
+        assert_eq!((usize::MAX, None), subnets.size_hint());
+        assert_eq!(Contiguous::<Ipv6Network>::try_from(host(0)).ok(), subnets.next());
+        assert_eq!(
+            Contiguous::<Ipv6Network>::try_from(host(u128::MAX)).ok(),
+            subnets.next_back()
+        );
+        assert_eq!(
+            Contiguous::<Ipv6Network>::try_from(host(u128::MAX - 1)).ok(),
+            subnets.last()
+        );
+    }
+
+    #[test]
+    fn ipv6_subnets_with_prefix_contiguous() {
+        let net = Ipv6Network::parse("2001:db8::/32").unwrap();
+        for prefix in 0..=u8::MAX {
+            assert_eq!(
+                (32..=128).contains(&prefix),
+                net.subnets_with_prefix(prefix).is_some(),
+                "/{prefix}"
+            );
+        }
+
+        let expected: Vec<_> = [0, 0x4000, 0x8000, 0xc000]
+            .into_iter()
+            .map(|g| {
+                Contiguous::<Ipv6Network>::from_prefix(Ipv6Addr::new(0x2001, 0xdb8, g, 0, 0, 0, 0, 0), 34).unwrap()
+            })
+            .collect();
+        assert_eq!(expected, net.subnets_with_prefix(34).unwrap().collect::<Vec<_>>());
+
+        let unspecified = Contiguous::<Ipv6Network>::try_from(Ipv6Network::UNSPECIFIED).ok();
+        assert_eq!(
+            unspecified,
+            Ipv6Network::UNSPECIFIED.subnets_with_prefix(0).unwrap().next()
+        );
+    }
+
+    #[test]
+    fn ipv6_subnets_with_prefix_non_contiguous() {
+        // `2001:db8:*:0::*`: the lowest mask bit is the lowest bit of the
+        // fourth group, so the prefix lengths from 64 on fit.
+        let net = Ipv6Network::parse("2001:db8::/ffff:ffff:0:ffff::").unwrap();
+        for prefix in 0..=128 {
+            assert_eq!(prefix >= 64, net.subnets_with_prefix(prefix).is_some(), "/{prefix}");
+        }
+        let mut subnets = net.subnets_with_prefix(64).unwrap();
+        let at = |g: u16| Contiguous::<Ipv6Network>::from_prefix(Ipv6Addr::new(0x2001, 0xdb8, g, 0, 0, 0, 0, 0), 64);
+        assert_eq!((65536, Some(65536)), subnets.size_hint());
+        assert_eq!(at(0), subnets.next());
+        assert_eq!(at(1), subnets.next());
+        assert_eq!(at(0xffff), subnets.next_back());
+
+        // `2001:db8:*:*:*:*:*:1` fixes the lowest bit, so only its host
+        // routes fit.
+        let net = Ipv6Network::parse("2001:db8::1/ffff:ffff::ffff").unwrap();
+        assert_eq!(None, net.subnets_with_prefix(127));
+        assert!(net.subnets_with_prefix(128).is_some());
+    }
+
+    #[test]
+    fn contiguous_and_bicontiguous_reach_subnets_through_deref() {
+        let net = Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap();
+        assert_eq!(256, net.subnets(Ipv4Addr::new(255, 255, 0, 0)).unwrap().count());
+        assert_eq!(256, net.subnets_with_prefix(16).unwrap().count());
+
+        let net = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        assert_eq!(2, net.subnets_with_prefix(33).unwrap().count());
+
+        let net = BiContiguous::<Ipv6Network>::parse("2001:db8::/ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffc").unwrap();
+        assert_eq!(4, net.subnets(IPV6_ALL_BITS).unwrap().count());
+    }
+
+    // A network with at most five host bits, anywhere in the word, and a mask
+    // that adds a random subset of them, so that a test can drain both the
+    // members and the subnets.
+    fn arb_ipv4_few_subnets() -> impl Strategy<Value = (Ipv4Network, Ipv4Addr)> {
+        (any::<u32>(), arb_few_host_bits_u32(), any::<u32>())
+            .prop_map(|(addr, mask, extra)| (Ipv4Network::from_bits(addr, mask), Ipv4Addr::from_bits(mask | extra)))
+    }
+
+    fn arb_ipv6_few_subnets() -> impl Strategy<Value = (Ipv6Network, Ipv6Addr)> {
+        (any::<u128>(), arb_few_host_bits_u128(), any::<u128>())
+            .prop_map(|(addr, mask, extra)| (Ipv6Network::from_bits(addr, mask), Ipv6Addr::from_bits(mask | extra)))
+    }
+
+    proptest! {
+        // The subnets are the networks with the new mask around the members,
+        // each once, in ascending order: sorting by `Ord` sorts networks of
+        // one mask by address. Every member lies in exactly one of them.
+        #[test]
+        fn prop_ipv4_subnets_are_the_networks_of_the_members((net, mask) in arb_ipv4_few_subnets()) {
+            let mut expected: Vec<_> = net.addrs().map(|addr| Ipv4Network::new(addr, mask)).collect();
+            expected.sort();
+            expected.dedup();
+
+            let subnets: Vec<_> = net.subnets(mask).unwrap().collect();
+            prop_assert_eq!(&expected, &subnets);
+            prop_assert_eq!(1 << (mask.to_bits() & !net.mask().to_bits()).count_ones(), subnets.len());
+            for addr in net.addrs() {
+                prop_assert_eq!(1, subnets.iter().filter(|subnet| subnet.contains_addr(&addr)).count());
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_subnets_are_the_networks_of_the_members((net, mask) in arb_ipv6_few_subnets()) {
+            let mut expected: Vec<_> = net.addrs().map(|addr| Ipv6Network::new(addr, mask)).collect();
+            expected.sort();
+            expected.dedup();
+
+            let subnets: Vec<_> = net.subnets(mask).unwrap().collect();
+            prop_assert_eq!(&expected, &subnets);
+            prop_assert_eq!(1 << (mask.to_bits() & !net.mask().to_bits()).count_ones(), subnets.len());
+            for addr in net.addrs() {
+                prop_assert_eq!(1, subnets.iter().filter(|subnet| subnet.contains_addr(&addr)).count());
+            }
+        }
+
+        // Adding any bits to the network's mask splits it, dropping any one
+        // of them does not.
+        #[test]
+        fn prop_ipv4_subnets_need_every_bit_of_the_mask(
+            net in arb_ipv4_network(),
+            extra in any::<u32>(),
+            drop in any::<prop::sample::Index>(),
+        ) {
+            let (.., mask) = net.to_bits();
+            prop_assert!(net.subnets(Ipv4Addr::from_bits(mask | extra)).is_some());
+
+            if mask != 0 {
+                let bit = pdep_u32_reference(1 << drop.index(mask.count_ones() as usize), mask);
+                prop_assert_eq!(None, net.subnets(Ipv4Addr::from_bits((mask | extra) & !bit)));
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_subnets_need_every_bit_of_the_mask(
+            net in arb_ipv6_network(),
+            extra in any::<u128>(),
+            drop in any::<prop::sample::Index>(),
+        ) {
+            let (.., mask) = net.to_bits();
+            prop_assert!(net.subnets(Ipv6Addr::from_bits(mask | extra)).is_some());
+
+            if mask != 0 {
+                let bit = pdep_u128_reference(1 << drop.index(mask.count_ones() as usize), mask);
+                prop_assert_eq!(None, net.subnets(Ipv6Addr::from_bits((mask | extra) & !bit)));
+            }
+        }
+
+        #[test]
+        fn prop_ipv4_subnets_by_own_mask_yield_network(net in arb_ipv4_network()) {
+            prop_assert_eq!(vec![net], net.subnets(*net.mask()).unwrap().collect::<Vec<_>>());
+        }
+
+        #[test]
+        fn prop_ipv6_subnets_by_own_mask_yield_network(net in arb_ipv6_network()) {
+            prop_assert_eq!(vec![net], net.subnets(*net.mask()).unwrap().collect::<Vec<_>>());
+        }
+
+        #[test]
+        fn prop_ipv4_subnets_by_full_mask_are_the_host_routes(addr in any::<u32>(), mask in arb_few_host_bits_u32()) {
+            let net = Ipv4Network::from_bits(addr, mask);
+            let hosts: Vec<_> = net.addrs().map(Ipv4Network::from).collect();
+            prop_assert_eq!(hosts, net.subnets(IPV4_ALL_BITS).unwrap().collect::<Vec<_>>());
+        }
+
+        #[test]
+        fn prop_ipv6_subnets_by_full_mask_are_the_host_routes(addr in any::<u128>(), mask in arb_few_host_bits_u128()) {
+            let net = Ipv6Network::from_bits(addr, mask);
+            let hosts: Vec<_> = net.addrs().map(Ipv6Network::from).collect();
+            prop_assert_eq!(hosts, net.subnets(IPV6_ALL_BITS).unwrap().collect::<Vec<_>>());
+        }
+
+        // Any network and any added bits, so the counts reach 2^32: the ends
+        // match the subnet at that host index of the added bits, and `last`
+        // is the one at the back.
+            #[test]
+        fn prop_ipv4_subnets_ends_match_reference(net in arb_ipv4_network(), extra in any::<u32>()) {
+            let (addr, m1) = net.to_bits();
+            let mask = m1 | extra;
+            let added = mask & !m1;
+            let total = 1u64 << added.count_ones();
+            let at = |index: u64| Ipv4Network::from_bits(addr | pdep_u32_reference(index as u32, added), mask);
+            let take = total.min(32);
+            let subnets = net.subnets(Ipv4Addr::from_bits(mask)).unwrap();
+
+            let mut front = subnets;
+            for index in 0..take {
+                prop_assert_eq!(Some(at(index)), front.next());
+            }
+            let mut back = subnets;
+            for step in 0..take {
+                prop_assert_eq!(Some(at(total - 1 - step)), back.next_back());
+            }
+            prop_assert_eq!(Some(at(total - 1)), subnets.last());
+        }
+
+            #[test]
+        fn prop_ipv6_subnets_ends_match_reference(net in arb_ipv6_network(), extra in any::<u128>()) {
+            let (addr, m1) = net.to_bits();
+            let mask = m1 | extra;
+            let added = mask & !m1;
+            let last = u128::MAX.checked_shr(128 - added.count_ones()).unwrap_or(0);
+            let at = |index: u128| Ipv6Network::from_bits(addr | pdep_u128_reference(index, added), mask);
+            let take = last.saturating_add(1).min(32);
+            let subnets = net.subnets(Ipv6Addr::from_bits(mask)).unwrap();
+
+            let mut front = subnets;
+            for index in 0..take {
+                prop_assert_eq!(Some(at(index)), front.next());
+            }
+            let mut back = subnets;
+            for step in 0..take {
+                prop_assert_eq!(Some(at(last - step)), back.next_back());
+            }
+            prop_assert_eq!(Some(at(last)), subnets.last());
+        }
+
+        // Every IPv4 count fits a 64-bit `usize`, so `len` and the hint are
+        // exact in every state, and draining moves them in lockstep.
+        #[cfg(target_pointer_width = "64")]
+        #[test]
+        fn prop_ipv4_subnets_len_and_size_hint_match_count_across_drain(
+            net in arb_ipv4_network(),
+            extra in any::<u32>(),
+            script in prop::collection::vec(any::<bool>(), 1..48),
+        ) {
+            let mask = net.mask().to_bits() | extra;
+            let mut expected = 1u64 << (mask & !net.mask().to_bits()).count_ones();
+            let mut subnets = net.subnets(Ipv4Addr::from_bits(mask)).unwrap();
+            prop_assert_eq!(expected, subnets.count() as u64);
+
+            for take_front in script {
+                let len = subnets.len();
+                prop_assert_eq!(expected, len as u64);
+                prop_assert_eq!((len, Some(len)), subnets.size_hint());
+
+                let yielded = if take_front { subnets.next() } else { subnets.next_back() };
+                if yielded.is_some() {
+                    expected -= 1;
+                }
+            }
+        }
+
+        // Counts above `usize::MAX` cannot be reported exactly, so the hint
+        // saturates to an honest lower bound with no upper bound.
+        #[test]
+        fn prop_ipv6_subnets_size_hint_matches_count(net in arb_ipv6_network(), extra in any::<u128>()) {
+            let mask = net.mask().to_bits() | extra;
+            let exact = 1u128
+                .checked_shl((mask & !net.mask().to_bits()).count_ones())
+                .and_then(|total| usize::try_from(total).ok());
+            let subnets = net.subnets(Ipv6Addr::from_bits(mask)).unwrap();
+
+            match exact {
+                Some(total) => {
+                    prop_assert_eq!((total, Some(total)), subnets.size_hint());
+                    prop_assert_eq!(total, subnets.count());
+                }
+                None => {
+                    prop_assert_eq!((usize::MAX, None), subnets.size_hint());
+                    prop_assert_eq!(usize::MAX, subnets.count());
+                }
+            }
+        }
+
+        // However `next` and `next_back` interleave, they take the forward
+        // order from its two ends and stop where they meet.
+        #[test]
+        fn prop_ipv4_subnets_interleaved_take_forward_order_from_both_ends(
+            (net, mask) in arb_ipv4_few_subnets(),
+            script in prop::collection::vec(any::<bool>(), 1..48),
+        ) {
+            let forward: Vec<_> = net.subnets(mask).unwrap().collect();
+            let mut subnets = net.subnets(mask).unwrap();
+            let (mut front, mut back) = (0, forward.len());
+
+            for take_front in script {
+                let expected = if front == back {
+                    None
+                } else if take_front {
+                    front += 1;
+                    Some(forward[front - 1])
+                } else {
+                    back -= 1;
+                    Some(forward[back])
+                };
+                let actual = if take_front { subnets.next() } else { subnets.next_back() };
+                prop_assert_eq!(expected, actual);
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_subnets_interleaved_take_forward_order_from_both_ends(
+            (net, mask) in arb_ipv6_few_subnets(),
+            script in prop::collection::vec(any::<bool>(), 1..48),
+        ) {
+            let forward: Vec<_> = net.subnets(mask).unwrap().collect();
+            let mut subnets = net.subnets(mask).unwrap();
+            let (mut front, mut back) = (0, forward.len());
+
+            for take_front in script {
+                let expected = if front == back {
+                    None
+                } else if take_front {
+                    front += 1;
+                    Some(forward[front - 1])
+                } else {
+                    back -= 1;
+                    Some(forward[back])
+                };
+                let actual = if take_front { subnets.next() } else { subnets.next_back() };
+                prop_assert_eq!(expected, actual);
+            }
+        }
+
+        #[test]
+        fn prop_subnets_iterators_stay_exhausted(
+            (net4, mask4) in arb_ipv4_few_subnets(),
+            (net6, mask6) in arb_ipv6_few_subnets(),
+            script in prop::collection::vec(any::<bool>(), 1..8),
+        ) {
+            assert_stays_exhausted(net4.subnets(mask4).unwrap(), &script);
+            assert_stays_exhausted(net6.subnets(mask6).unwrap(), &script);
+            assert_stays_exhausted(net4.subnets_with_prefix(32).unwrap(), &script);
+            assert_stays_exhausted(net6.subnets_with_prefix(128).unwrap(), &script);
+        }
+
+        // A mask with its lowest `zeros` bits clear fits every prefix length
+        // from `32 - zeros` on, whatever its other bits. `subnets_with_prefix`
+        // splits exactly when the mask has no bit past the first `prefix`,
+        // into what `subnets` yields for the prefix mask, all of that length.
+        #[test]
+        fn prop_ipv4_subnets_with_prefix_is_subnets_by_prefix_mask(
+            addr in any::<u32>(),
+            bits in any::<u32>(),
+            zeros in 0u32..=32,
+            prefix in 0u8..=40,
+        ) {
+            let mask = bits.checked_shl(zeros).unwrap_or(0);
+            let net = Ipv4Network::from_bits(addr, mask);
+            let fits = prefix <= 32 && mask & u32::MAX.checked_shr(u32::from(prefix)).unwrap_or(0) == 0;
+
+            let Some(subnets) = net.subnets_with_prefix(prefix) else {
+                prop_assert!(!fits);
+                return Ok(());
+            };
+            prop_assert!(fits);
+
+            let expected = net.subnets(ipv4_mask_from_cidr(prefix).unwrap()).unwrap();
+            prop_assert_eq!(expected.size_hint(), subnets.size_hint());
+            for (expected, subnet) in expected.zip(subnets).take(16).chain(expected.rev().zip(subnets.rev()).take(16)) {
+                prop_assert_eq!(expected, *subnet);
+                prop_assert_eq!(Some(prefix), (*subnet).prefix());
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_subnets_with_prefix_is_subnets_by_prefix_mask(
+            addr in any::<u128>(),
+            bits in any::<u128>(),
+            zeros in 0u32..=128,
+            prefix in 0u8..=136,
+        ) {
+            let mask = bits.checked_shl(zeros).unwrap_or(0);
+            let net = Ipv6Network::from_bits(addr, mask);
+            let fits = prefix <= 128 && mask & u128::MAX.checked_shr(u32::from(prefix)).unwrap_or(0) == 0;
+
+            let Some(subnets) = net.subnets_with_prefix(prefix) else {
+                prop_assert!(!fits);
+                return Ok(());
+            };
+            prop_assert!(fits);
+
+            let expected = net.subnets(ipv6_mask_from_cidr(prefix).unwrap()).unwrap();
+            prop_assert_eq!(expected.size_hint(), subnets.size_hint());
+            for (expected, subnet) in expected.zip(subnets).take(16).chain(expected.rev().zip(subnets.rev()).take(16)) {
+                prop_assert_eq!(expected, *subnet);
+                prop_assert_eq!(Some(prefix), (*subnet).prefix());
+            }
+        }
+
+        // On a contiguous `/p` network the prefix lengths `p ..= 32` split it
+        // into `2^(q - p)` consecutive `/q` networks, from the one at its
+        // first address to the one at its last.
+        #[test]
+        fn prop_ipv4_subnets_with_prefix_on_contiguous(addr in any::<u32>(), p in 0u8..=32, q in 0u8..=40) {
+            let net = *Contiguous::<Ipv4Network>::from_prefix(Ipv4Addr::from_bits(addr), p).unwrap();
+            let subnets = net.subnets_with_prefix(q);
+            prop_assert_eq!((p..=32).contains(&q), subnets.is_some());
+            let Some(mut subnets) = subnets else {
+                return Ok(());
+            };
+
+            let count = 1u64 << (q - p);
+            let hint = usize::try_from(count).map_or((usize::MAX, None), |n| (n, Some(n)));
+            prop_assert_eq!(hint, subnets.size_hint());
+
+            let first = subnets.next();
+            prop_assert_eq!(Contiguous::<Ipv4Network>::from_prefix(*net.addr(), q), first);
+            let last = Contiguous::<Ipv4Network>::from_prefix(net.last_addr(), q);
+            prop_assert_eq!(last, net.subnets_with_prefix(q).unwrap().next_back());
+            if let (Some(first), Some(second)) = (first, subnets.next()) {
+                prop_assert_eq!(first.last_addr().to_bits() + 1, second.addr().to_bits());
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_subnets_with_prefix_on_contiguous(addr in any::<u128>(), p in 0u8..=128, q in 0u8..=136) {
+            let net = *Contiguous::<Ipv6Network>::from_prefix(Ipv6Addr::from_bits(addr), p).unwrap();
+            let subnets = net.subnets_with_prefix(q);
+            prop_assert_eq!((p..=128).contains(&q), subnets.is_some());
+            let Some(mut subnets) = subnets else {
+                return Ok(());
+            };
+
+            let count = 1u128.checked_shl(u32::from(q - p));
+            let hint = count
+                .and_then(|count| usize::try_from(count).ok())
+                .map_or((usize::MAX, None), |n| (n, Some(n)));
+            prop_assert_eq!(hint, subnets.size_hint());
+
+            let first = subnets.next();
+            prop_assert_eq!(Contiguous::<Ipv6Network>::from_prefix(*net.addr(), q), first);
+            let last = Contiguous::<Ipv6Network>::from_prefix(net.last_addr(), q);
+            prop_assert_eq!(last, net.subnets_with_prefix(q).unwrap().next_back());
+            if let (Some(first), Some(second)) = (first, subnets.next()) {
+                prop_assert_eq!(first.last_addr().to_bits() + 1, second.addr().to_bits());
+            }
         }
     }
 
