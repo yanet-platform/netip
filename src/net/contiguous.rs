@@ -193,6 +193,42 @@ impl Contiguous<IpNetwork> {
             _ => false,
         }
     }
+
+    /// Returns the network one prefix bit shorter, or [`None`] for a `/0`.
+    ///
+    /// A shorter prefix keeps the mask contiguous, so this overrides
+    /// [`IpNetwork::supernet`] to return the result as a [`Contiguous`]
+    /// network, with no re-validation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, IpNetwork};
+    ///
+    /// let net = Contiguous::<IpNetwork>::parse("192.168.1.0/24").unwrap();
+    /// let supernet = net.supernet().unwrap();
+    /// assert_eq!(
+    ///     Contiguous::<IpNetwork>::parse("192.168.0.0/23").unwrap(),
+    ///     supernet
+    /// );
+    /// assert_eq!(23, supernet.prefix());
+    ///
+    /// assert_eq!(
+    ///     None,
+    ///     Contiguous::<IpNetwork>::parse("::/0").unwrap().supernet()
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn supernet(&self) -> Option<Self> {
+        // NOTE: use `Option::map` when it becomes const.
+        match self {
+            Self(net) => match net.supernet() {
+                Some(net) => Some(Self(net)),
+                None => None,
+            },
+        }
+    }
 }
 
 impl Contiguous<Ipv4Network> {
@@ -336,6 +372,44 @@ impl Contiguous<Ipv4Network> {
 
                 (a2 & m1 == a1) && (m1 <= m2)
             }
+        }
+    }
+
+    /// Returns the network one prefix bit shorter, or [`None`] for a `/0`.
+    ///
+    /// A shorter prefix keeps the mask contiguous, so this overrides
+    /// [`Ipv4Network::supernet`] to return the result as a [`Contiguous`]
+    /// network, with no re-validation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, Ipv4Network};
+    ///
+    /// let net = Contiguous::<Ipv4Network>::parse("192.168.1.0/24").unwrap();
+    /// let supernet = net.supernet().unwrap();
+    /// assert_eq!(
+    ///     Contiguous::<Ipv4Network>::parse("192.168.0.0/23").unwrap(),
+    ///     supernet
+    /// );
+    /// assert_eq!(23, supernet.prefix());
+    ///
+    /// assert_eq!(
+    ///     None,
+    ///     Contiguous::<Ipv4Network>::parse("0.0.0.0/0")
+    ///         .unwrap()
+    ///         .supernet()
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn supernet(&self) -> Option<Self> {
+        // NOTE: use `Option::map` when it becomes const.
+        match self {
+            Self(net) => match net.supernet() {
+                Some(net) => Some(Self(net)),
+                None => None,
+            },
         }
     }
 
@@ -636,6 +710,42 @@ impl Contiguous<Ipv6Network> {
 
                 (a2 & m1 == a1) && (m1 <= m2)
             }
+        }
+    }
+
+    /// Returns the network one prefix bit shorter, or [`None`] for a `/0`.
+    ///
+    /// A shorter prefix keeps the mask contiguous, so this overrides
+    /// [`Ipv6Network::supernet`] to return the result as a [`Contiguous`]
+    /// network, with no re-validation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, Ipv6Network};
+    ///
+    /// let net = Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap();
+    /// let supernet = net.supernet().unwrap();
+    /// assert_eq!(
+    ///     Contiguous::<Ipv6Network>::parse("2001:db8::/47").unwrap(),
+    ///     supernet
+    /// );
+    /// assert_eq!(47, supernet.prefix());
+    ///
+    /// assert_eq!(
+    ///     None,
+    ///     Contiguous::<Ipv6Network>::parse("::/0").unwrap().supernet()
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn supernet(&self) -> Option<Self> {
+        // NOTE: use `Option::map` when it becomes const.
+        match self {
+            Self(net) => match net.supernet() {
+                Some(net) => Some(Self(net)),
+                None => None,
+            },
         }
     }
 
@@ -2065,6 +2175,30 @@ mod test {
     }
 
     #[test]
+    fn contiguous_supernet_keeps_the_type() {
+        let net = Contiguous::<Ipv4Network>::parse("172.16.1.0/24").unwrap();
+        let expected = Contiguous::<Ipv4Network>::parse("172.16.0.0/23").unwrap();
+        assert_eq!(Some(expected), net.supernet());
+        assert_eq!(None, Contiguous::<Ipv4Network>::parse("0.0.0.0/0").unwrap().supernet());
+
+        let net = Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap();
+        let expected = Contiguous::<Ipv6Network>::parse("2001:db8::/47").unwrap();
+        assert_eq!(Some(expected), net.supernet());
+        assert_eq!(None, Contiguous::<Ipv6Network>::parse("::/0").unwrap().supernet());
+
+        let net = Contiguous::<IpNetwork>::parse("172.16.1.0/24").unwrap();
+        let expected = Contiguous::<IpNetwork>::parse("172.16.0.0/23").unwrap();
+        assert_eq!(Some(expected), net.supernet());
+
+        let net = Contiguous::<IpNetwork>::parse("2001:db8:1::/48").unwrap();
+        let expected = Contiguous::<IpNetwork>::parse("2001:db8::/47").unwrap();
+        assert_eq!(Some(expected), net.supernet());
+
+        assert_eq!(None, Contiguous::<IpNetwork>::parse("0.0.0.0/0").unwrap().supernet());
+        assert_eq!(None, Contiguous::<IpNetwork>::parse("::/0").unwrap().supernet());
+    }
+
+    #[test]
     fn contiguous_as_ref_borrows_the_wrapped_network() {
         let net = Contiguous::<Ipv4Network>::parse("192.168.0.0/16").unwrap();
         assert!(core::ptr::eq(&*net, net.as_ref()));
@@ -2519,6 +2653,19 @@ mod test {
         ]
     }
 
+    // Contiguous networks of both families with a uniform prefix length,
+    // unlike `arb_contiguous_ip_network`, whose prefixes are mostly short.
+    fn arb_prefixed_contiguous_ip_network() -> impl Strategy<Value = Contiguous<IpNetwork>> {
+        prop_oneof![
+            (any::<u32>(), 0u8..=32).prop_map(|(addr, prefix)| {
+                Contiguous::<IpNetwork>::from_prefix(IpAddr::V4(Ipv4Addr::from_bits(addr)), prefix).unwrap()
+            }),
+            (any::<u128>(), 0u8..=128).prop_map(|(addr, prefix)| {
+                Contiguous::<IpNetwork>::from_prefix(IpAddr::V6(Ipv6Addr::from_bits(addr)), prefix).unwrap()
+            }),
+        ]
+    }
+
     // Bounded to at most 8 host bits (256 addresses) so `addrs()` can be
     // fully collected/brute-forced in a proptest case without allocating an
     // unbounded amount of memory.
@@ -2894,6 +3041,40 @@ mod test {
                     prop_assert_eq!(Ok(net), v6.map(Contiguous::<IpNetwork>::from));
                     prop_assert_eq!(Err(IpVersionMismatchError), v4);
                 }
+            }
+        }
+
+        // The typed supernet wraps the general one, and the result is
+        // contiguous, as the wrapper promises.
+        #[test]
+        fn prop_contiguous_ipv4_supernet_matches_general(addr in any::<u32>(), prefix in 0u8..=32) {
+            let net = Contiguous::<Ipv4Network>::from_prefix(Ipv4Addr::from_bits(addr), prefix).unwrap();
+            let supernet = net.supernet();
+
+            prop_assert_eq!((*net).supernet(), supernet.map(|net| *net));
+            if let Some(supernet) = supernet {
+                prop_assert!((*supernet).is_contiguous());
+            }
+        }
+
+        #[test]
+        fn prop_contiguous_ipv6_supernet_matches_general(addr in any::<u128>(), prefix in 0u8..=128) {
+            let net = Contiguous::<Ipv6Network>::from_prefix(Ipv6Addr::from_bits(addr), prefix).unwrap();
+            let supernet = net.supernet();
+
+            prop_assert_eq!((*net).supernet(), supernet.map(|net| *net));
+            if let Some(supernet) = supernet {
+                prop_assert!((*supernet).is_contiguous());
+            }
+        }
+
+        #[test]
+        fn prop_contiguous_ip_supernet_matches_general(net in arb_prefixed_contiguous_ip_network()) {
+            let supernet = net.supernet();
+
+            prop_assert_eq!((*net).supernet(), supernet.map(|net| *net));
+            if let Some(supernet) = supernet {
+                prop_assert!((*supernet).is_contiguous());
             }
         }
 
