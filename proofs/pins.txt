@@ -22,7 +22,7 @@
 # Masks and the bit tests every network operation uses.
 IPV4_ALL_BITS                                       5833928495a57ea7  Netip/Impl/ParseNet.lean:Parse.parseIpv4NetworkAscii
 IPV6_ALL_BITS                                       bf5e9b806bda1821  Netip/Impl/ParseNet.lean:Parse.parseIpv6NetworkAscii
-CidrOverflowError                                   2f617189f1a21c72  Netip/Impl/ParseNet.lean:Parse.NetError
+CidrOverflowError                                   761137b77ae9562c  Netip/Impl/ParseNet.lean:Parse.NetError
 ipv4_mask_from_cidr                                 3e717cbd04b12285  Netip/Impl/Basic.lean:maskFromCidr Netip/Impl/IsContiguous.lean
 ipv6_mask_from_cidr                                 197a1cb40d1b8e95  Netip/Impl/Basic.lean:maskFromCidr Netip/Impl/IsContiguous.lean
 ipv4_adjacent_bit                                   1bbc85b3f65f746a  Netip/Impl/Adjacent.lean:adjacentBit
@@ -275,7 +275,7 @@ bicontiguous_containment_probe                      f950c69f8d602bdd  Netip/Impl
 
 [src/parser.rs]
 
-IpNetParseError                                     0935c0e24b739695  Netip/Impl/ParseNet.lean:Parse.NetError
+IpNetParseError                                     f10697b36c1dd6ce  Netip/Impl/ParseNet.lean:Parse.NetError
 IpNetParseError::From<AddrParseError>::from         d5307ea49bbc2be4  Netip/Impl/ParseNet.lean:Parse.NetError
 IpNetParseError::From<CidrOverflowError>::from      15d3483902bfffac  Netip/Impl/ParseNet.lean:Parse.NetError
 parse_ip_network                                    22fa59b88f56d5d6  Netip/Impl/ParseNet.lean:Parse.parseIpNetworkAscii

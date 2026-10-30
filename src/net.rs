@@ -37,7 +37,7 @@ pub const IPV6_ALL_BITS: Ipv6Addr = Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff
 
 /// An error that is returned during IP network conversion from address and CIDR
 /// when the CIDR is too large.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CidrOverflowError(u8, u8);
 
 impl Display for CidrOverflowError {
@@ -9006,6 +9006,35 @@ mod test {
     fn cidr_overflow_error_display_v6() {
         let err = Ipv6Network::try_from((Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 0, 0, 0, 0, 0), 129)).unwrap_err();
         assert_eq!("invalid CIDR: 129 must be <= 128", format!("{err}"));
+    }
+
+    // Integrations wrap these errors into their own error types, which can
+    // derive `Clone` and `Eq` only if every wrapped error implements them.
+    #[test]
+    fn errors_are_clone_and_eq() {
+        fn assert_clone_eq<E: Clone + Eq + Error>(err: E) {
+            assert_eq!(err.clone(), err);
+        }
+
+        let err = ipv4_mask_from_cidr(33).unwrap_err();
+        // `CidrOverflowError` is `Copy`: `err` stays usable after the move.
+        let copy = err;
+        assert_eq!(err, copy);
+        assert_clone_eq(err);
+        assert_clone_eq(ipv6_mask_from_cidr(129).unwrap_err());
+
+        assert_clone_eq(IpNetwork::parse("10.0.0.0/33").unwrap_err());
+        assert_clone_eq(IpNetwork::parse("10.0.0.256/8").unwrap_err());
+
+        assert_clone_eq(Contiguous::<IpNetwork>::parse("10.0.0.0/255.0.255.0").unwrap_err());
+        assert_clone_eq(Contiguous::<IpNetwork>::parse("10.0.0.256/8").unwrap_err());
+
+        assert_clone_eq(
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8::/ffff:ffff:0:0:f0f0:f0f0:f0f0:f0f0").unwrap_err(),
+        );
+        assert_clone_eq(BiContiguous::<Ipv6Network>::parse("2a02:6b8::x/64").unwrap_err());
+
+        assert_clone_eq("00:00:5e:00:53".parse::<crate::MacAddr>().unwrap_err());
     }
 
     #[test]
