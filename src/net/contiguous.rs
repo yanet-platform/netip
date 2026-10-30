@@ -12,7 +12,8 @@ use core::{
 };
 
 use super::{
-    CidrOverflowError, IpNetParseError, IpNetwork, Ipv4Network, Ipv6Network, ipv4_mask_from_cidr, ipv6_mask_from_cidr,
+    CidrOverflowError, IpNetParseError, IpNetwork, IpVersionMismatchError, Ipv4Network, Ipv6Network,
+    ipv4_mask_from_cidr, ipv6_mask_from_cidr,
 };
 
 /// An error that occurs when parsing a contiguous IP network.
@@ -817,6 +818,69 @@ impl From<Contiguous<Ipv6Network>> for Contiguous<IpNetwork> {
     fn from(net: Contiguous<Ipv6Network>) -> Self {
         let Contiguous(net) = net;
         Self(IpNetwork::from(net))
+    }
+}
+
+impl TryFrom<Contiguous<IpNetwork>> for Contiguous<Ipv4Network> {
+    type Error = IpVersionMismatchError;
+
+    /// Converts a [`Contiguous<IpNetwork>`] into a
+    /// [`Contiguous<Ipv4Network>`], failing with [`IpVersionMismatchError`]
+    /// if it is an IPv6 network, IPv4-mapped included, as
+    /// `Ipv4Network::try_from` does.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, IpNetwork, IpVersionMismatchError, Ipv4Network};
+    ///
+    /// let net = Contiguous::<IpNetwork>::parse("10.0.0.0/8").unwrap();
+    /// assert_eq!(
+    ///     Ok(Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap()),
+    ///     Contiguous::<Ipv4Network>::try_from(net)
+    /// );
+    ///
+    /// let net = Contiguous::<IpNetwork>::parse("2001:db8::/32").unwrap();
+    /// assert_eq!(
+    ///     Err(IpVersionMismatchError),
+    ///     Contiguous::<Ipv4Network>::try_from(net)
+    /// );
+    /// ```
+    #[inline]
+    fn try_from(net: Contiguous<IpNetwork>) -> Result<Self, Self::Error> {
+        let Contiguous(net) = net;
+        Ok(Self(Ipv4Network::try_from(net)?))
+    }
+}
+
+impl TryFrom<Contiguous<IpNetwork>> for Contiguous<Ipv6Network> {
+    type Error = IpVersionMismatchError;
+
+    /// Converts a [`Contiguous<IpNetwork>`] into a
+    /// [`Contiguous<Ipv6Network>`], failing with [`IpVersionMismatchError`]
+    /// if it is an IPv4 network, as `Ipv6Network::try_from` does.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, IpNetwork, IpVersionMismatchError, Ipv6Network};
+    ///
+    /// let net = Contiguous::<IpNetwork>::parse("2001:db8::/32").unwrap();
+    /// assert_eq!(
+    ///     Ok(Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap()),
+    ///     Contiguous::<Ipv6Network>::try_from(net)
+    /// );
+    ///
+    /// let net = Contiguous::<IpNetwork>::parse("10.0.0.0/8").unwrap();
+    /// assert_eq!(
+    ///     Err(IpVersionMismatchError),
+    ///     Contiguous::<Ipv6Network>::try_from(net)
+    /// );
+    /// ```
+    #[inline]
+    fn try_from(net: Contiguous<IpNetwork>) -> Result<Self, Self::Error> {
+        let Contiguous(net) = net;
+        Ok(Self(Ipv6Network::try_from(net)?))
     }
 }
 
@@ -1966,6 +2030,41 @@ mod test {
     }
 
     #[test]
+    fn contiguous_ipv4_tryfrom_contiguous_ip_network() {
+        let net = Contiguous::<IpNetwork>::parse("192.168.0.0/16").unwrap();
+        assert_eq!(
+            Ok(Contiguous::<Ipv4Network>::parse("192.168.0.0/16").unwrap()),
+            Contiguous::<Ipv4Network>::try_from(net)
+        );
+
+        let net = Contiguous::<IpNetwork>::parse("2001:db8::/32").unwrap();
+        assert_eq!(Err(IpVersionMismatchError), Contiguous::<Ipv4Network>::try_from(net));
+
+        // Strict: an IPv4-mapped network is IPv6.
+        let net = Contiguous::<IpNetwork>::parse("::ffff:c0a8:0/112").unwrap();
+        assert_eq!(Err(IpVersionMismatchError), Contiguous::<Ipv4Network>::try_from(net));
+    }
+
+    #[test]
+    fn contiguous_ipv6_tryfrom_contiguous_ip_network() {
+        let net = Contiguous::<IpNetwork>::parse("2001:db8::/32").unwrap();
+        assert_eq!(
+            Ok(Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap()),
+            Contiguous::<Ipv6Network>::try_from(net)
+        );
+
+        let net = Contiguous::<IpNetwork>::parse("::ffff:c0a8:0/112").unwrap();
+        assert_eq!(
+            Ok(Contiguous::<Ipv6Network>::parse("::ffff:c0a8:0/112").unwrap()),
+            Contiguous::<Ipv6Network>::try_from(net)
+        );
+
+        // Strict: an IPv4 network is not embedded.
+        let net = Contiguous::<IpNetwork>::parse("192.168.0.0/16").unwrap();
+        assert_eq!(Err(IpVersionMismatchError), Contiguous::<Ipv6Network>::try_from(net));
+    }
+
+    #[test]
     fn contiguous_as_ref_borrows_the_wrapped_network() {
         let net = Contiguous::<Ipv4Network>::parse("192.168.0.0/16").unwrap();
         assert!(core::ptr::eq(&*net, net.as_ref()));
@@ -2776,6 +2875,25 @@ mod test {
             prop_assert_eq!(result.is_ok(), net.is_contiguous());
             if let Ok(converted) = result {
                 prop_assert_eq!(*converted, net);
+            }
+        }
+
+        // Only the narrowing to the network's own version succeeds, and
+        // widening its result back through `From` gives the network.
+        #[test]
+        fn prop_contiguous_tryfrom_contiguous_ip_network_narrows_by_version(net in arb_contiguous_ip_network()) {
+            let v4 = Contiguous::<Ipv4Network>::try_from(net);
+            let v6 = Contiguous::<Ipv6Network>::try_from(net);
+
+            match *net {
+                IpNetwork::V4(..) => {
+                    prop_assert_eq!(Ok(net), v4.map(Contiguous::<IpNetwork>::from));
+                    prop_assert_eq!(Err(IpVersionMismatchError), v6);
+                }
+                IpNetwork::V6(..) => {
+                    prop_assert_eq!(Ok(net), v6.map(Contiguous::<IpNetwork>::from));
+                    prop_assert_eq!(Err(IpVersionMismatchError), v4);
+                }
             }
         }
 
