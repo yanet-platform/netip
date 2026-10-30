@@ -76,6 +76,38 @@ impl MacAddr {
         Self(u64::from_be_bytes([0, 0, a, b, c, d, e, f]))
     }
 
+    /// Creates a MAC address from the lower 48 bits of a [`u64`], or returns
+    /// [`None`] if any of the upper 16 bits is set.
+    ///
+    /// This is the inverse of [`MacAddr::as_u64`]: the first octet is the
+    /// highest of the 48 bits.
+    ///
+    /// The `TryFrom<u64>` conversion accepts the same values and reports the
+    /// others as a [`MacAddrParseError`]. This one is a `const fn` returning
+    /// [`Option`] instead, so it also builds constants: [`Option::expect`]
+    /// works in `const` context. Where the upper bits hold something else,
+    /// clear them first: `MacAddr::from_u64(bits & 0xffff_ffff_ffff)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::MacAddr;
+    ///
+    /// const MAC: MacAddr = MacAddr::from_u64(0x3aac_269b_5bf9).expect("the upper 16 bits are zero");
+    /// assert_eq!("3a:ac:26:9b:5b:f9", MAC.to_string());
+    ///
+    /// assert_eq!(None, MacAddr::from_u64(0x1_0000_0000_0000));
+    ///
+    /// // Only the lower 48 bits of this value are the address.
+    /// let bits = 0xabcd_3aac_269b_5bf9;
+    /// assert_eq!(Some(MAC), MacAddr::from_u64(bits & 0xffff_ffff_ffff));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn from_u64(bits: u64) -> Option<MacAddr> {
+        if bits >> 48 == 0 { Some(Self(bits)) } else { None }
+    }
+
     /// Parses a MAC address from an ASCII byte slice.
     ///
     /// | Format           | Example             |
@@ -101,7 +133,8 @@ impl MacAddr {
 
     /// Returns the numeric value of this address as a [`u64`].
     ///
-    /// The address occupies the lower 48 bits. The upper 16 bits are zero.
+    /// The address occupies the lower 48 bits, the first octet highest. The
+    /// upper 16 bits are zero. [`MacAddr::from_u64`] converts it back.
     ///
     /// # Examples
     ///
@@ -232,13 +265,30 @@ impl Default for MacAddr {
     }
 }
 
-/// Creates a MAC address from a [`u64`].
+/// Creates a MAC address from the lower 48 bits of a [`u64`], failing with
+/// [`MacAddrParseError`] if any of the upper 16 bits is set.
 ///
-/// Only the lower 48 bits are used. The upper 16 bits are silently masked.
-impl From<u64> for MacAddr {
+/// [`MacAddr::from_u64`] does the same in `const` context.
+///
+/// # Examples
+///
+/// ```
+/// use netip::{MacAddr, MacAddrParseError};
+///
+/// let mac = MacAddr::try_from(0x3aac_269b_5bf9).unwrap();
+/// assert_eq!("3a:ac:26:9b:5b:f9", mac.to_string());
+///
+/// assert_eq!(
+///     Err(MacAddrParseError),
+///     MacAddr::try_from(0xabcd_3aac_269b_5bf9)
+/// );
+/// ```
+impl TryFrom<u64> for MacAddr {
+    type Error = MacAddrParseError;
+
     #[inline]
-    fn from(addr: u64) -> MacAddr {
-        MacAddr(addr & 0xffff_ffff_ffff)
+    fn try_from(bits: u64) -> Result<Self, Self::Error> {
+        MacAddr::from_u64(bits).ok_or(MacAddrParseError)
     }
 }
 
@@ -354,13 +404,17 @@ fn parse_separated(b: &[u8; 17]) -> Result<MacAddr, MacAddrParseError> {
     Ok(MacAddr::from(octets))
 }
 
-/// Error returned when parsing a MAC address string fails.
+/// Error returned when parsing a MAC address string fails, or when a [`u64`]
+/// with any of the upper 16 bits set is converted to a MAC address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MacAddrParseError;
 
 impl Display for MacAddrParseError {
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
-        write!(f, "invalid MAC address format, expected EUI-48: xx:xx:xx:xx:xx:xx")
+        write!(
+            f,
+            "invalid MAC address, expected EUI-48: xx:xx:xx:xx:xx:xx or a u64 below 2^48"
+        )
     }
 }
 
@@ -381,11 +435,34 @@ mod test {
     }
 
     #[test]
-    fn from_u64_masks_high_bits() {
-        let mac = MacAddr::from(0xabcd_3aac269b5bf9);
+    fn from_u64() {
+        assert_eq!(Some(MAC), MacAddr::from_u64(MAC_U64));
+        assert_eq!(Some(MacAddr::ZERO), MacAddr::from_u64(0));
+        assert_eq!(Some(MacAddr::BROADCAST), MacAddr::from_u64(0xffff_ffff_ffff));
+    }
 
-        assert_eq!(MAC, mac);
-        assert_eq!(MAC_U64, mac.as_u64());
+    #[test]
+    fn from_u64_rejects_each_high_bit() {
+        for bit in 48..64 {
+            assert_eq!(None, MacAddr::from_u64(1 << bit), "bit {bit}");
+            assert_eq!(None, MacAddr::from_u64(MAC_U64 | (1 << bit)), "bit {bit}");
+        }
+        assert_eq!(None, MacAddr::from_u64(u64::MAX));
+    }
+
+    #[test]
+    fn from_u64_in_const() {
+        const FROM_U64: MacAddr = MacAddr::from_u64(MAC_U64).expect("the upper 16 bits are zero");
+
+        assert_eq!(MAC, FROM_U64);
+    }
+
+    #[test]
+    fn try_from_u64() {
+        assert_eq!(Ok(MAC), MacAddr::try_from(MAC_U64));
+        assert_eq!(Ok(MacAddr::BROADCAST), MacAddr::try_from(0xffff_ffff_ffff));
+        assert_eq!(Err(MacAddrParseError), MacAddr::try_from(0x1_0000_0000_0000));
+        assert_eq!(Err(MacAddrParseError), MacAddr::try_from(0xabcd_3aac_269b_5bf9));
     }
 
     #[test]
@@ -592,11 +669,40 @@ mod test {
     }
 
     fn arb_mac_addr() -> impl Strategy<Value = MacAddr> {
-        any::<u64>().prop_map(MacAddr::from)
+        any::<[u8; 6]>().prop_map(MacAddr::from)
+    }
+
+    // A uniform `u64` has an upper bit set in all but one draw in 65536, so
+    // values that fit in 48 bits and values with one stray upper bit are drawn
+    // as often.
+    fn arb_u64_bits() -> impl Strategy<Value = u64> {
+        prop_oneof![
+            0..=0xffff_ffff_ffff_u64,
+            (0..=0xffff_ffff_ffff_u64, 48..64_u32).prop_map(|(bits, bit)| bits | (1 << bit)),
+            any::<u64>(),
+        ]
     }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        #[test]
+        fn prop_from_u64_accepts_exactly_48_bit_values(bits in arb_u64_bits()) {
+            let mac = MacAddr::from_u64(bits);
+
+            prop_assert_eq!(bits < 1 << 48, mac.is_some());
+            if let Some(mac) = mac {
+                prop_assert_eq!(bits, mac.as_u64());
+                prop_assert_eq!(&bits.to_be_bytes()[2..], &mac.octets()[..]);
+            }
+            prop_assert_eq!(mac.ok_or(MacAddrParseError), MacAddr::try_from(bits));
+        }
+
+        #[test]
+        fn prop_mac_addr_u64_round_trips(mac in arb_mac_addr()) {
+            prop_assert_eq!(Some(mac), MacAddr::from_u64(mac.as_u64()));
+            prop_assert_eq!(Ok(mac), MacAddr::try_from(u64::from(mac)));
+        }
 
         #[test]
         fn prop_mac_addr_parse_display_roundtrip(mac in arb_mac_addr()) {

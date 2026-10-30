@@ -24,7 +24,10 @@
 //!   [`Ipv4Addr::to_bits`](core::net::Ipv4Addr::to_bits), and `from_bits`
 //!   rebuilds the network from them. `from_bits` normalizes the address, so
 //!   `from_bits(addr, mask).to_bits()` is `(addr & mask, mask)`.
-//!   [`MacAddr::octets`] and `From<[u8; 6]>` round-trip a MAC address.
+//!   [`MacAddr::octets`] and `From<[u8; 6]>` round-trip a MAC address, and so
+//!   do [`MacAddr::as_u64`] and [`MacAddr::from_u64`], which hold the octets in
+//!   the lower 48 bits of the integer, the first octet highest:
+//!   `MacAddr::from_u64(mac.as_u64())` is `Some(mac)`.
 
 #![cfg_attr(not(test), no_std)]
 #![deny(missing_docs)]
