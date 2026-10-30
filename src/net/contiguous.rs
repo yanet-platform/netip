@@ -1013,6 +1013,36 @@ impl<T> Deref for Contiguous<T> {
     }
 }
 
+impl<T> AsRef<T> for Contiguous<T> {
+    /// Borrows the wrapped network, as [`Deref`] does.
+    ///
+    /// This lets a slice of contiguous networks go to the functions that take
+    /// a slice of any `T: AsRef<Ipv4Network>` or `T: AsRef<Ipv6Network>`, such
+    /// as [`ipv4_binary_split`](crate::ipv4_binary_split) and
+    /// [`ipv6_binary_split`](crate::ipv6_binary_split).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, Ipv4Network, ipv4_binary_split};
+    ///
+    /// let mut nets: Vec<_> = ["127.0.0.1", "127.0.0.2", "127.0.0.3"]
+    ///     .iter()
+    ///     .map(|net| Contiguous::<Ipv4Network>::parse(net).unwrap())
+    ///     .collect();
+    ///
+    /// let (supernet, range) = ipv4_binary_split(&mut nets).unwrap();
+    /// assert_eq!(Ipv4Network::parse("127.0.0.2/31").unwrap(), supernet);
+    /// assert_eq!(1..3, range);
+    /// ```
+    #[inline]
+    fn as_ref(&self) -> &T {
+        match self {
+            Self(net) => net,
+        }
+    }
+}
+
 impl<T> Display for Contiguous<T>
 where
     T: Display,
@@ -1208,7 +1238,10 @@ mod test {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::net::test::{arb_contiguous_ipv6_network, arb_ipv4_network, arb_ipv6_network};
+    use crate::{
+        ipv4_binary_split, ipv6_binary_split,
+        net::test::{arb_contiguous_ipv6_network, arb_ipv4_network, arb_ipv6_network},
+    };
 
     #[test]
     fn contiguous_ipv4_addrs_slash24_matches_incrementing_u32() {
@@ -1930,6 +1963,44 @@ mod test {
             Err(ContiguousIpNetParseError::NonContiguousNetwork),
             Contiguous::<IpNetwork>::try_from(v6)
         );
+    }
+
+    #[test]
+    fn contiguous_as_ref_borrows_the_wrapped_network() {
+        let net = Contiguous::<Ipv4Network>::parse("192.168.0.0/16").unwrap();
+        assert!(core::ptr::eq(&*net, net.as_ref()));
+
+        let net = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        assert!(core::ptr::eq(&*net, net.as_ref()));
+
+        let net = Contiguous::<IpNetwork>::parse("2001:db8::/32").unwrap();
+        assert!(core::ptr::eq(&*net, net.as_ref()));
+    }
+
+    // The networks of `ipv4_binary_split`'s non-consecutive example, wrapped:
+    // the split moves `10.0.0.28/30` ahead of `10.0.0.25/32` in the slice of
+    // `Contiguous` itself.
+    #[test]
+    fn contiguous_ipv4_binary_split_through_as_ref() {
+        let nets = &[
+            "10.0.0.4/32",
+            "10.0.0.6/31",
+            "10.0.0.12/31",
+            "10.0.0.20/31",
+            "10.0.0.25/32",
+            "10.0.0.28/30",
+            "10.0.0.56/30",
+        ];
+        let mut nets: Vec<_> = nets
+            .iter()
+            .map(|net| Contiguous::<Ipv4Network>::parse(net).unwrap())
+            .collect();
+
+        let (supernet, range) = ipv4_binary_split(&mut nets).unwrap();
+        assert_eq!(Ipv4Network::parse("10.0.0.4/255.255.255.228").unwrap(), supernet);
+        assert_eq!(0..5, range);
+        assert_eq!(Contiguous::<Ipv4Network>::parse("10.0.0.28/30").unwrap(), nets[4]);
+        assert_eq!(Contiguous::<Ipv4Network>::parse("10.0.0.25/32").unwrap(), nets[5]);
     }
 
     // Classic fixpoint CIDR aggregation, used as an independent oracle for
@@ -2706,6 +2777,31 @@ mod test {
             if let Ok(converted) = result {
                 prop_assert_eq!(*converted, net);
             }
+        }
+
+        // Through `AsRef`, a slice of `Contiguous` splits exactly as the
+        // networks it wraps: the same supernet, often a non-contiguous one,
+        // the same block and the same reordering.
+        #[test]
+        fn prop_contiguous_ipv4_binary_split_matches_inner(nets in arb_clustered_contiguous_ipv4_networks()) {
+            let mut nets = nets;
+            nets.sort();
+            nets.dedup();
+            let mut inner: Vec<Ipv4Network> = nets.iter().map(|net| **net).collect();
+
+            prop_assert_eq!(ipv4_binary_split(&mut inner), ipv4_binary_split(&mut nets));
+            prop_assert_eq!(inner, nets.iter().map(|net| **net).collect::<Vec<_>>());
+        }
+
+        #[test]
+        fn prop_contiguous_ipv6_binary_split_matches_inner(nets in arb_clustered_contiguous_ipv6_networks()) {
+            let mut nets = nets;
+            nets.sort();
+            nets.dedup();
+            let mut inner: Vec<Ipv6Network> = nets.iter().map(|net| **net).collect();
+
+            prop_assert_eq!(ipv6_binary_split(&mut inner), ipv6_binary_split(&mut nets));
+            prop_assert_eq!(inner, nets.iter().map(|net| **net).collect::<Vec<_>>());
         }
 
         #[test]
