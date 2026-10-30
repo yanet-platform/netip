@@ -293,8 +293,8 @@ impl BiContiguous<Ipv6Network> {
     /// );
     ///
     /// // The lo half's 2 host bits are exhausted (0..=3); the next address
-    /// // carries into the hi half's single host bit instead of continuing
-    /// // numerically.
+    /// // carries into the hi half's single host bit. It is still the next
+    /// // member in ascending order.
     /// assert_eq!(
     ///     Some(Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 1, 0, 0x1234, 0, 0)),
     ///     addrs.next()

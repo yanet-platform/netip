@@ -2066,12 +2066,11 @@ impl Ipv4Network {
     /// positions (bits where the mask is zero) are filled with successive
     /// values `0 ..= 2^k - 1`, starting from the least-significant host bit.
     ///
-    /// For a standard (contiguous) CIDR mask this is equivalent to ascending
-    /// numeric order from [`addr()`](Ipv4Network::addr) to
-    /// [`last_addr()`](Ipv4Network::last_addr).
-    ///
-    /// For a non-contiguous mask the numeric order of the produced addresses
-    /// may differ from the iteration order.
+    /// For any mask, contiguous or not, this is ascending numeric order from
+    /// [`addr()`](Ipv4Network::addr) to
+    /// [`last_addr()`](Ipv4Network::last_addr): the index bits keep their
+    /// order of significance in the host positions, so a greater index
+    /// fills in a greater address.
     ///
     /// The iterator always implements [`DoubleEndedIterator`], and implements
     /// [`ExactSizeIterator`] on 64-bit targets only: the /0 network holds
@@ -2101,6 +2100,20 @@ impl Ipv4Network {
     /// assert_eq!(Some(Ipv4Addr::new(192, 168, 1, 254)), addrs.next_back());
     ///
     /// assert_eq!(Some(Ipv4Addr::new(192, 168, 1, 3)), addrs.next());
+    ///
+    /// // The host bits of `255.255.254.254` are the lowest bits of the last
+    /// // two octets. The addresses still come in ascending order.
+    /// let net = Ipv4Network::parse("10.0.0.0/255.255.254.254").unwrap();
+    /// let addrs: Vec<_> = net.addrs().collect();
+    /// assert_eq!(
+    ///     vec![
+    ///         Ipv4Addr::new(10, 0, 0, 0),
+    ///         Ipv4Addr::new(10, 0, 0, 1),
+    ///         Ipv4Addr::new(10, 0, 1, 0),
+    ///         Ipv4Addr::new(10, 0, 1, 1),
+    ///     ],
+    ///     addrs
+    /// );
     /// ```
     #[inline]
     #[must_use]
@@ -2222,7 +2235,8 @@ impl AsRef<Ipv4Network> for Ipv4Network {
 ///
 /// Yields addresses in host-index order: the *k* host positions (bits where the
 /// mask is zero) are filled with successive values `0 ..= 2^k - 1`, starting
-/// from the least-significant host bit.
+/// from the least-significant host bit. This is ascending numeric order for any
+/// mask, see [`Ipv4Network::addrs`].
 ///
 /// When the iterator is exhausted (`remaining == 0`) every subsequent call to
 /// [`next`](Iterator::next) or [`next_back`](DoubleEndedIterator::next_back)
@@ -3909,12 +3923,11 @@ impl Ipv6Network {
     /// positions (bits where the mask is zero) are filled with successive
     /// values `0 ..= 2^k - 1`, starting from the least-significant host bit.
     ///
-    /// For a standard (contiguous) CIDR mask this is equivalent to ascending
-    /// numeric order from [`addr()`](Ipv6Network::addr) to
-    /// [`last_addr()`](Ipv6Network::last_addr).
-    ///
-    /// For a non-contiguous mask the numeric order of the produced addresses
-    /// may differ from the iteration order.
+    /// For any mask, contiguous or not, this is ascending numeric order from
+    /// [`addr()`](Ipv6Network::addr) to
+    /// [`last_addr()`](Ipv6Network::last_addr): the index bits keep their
+    /// order of significance in the host positions, so a greater index
+    /// fills in a greater address.
     ///
     /// The iterator implements [`DoubleEndedIterator`].
     ///
@@ -3948,6 +3961,20 @@ impl Ipv6Network {
     /// assert_eq!(
     ///     Some(Ipv6Addr::new(0x2a02, 0x6b8, 0xc00, 0, 0, 0x1234, 0, 2)),
     ///     addrs.next()
+    /// );
+    ///
+    /// // The host bits of this mask are the lowest bits of the last two
+    /// // groups. The addresses still come in ascending order.
+    /// let net = Ipv6Network::parse("2001:db8::/ffff:ffff:ffff:ffff:ffff:ffff:fffe:fffe").unwrap();
+    /// let addrs: Vec<_> = net.addrs().collect();
+    /// assert_eq!(
+    ///     vec![
+    ///         Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+    ///         Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
+    ///         Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 1, 0),
+    ///         Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 1, 1),
+    ///     ],
+    ///     addrs
     /// );
     /// ```
     #[inline]
@@ -4016,7 +4043,8 @@ impl PartialOrd for Ipv6Network {
 ///
 /// Yields addresses in host-index order: the *k* host positions (bits where the
 /// mask is zero) are filled with successive values `0 ..= 2^k - 1`, starting
-/// from the least-significant host bit.
+/// from the least-significant host bit. This is ascending numeric order for any
+/// mask, see [`Ipv6Network::addrs`].
 ///
 /// When the iterator is exhausted (`remaining == 0`) every subsequent call to
 /// [`next`](Iterator::next) or [`next_back`](DoubleEndedIterator::next_back)
@@ -6224,6 +6252,36 @@ mod test {
     }
 
     proptest! {
+        // The order the docs of `addrs` promise for any mask. The masks keep at
+        // most five host bits, anywhere in the word, so every network drains.
+        #[test]
+        fn prop_ipv4_addrs_ascend_for_any_mask(addr in any::<u32>(), mask in arb_few_host_bits_u32()) {
+            let net = Ipv4Network::from_bits(addr, mask);
+
+            let forward: Vec<_> = net.addrs().collect();
+            prop_assert!(forward.windows(2).all(|w| w[0] < w[1]));
+            prop_assert_eq!(Some(net.addr()), forward.first());
+            prop_assert_eq!(Some(&net.last_addr()), forward.last());
+
+            let mut backward: Vec<_> = net.addrs().rev().collect();
+            backward.reverse();
+            prop_assert_eq!(forward, backward);
+        }
+
+        #[test]
+        fn prop_ipv6_addrs_ascend_for_any_mask(addr in any::<u128>(), mask in arb_few_host_bits_u128()) {
+            let net = Ipv6Network::from_bits(addr, mask);
+
+            let forward: Vec<_> = net.addrs().collect();
+            prop_assert!(forward.windows(2).all(|w| w[0] < w[1]));
+            prop_assert_eq!(Some(net.addr()), forward.first());
+            prop_assert_eq!(Some(&net.last_addr()), forward.last());
+
+            let mut backward: Vec<_> = net.addrs().rev().collect();
+            backward.reverse();
+            prop_assert_eq!(forward, backward);
+        }
+
         #[test]
         fn prop_ipv4_addrs_ends_match_host_index_reference(net in arb_ipv4_network()) {
             let host_bits = (!net.mask().to_bits()).count_ones();
