@@ -2828,5 +2828,16 @@ mod test {
             let second: Vec<_> = ipv6_aggregate_contiguous(&mut again).to_vec();
             prop_assert_eq!(first, second);
         }
+
+        #[test]
+        fn prop_contiguous_round_trips_through_display(
+            v4 in arb_contiguous_ipv4_network(),
+            v6 in arb_contiguous_ipv6_network(),
+            ip in arb_contiguous_ip_network(),
+        ) {
+            prop_assert_eq!(Ok(v4), v4.to_string().parse::<Contiguous<Ipv4Network>>());
+            prop_assert_eq!(Ok(v6), v6.to_string().parse::<Contiguous<Ipv6Network>>());
+            prop_assert_eq!(Ok(ip), ip.to_string().parse::<Contiguous<IpNetwork>>());
+        }
     }
 }

@@ -105,6 +105,8 @@ impl Display for Compact<IpNetwork> {
 
 #[cfg(test)]
 mod test {
+    use core::net::{Ipv4Addr, Ipv6Addr};
+
     use proptest::prelude::*;
 
     use super::Compact;
@@ -207,6 +209,41 @@ mod test {
         #[test]
         fn prop_ip_network_compact_delegates(net in arb_ipv4_network()) {
             prop_assert_eq!(Compact(IpNetwork::V4(net)).to_string(), Compact(net).to_string());
+        }
+
+        /// The compact text parses back to the network it came from, the bare
+        /// address of a host route included. A random mask is almost never all
+        /// ones, so host routes are drawn on their own.
+        #[test]
+        fn prop_ipv4_compact_round_trips(
+            net in prop_oneof![
+                arb_ipv4_network(),
+                any::<u32>().prop_map(|addr| Ipv4Network::from(Ipv4Addr::from_bits(addr))),
+            ],
+        ) {
+            prop_assert_eq!(Ok(net), Ipv4Network::parse(&Compact(net).to_string()));
+        }
+
+        #[test]
+        fn prop_ipv6_compact_round_trips(
+            net in prop_oneof![
+                arb_ipv6_network(),
+                any::<u128>().prop_map(|addr| Ipv6Network::from(Ipv6Addr::from_bits(addr))),
+            ],
+        ) {
+            prop_assert_eq!(Ok(net), Ipv6Network::parse(&Compact(net).to_string()));
+        }
+
+        #[test]
+        fn prop_ip_network_compact_round_trips(
+            net in prop_oneof![
+                arb_ipv4_network().prop_map(IpNetwork::V4),
+                arb_ipv6_network().prop_map(IpNetwork::V6),
+                any::<u32>().prop_map(|addr| IpNetwork::from(Ipv4Addr::from_bits(addr))),
+                any::<u128>().prop_map(|addr| IpNetwork::from(Ipv6Addr::from_bits(addr))),
+            ],
+        ) {
+            prop_assert_eq!(Ok(net), IpNetwork::parse(&Compact(net).to_string()));
         }
 
         /// Compact pads and truncates its whole text exactly as `str` does,

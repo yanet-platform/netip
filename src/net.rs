@@ -6852,6 +6852,24 @@ mod test {
         ]
     }
 
+    // `Display` writes an address in `::ffff:0:0/96` with a dotted IPv4 tail,
+    // for the network address and for an explicit mask alike. Random networks
+    // never take that shape, so the round trip is checked on it here.
+    #[test]
+    fn ipv6_display_round_trips_ipv4_mapped_forms() {
+        for (addr, mask) in [
+            (0xffff_c000_0201, u128::MAX),
+            (0xffff_c000_0200, u128::MAX << 8),
+            (0, 0xffff_ffff_ffff),
+            (0xffff_0000_0000, 0xffff_0000_0000),
+        ] {
+            let network = Ipv6Network::from_bits(addr, mask);
+            let text = network.to_string();
+            assert!(text.contains('.'), "{text} has no dotted tail");
+            assert_eq!(Ok(network), Ipv6Network::parse(&text), "{text}");
+        }
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(8192))]
 
@@ -6863,6 +6881,37 @@ mod test {
         #[test]
         fn prop_parse_ascii_round_trips_display_ipv6(network in arb_ipv6_network()) {
             prop_assert_eq!(Ok(network), Ipv6Network::parse_ascii(network.to_string().as_bytes()));
+        }
+
+        #[test]
+        fn prop_parse_round_trips_display_ip_network(
+            network in prop_oneof![
+                arb_ipv4_network().prop_map(IpNetwork::V4),
+                arb_ipv6_network().prop_map(IpNetwork::V6),
+            ],
+        ) {
+            prop_assert_eq!(Ok(network), IpNetwork::parse_ascii(network.to_string().as_bytes()));
+            prop_assert_eq!(Ok(network), network.to_string().parse::<IpNetwork>());
+        }
+
+        // `from_bits` keeps the mask, clears the address bits outside it, and
+        // rebuilds a network from its own `to_bits` unchanged.
+        #[test]
+        fn prop_ipv4_from_bits_round_trips_to_bits(addr in any::<u32>(), mask in any::<u32>()) {
+            let network = Ipv4Network::from_bits(addr, mask);
+            prop_assert_eq!((addr & mask, mask), network.to_bits());
+
+            let (addr, mask) = network.to_bits();
+            prop_assert_eq!(network, Ipv4Network::from_bits(addr, mask));
+        }
+
+        #[test]
+        fn prop_ipv6_from_bits_round_trips_to_bits(addr in any::<u128>(), mask in any::<u128>()) {
+            let network = Ipv6Network::from_bits(addr, mask);
+            prop_assert_eq!((addr & mask, mask), network.to_bits());
+
+            let (addr, mask) = network.to_bits();
+            prop_assert_eq!(network, Ipv6Network::from_bits(addr, mask));
         }
 
         #[test]
