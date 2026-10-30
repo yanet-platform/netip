@@ -49,6 +49,23 @@ impl Display for CidrOverflowError {
 
 impl Error for CidrOverflowError {}
 
+/// An error that is returned when an IP network of one version is converted
+/// to a network type of the other.
+///
+/// The `TryFrom` conversions from [`IpNetwork`] to [`Ipv4Network`] and
+/// [`Ipv6Network`] return it, as do those from [`Contiguous<IpNetwork>`] to
+/// [`Contiguous<Ipv4Network>`] and [`Contiguous<Ipv6Network>`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IpVersionMismatchError;
+
+impl Display for IpVersionMismatchError {
+    fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
+        write!(fmt, "IP version mismatch")
+    }
+}
+
+impl Error for IpVersionMismatchError {}
+
 /// Returns an [`Ipv4Addr`] that will have exact `cidr` leading bits set to
 /// one.
 ///
@@ -851,7 +868,8 @@ impl IpNetwork {
     ///
     /// [`Ipv6Network`] has no `From<IpNetwork>`: it would turn an IPv4 network
     /// and its IPv4-mapped counterpart into the same value, losing the family.
-    /// To take an IPv6 network out without embedding an IPv4 one, match on
+    /// To take an IPv6 network out without embedding an IPv4 one, use
+    /// `Ipv6Network::try_from`, which fails on an IPv4 network, or match on
     /// [`IpNetwork::V6`].
     ///
     /// [IPv4-mapped IPv6 address]: https://tools.ietf.org/html/rfc4291#section-2.5.5.2
@@ -877,7 +895,8 @@ impl IpNetwork {
     /// use netip::{IpNetwork, Ipv6Network};
     ///
     /// fn widen(net: IpNetwork) -> Ipv6Network {
-    ///     // No `From`: write `net.to_ipv6_mapped()`, or match on `IpNetwork::V6`.
+    ///     // No `From`: write `net.to_ipv6_mapped()`, or `Ipv6Network::try_from(net)`,
+    ///     // which rejects IPv4.
     ///     Ipv6Network::from(net)
     /// }
     /// ```
@@ -2374,6 +2393,46 @@ impl TryFrom<(Ipv4Addr, u8)> for Ipv4Network {
     fn try_from((addr, cidr): (Ipv4Addr, u8)) -> Result<Self, Self::Error> {
         let mask = ipv4_mask_from_cidr(cidr)?;
         Ok(Self::new(addr, mask))
+    }
+}
+
+impl TryFrom<IpNetwork> for Ipv4Network {
+    type Error = IpVersionMismatchError;
+
+    /// Converts an [`IpNetwork`] into an [`Ipv4Network`], failing with
+    /// [`IpVersionMismatchError`] if it is an IPv6 network.
+    ///
+    /// The conversion is strict: an IPv4-mapped IPv6 network fails too. To
+    /// accept one, convert the result of [`IpNetwork::to_canonical`] instead.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{IpNetwork, IpVersionMismatchError, Ipv4Network};
+    ///
+    /// let net = IpNetwork::parse("10.0.0.0/255.0.255.0").unwrap();
+    /// assert_eq!(
+    ///     Ok(Ipv4Network::parse("10.0.0.0/255.0.255.0").unwrap()),
+    ///     Ipv4Network::try_from(net)
+    /// );
+    ///
+    /// let net = IpNetwork::parse("2001:db8::/32").unwrap();
+    /// assert_eq!(Err(IpVersionMismatchError), Ipv4Network::try_from(net));
+    ///
+    /// // An IPv4-mapped network converts only in its canonical form.
+    /// let net = IpNetwork::parse("::ffff:10.0.0.0/104").unwrap();
+    /// assert_eq!(Err(IpVersionMismatchError), Ipv4Network::try_from(net));
+    /// assert_eq!(
+    ///     Ok(Ipv4Network::parse("10.0.0.0/8").unwrap()),
+    ///     Ipv4Network::try_from(net.to_canonical())
+    /// );
+    /// ```
+    #[inline]
+    fn try_from(net: IpNetwork) -> Result<Self, Self::Error> {
+        match net {
+            IpNetwork::V4(net) => Ok(net),
+            IpNetwork::V6(..) => Err(IpVersionMismatchError),
+        }
     }
 }
 
@@ -5123,6 +5182,42 @@ impl TryFrom<(Ipv6Addr, u8)> for Ipv6Network {
     fn try_from((addr, cidr): (Ipv6Addr, u8)) -> Result<Self, Self::Error> {
         let mask = ipv6_mask_from_cidr(cidr)?;
         Ok(Ipv6Network::new(addr, mask))
+    }
+}
+
+impl TryFrom<IpNetwork> for Ipv6Network {
+    type Error = IpVersionMismatchError;
+
+    /// Converts an [`IpNetwork`] into an [`Ipv6Network`], failing with
+    /// [`IpVersionMismatchError`] if it is an IPv4 network.
+    ///
+    /// The conversion is strict: an IPv4 network is not embedded. To embed it
+    /// as an IPv4-mapped network, call [`IpNetwork::to_ipv6_mapped`] instead.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{IpNetwork, IpVersionMismatchError, Ipv6Network};
+    ///
+    /// let net = IpNetwork::parse("2001:db8::/ffff:ffff::ffff:0:0:0").unwrap();
+    /// assert_eq!(
+    ///     Ok(Ipv6Network::parse("2001:db8::/ffff:ffff::ffff:0:0:0").unwrap()),
+    ///     Ipv6Network::try_from(net)
+    /// );
+    ///
+    /// let net = IpNetwork::parse("10.0.0.0/8").unwrap();
+    /// assert_eq!(Err(IpVersionMismatchError), Ipv6Network::try_from(net));
+    /// assert_eq!(
+    ///     Ipv6Network::parse("::ffff:10.0.0.0/104").unwrap(),
+    ///     net.to_ipv6_mapped()
+    /// );
+    /// ```
+    #[inline]
+    fn try_from(net: IpNetwork) -> Result<Self, Self::Error> {
+        match net {
+            IpNetwork::V4(..) => Err(IpVersionMismatchError),
+            IpNetwork::V6(net) => Ok(net),
+        }
     }
 }
 
@@ -9023,6 +9118,12 @@ mod test {
         assert_clone_eq(err);
         assert_clone_eq(ipv6_mask_from_cidr(129).unwrap_err());
 
+        let err = Ipv4Network::try_from(IpNetwork::parse("2001:db8::/32").unwrap()).unwrap_err();
+        // `IpVersionMismatchError` is `Copy` as well.
+        let copy = err;
+        assert_eq!(err, copy);
+        assert_clone_eq(err);
+
         assert_clone_eq(IpNetwork::parse("10.0.0.0/33").unwrap_err());
         assert_clone_eq(IpNetwork::parse("10.0.0.256/8").unwrap_err());
 
@@ -9045,6 +9146,15 @@ mod test {
         let err = Ipv4Network::try_from((Ipv4Addr::new(10, 0, 0, 0), 33)).unwrap_err();
         let boxed: Box<dyn Error> = Box::new(err);
         assert_eq!("invalid CIDR: 33 must be <= 32", boxed.to_string());
+    }
+
+    #[test]
+    fn ip_version_mismatch_error_implements_error() {
+        let err = Ipv6Network::try_from(IpNetwork::parse("10.0.0.0/8").unwrap()).unwrap_err();
+        assert_eq!("IP version mismatch", format!("{err}"));
+
+        let boxed: Box<dyn Error> = Box::new(err);
+        assert_eq!("IP version mismatch", boxed.to_string());
     }
 
     #[test]
@@ -11186,6 +11296,51 @@ mod test {
         // top 96 bits, so collapsing to IPv4 would lose addresses.
         let net = IpNetwork::parse("::ffff:c0a8:1/0:ffff:ffff:ffff:ffff:ffff:ffff:ffff").unwrap();
         assert_eq!(net, net.to_canonical());
+    }
+
+    #[test]
+    fn ipv4_network_try_from_ipnetwork() {
+        let net = Ipv4Network::parse("192.168.1.0/24").unwrap();
+        assert_eq!(Ok(net), Ipv4Network::try_from(IpNetwork::V4(net)));
+
+        let net = Ipv4Network::parse("192.168.0.1/255.255.0.255").unwrap();
+        assert_eq!(Ok(net), Ipv4Network::try_from(IpNetwork::V4(net)));
+
+        let net = IpNetwork::parse("2001:db8::/32").unwrap();
+        assert_eq!(Err(IpVersionMismatchError), Ipv4Network::try_from(net));
+    }
+
+    // Strict: an IPv4-mapped network is IPv6 until `to_canonical` collapses it.
+    #[test]
+    fn ipv4_network_try_from_ipnetwork_v6_mapped_needs_to_canonical() {
+        let net = IpNetwork::parse("::ffff:c0a8:1/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ff").unwrap();
+        assert_eq!(Err(IpVersionMismatchError), Ipv4Network::try_from(net));
+
+        let expected = Ipv4Network::parse("192.168.0.1/255.255.0.255").unwrap();
+        assert_eq!(Ok(expected), Ipv4Network::try_from(net.to_canonical()));
+    }
+
+    #[test]
+    fn ipv6_network_try_from_ipnetwork() {
+        let net = Ipv6Network::parse("2001:db8::/32").unwrap();
+        assert_eq!(Ok(net), Ipv6Network::try_from(IpNetwork::V6(net)));
+
+        let net = Ipv6Network::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        assert_eq!(Ok(net), Ipv6Network::try_from(IpNetwork::V6(net)));
+
+        // An IPv4-mapped network is an IPv6 one.
+        let net = Ipv6Network::parse("::ffff:c0a8:100/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ff00").unwrap();
+        assert_eq!(Ok(net), Ipv6Network::try_from(IpNetwork::V6(net)));
+    }
+
+    // Strict: unlike `to_ipv6_mapped`, the conversion does not embed IPv4.
+    #[test]
+    fn ipv6_network_try_from_ipnetwork_v4_is_not_embedded() {
+        let net = IpNetwork::parse("192.168.1.0/24").unwrap();
+        assert_eq!(Err(IpVersionMismatchError), Ipv6Network::try_from(net));
+
+        let net = IpNetwork::parse("192.168.0.1/255.255.0.255").unwrap();
+        assert_eq!(Err(IpVersionMismatchError), Ipv6Network::try_from(net));
     }
 
     #[test]
@@ -13572,6 +13727,31 @@ mod test {
             let ip_net = IpNetwork::V4(net4);
             let roundtrip = IpNetwork::from(ip_net.to_ipv6_mapped()).to_canonical();
             prop_assert_eq!(ip_net, roundtrip);
+        }
+
+        // Only the narrowing to the network's own version succeeds, and it
+        // returns the very network `From` wrapped.
+        #[test]
+        fn prop_ipnetwork_try_from_v4_narrows_to_ipv4_only(net4 in arb_ipv4_network()) {
+            let ip_net = IpNetwork::from(net4);
+            prop_assert_eq!(Ok(net4), Ipv4Network::try_from(ip_net));
+            prop_assert_eq!(Err(IpVersionMismatchError), Ipv6Network::try_from(ip_net));
+        }
+
+        #[test]
+        fn prop_ipnetwork_try_from_v6_narrows_to_ipv6_only(net6 in arb_ipv6_network()) {
+            let ip_net = IpNetwork::from(net6);
+            prop_assert_eq!(Ok(net6), Ipv6Network::try_from(ip_net));
+            prop_assert_eq!(Err(IpVersionMismatchError), Ipv4Network::try_from(ip_net));
+        }
+
+        // A random IPv6 network is almost never IPv4-mapped, so build one.
+        #[test]
+        fn prop_ipnetwork_try_from_v6_mapped_needs_to_canonical(net4 in arb_ipv4_network()) {
+            let ip_net = IpNetwork::from(net4.to_ipv6_mapped());
+            prop_assert_eq!(Ok(net4.to_ipv6_mapped()), Ipv6Network::try_from(ip_net));
+            prop_assert_eq!(Err(IpVersionMismatchError), Ipv4Network::try_from(ip_net));
+            prop_assert_eq!(Ok(net4), Ipv4Network::try_from(ip_net.to_canonical()));
         }
 
         // The motivating use case for `to_ipv6_mapped`: lifting IPv4 networks into
