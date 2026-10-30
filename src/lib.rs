@@ -5,6 +5,26 @@
 //!
 //! Unlike most open-source libraries, this library is designed to support
 //! non-contiguous masks.
+//!
+//! # Stable forms
+//!
+//! netip has no dependencies, so integrations such as serialization live in
+//! other crates. Two forms of the values are part of the stable API for them
+//! to build on. Changing either is a breaking change: it ships in a minor
+//! version bump while netip is `0.x`, and in a major one from `1.0` on.
+//!
+//! - **Text.** The [`Display`](core::fmt::Display) text of every network type,
+//!   of [`fmt::Compact`] and of [`MacAddr`] does not change, and parsing reads
+//!   it back: for a value `v` of type `T`, `v.to_string().parse::<T>()` returns
+//!   `Ok(v)`, as do `T::parse` and `T::parse_ascii` where `T` has them. The
+//!   same holds for the text of `Compact(v)`. Only the plain text is covered: a
+//!   width or a precision in the format string pads or truncates it.
+//! - **Bits.** [`Ipv4Network::to_bits`] and [`Ipv6Network::to_bits`] return the
+//!   address and the mask as integers in the bit order of
+//!   [`Ipv4Addr::to_bits`](core::net::Ipv4Addr::to_bits), and `from_bits`
+//!   rebuilds the network from them. `from_bits` normalizes the address, so
+//!   `from_bits(addr, mask).to_bits()` is `(addr & mask, mask)`.
+//!   [`MacAddr::octets`] and `From<[u8; 6]>` round-trip a MAC address.
 
 #![cfg_attr(not(test), no_std)]
 #![deny(missing_docs)]
