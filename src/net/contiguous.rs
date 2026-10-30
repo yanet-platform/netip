@@ -16,7 +16,7 @@ use super::{
 };
 
 /// An error that occurs when parsing a contiguous IP network.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContiguousIpNetParseError {
     /// The network is not contiguous.
     NonContiguousNetwork,

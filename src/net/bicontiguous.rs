@@ -17,7 +17,7 @@ use super::{IpNetParseError, Ipv6Network};
 use crate::Contiguous;
 
 /// An error that occurs when parsing a bi-contiguous IP network.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BiContiguousIpNetParseError {
     /// The network's mask is not bi-contiguous.
     NonBiContiguousNetwork,
