@@ -19,8 +19,13 @@ use core::{
 mod bicontiguous;
 mod contiguous;
 
-pub use bicontiguous::{BiContiguous, BiContiguousIpNetParseError, ipv6_aggregate_bicontiguous};
-pub use contiguous::{Contiguous, ContiguousIpNetParseError, ipv4_aggregate_contiguous, ipv6_aggregate_contiguous};
+pub use bicontiguous::{
+    BiContiguous, BiContiguousIpNetParseError, BiContiguousIpv6NetworkAddrs, ipv6_aggregate_bicontiguous,
+};
+pub use contiguous::{
+    Contiguous, ContiguousIpNetParseError, ContiguousIpv4NetworkAddrs, ContiguousIpv6NetworkAddrs,
+    ipv4_aggregate_contiguous, ipv6_aggregate_contiguous,
+};
 
 use crate::{
     fmt::DisplayBuffer,

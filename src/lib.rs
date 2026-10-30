@@ -8,6 +8,7 @@
 
 #![cfg_attr(not(test), no_std)]
 #![deny(missing_docs)]
+#![deny(unnameable_types)]
 #![forbid(unsafe_code)]
 
 pub mod fmt;
@@ -17,8 +18,9 @@ mod parser;
 
 pub use macaddr::{MacAddr, MacAddrParseError};
 pub use net::{
-    BiContiguous, BiContiguousIpNetParseError, CidrOverflowError, Contiguous, ContiguousIpNetParseError, IpNetwork,
-    Ipv4Network, Ipv4NetworkAddrs, Ipv4NetworkDiff, Ipv4RangeNetworks, Ipv6Network, Ipv6NetworkAddrs, Ipv6NetworkDiff,
+    BiContiguous, BiContiguousIpNetParseError, BiContiguousIpv6NetworkAddrs, CidrOverflowError, Contiguous,
+    ContiguousIpNetParseError, ContiguousIpv4NetworkAddrs, ContiguousIpv6NetworkAddrs, IpNetwork, Ipv4Network,
+    Ipv4NetworkAddrs, Ipv4NetworkDiff, Ipv4RangeNetworks, Ipv6Network, Ipv6NetworkAddrs, Ipv6NetworkDiff,
     Ipv6RangeNetworks, ipv4_aggregate, ipv4_aggregate_contiguous, ipv4_binary_split, ipv4_range_to_networks,
     ipv6_aggregate, ipv6_aggregate_bicontiguous, ipv6_aggregate_contiguous, ipv6_binary_split, ipv6_range_to_networks,
 };
