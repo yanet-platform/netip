@@ -853,6 +853,48 @@ impl IpNetwork {
         }
     }
 
+    /// Returns the network one mask bit wider, or [`None`] for a network whose
+    /// mask is zero.
+    ///
+    /// Dispatches to [`Ipv4Network::supernet`] or [`Ipv6Network::supernet`]:
+    /// the lowest set bit of the mask is cleared, which shortens the prefix of
+    /// a contiguous network by one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::IpNetwork;
+    ///
+    /// let net = IpNetwork::parse("192.168.1.0/24").unwrap();
+    /// assert_eq!(
+    ///     Some(IpNetwork::parse("192.168.0.0/23").unwrap()),
+    ///     net.supernet()
+    /// );
+    ///
+    /// let net = IpNetwork::parse("2001:db8:1::/48").unwrap();
+    /// assert_eq!(
+    ///     Some(IpNetwork::parse("2001:db8::/47").unwrap()),
+    ///     net.supernet()
+    /// );
+    ///
+    /// assert_eq!(None, IpNetwork::parse("::/0").unwrap().supernet());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn supernet(&self) -> Option<Self> {
+        // NOTE: use `Option::map` when it becomes const.
+        match self {
+            Self::V4(net) => match net.supernet() {
+                Some(net) => Some(Self::V4(net)),
+                None => None,
+            },
+            Self::V6(net) => match net.supernet() {
+                Some(net) => Some(Self::V6(net)),
+                None => None,
+            },
+        }
+    }
+
     /// Embeds this network into IPv6 address space.
     ///
     /// An IPv4 network is embedded as its [IPv4-mapped IPv6 address]
@@ -1980,6 +2022,51 @@ impl Ipv4Network {
         }
 
         None
+    }
+
+    /// Returns the network one mask bit wider: this network with the lowest
+    /// set bit of its mask cleared, or [`None`] if the mask is zero.
+    ///
+    /// For a contiguous network this is the network one prefix bit shorter,
+    /// the `/23` that holds a `/24`. For any mask, the result holds this
+    /// network and its sibling, the network that differs from it only in the
+    /// lowest mask bit: it is what
+    /// [`merge_by_lowest_mask_bit`](Self::merge_by_lowest_mask_bit) returns
+    /// for the two, with twice the addresses of either.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv4Network;
+    ///
+    /// let net = Ipv4Network::parse("172.16.1.0/24").unwrap();
+    /// assert_eq!(
+    ///     Some(Ipv4Network::parse("172.16.0.0/23").unwrap()),
+    ///     net.supernet()
+    /// );
+    ///
+    /// // The lowest set bit of `255.255.0.255` is the last one.
+    /// let net = Ipv4Network::parse("10.0.0.1/255.255.0.255").unwrap();
+    /// assert_eq!(
+    ///     Some(Ipv4Network::parse("10.0.0.0/255.255.0.254").unwrap()),
+    ///     net.supernet()
+    /// );
+    ///
+    /// // `/0` has no supernet.
+    /// assert_eq!(None, Ipv4Network::parse("0.0.0.0/0").unwrap().supernet());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn supernet(&self) -> Option<Self> {
+        let (addr, mask) = self.to_bits();
+        if mask == 0 {
+            return None;
+        }
+
+        // NOTE: the cleared mask bit may be set in the address, so the address
+        // is normalized by the new mask.
+        let mask = mask & mask.wrapping_sub(1);
+        Some(Self(Ipv4Addr::from_bits(addr & mask), Ipv4Addr::from_bits(mask)))
     }
 
     /// Converts this network to an IPv4-mapped IPv6 network.
@@ -4205,6 +4292,51 @@ impl Ipv6Network {
         }
 
         None
+    }
+
+    /// Returns the network one mask bit wider: this network with the lowest
+    /// set bit of its mask cleared, or [`None`] if the mask is zero.
+    ///
+    /// For a contiguous network this is the network one prefix bit shorter,
+    /// the `/47` that holds a `/48`. For any mask, the result holds this
+    /// network and its sibling, the network that differs from it only in the
+    /// lowest mask bit: it is what
+    /// [`merge_by_lowest_mask_bit`](Self::merge_by_lowest_mask_bit) returns
+    /// for the two, with twice the addresses of either.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv6Network;
+    ///
+    /// let net = Ipv6Network::parse("2001:db8:1::/48").unwrap();
+    /// assert_eq!(
+    ///     Some(Ipv6Network::parse("2001:db8::/47").unwrap()),
+    ///     net.supernet()
+    /// );
+    ///
+    /// // The lowest set bit of the mask is the last one of its fifth group.
+    /// let net = Ipv6Network::parse("2001:db8::1:0:0:0/ffff:ffff::ffff:0:0:0").unwrap();
+    /// assert_eq!(
+    ///     Some(Ipv6Network::parse("2001:db8::/ffff:ffff::fffe:0:0:0").unwrap()),
+    ///     net.supernet()
+    /// );
+    ///
+    /// // `/0` has no supernet.
+    /// assert_eq!(None, Ipv6Network::parse("::/0").unwrap().supernet());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn supernet(&self) -> Option<Self> {
+        let (addr, mask) = self.to_bits();
+        if mask == 0 {
+            return None;
+        }
+
+        // NOTE: the cleared mask bit may be set in the address, so the address
+        // is normalized by the new mask.
+        let mask = mask & mask.wrapping_sub(1);
+        Some(Self(Ipv6Addr::from_bits(addr & mask), Ipv6Addr::from_bits(mask)))
     }
 
     /// Returns the last address in this IPv6 network.
@@ -10775,6 +10907,190 @@ mod test {
         let v6 = IpNetwork::parse("2001:db8::/32").unwrap();
         assert_eq!(None, v4.merge_by_lowest_mask_bit(&v6));
         assert_eq!(None, v6.merge_by_lowest_mask_bit(&v4));
+    }
+
+    #[test]
+    fn ipv4_supernet_contiguous() {
+        let cases = [
+            // The cleared mask bit is set in the address: it is cleared there too.
+            ("172.16.1.0/24", "172.16.0.0/23"),
+            ("172.16.0.0/24", "172.16.0.0/23"),
+            ("10.0.0.1/32", "10.0.0.0/31"),
+            ("128.0.0.0/1", "0.0.0.0/0"),
+        ];
+        for (net, expected) in cases {
+            let expected = Ipv4Network::parse(expected).unwrap();
+            assert_eq!(Some(expected), Ipv4Network::parse(net).unwrap().supernet(), "{net}");
+        }
+
+        assert_eq!(None, Ipv4Network::parse("0.0.0.0/0").unwrap().supernet());
+    }
+
+    #[test]
+    fn ipv4_supernet_non_contiguous() {
+        let cases = [
+            ("10.0.0.1/255.255.0.255", "10.0.0.0/255.255.0.254"),
+            ("10.0.1.0/255.0.255.0", "10.0.0.0/255.0.254.0"),
+            // A single mask bit, wherever it is, leaves `/0`.
+            ("0.0.1.0/0.0.1.0", "0.0.0.0/0"),
+        ];
+        for (net, expected) in cases {
+            let expected = Ipv4Network::parse(expected).unwrap();
+            assert_eq!(Some(expected), Ipv4Network::parse(net).unwrap().supernet(), "{net}");
+        }
+    }
+
+    #[test]
+    fn ipv6_supernet_contiguous() {
+        let cases = [
+            ("2001:db8:1::/48", "2001:db8::/47"),
+            ("2001:db8::/48", "2001:db8::/47"),
+            ("2001:db8::1/128", "2001:db8::/127"),
+            ("8000::/1", "::/0"),
+        ];
+        for (net, expected) in cases {
+            let expected = Ipv6Network::parse(expected).unwrap();
+            assert_eq!(Some(expected), Ipv6Network::parse(net).unwrap().supernet(), "{net}");
+        }
+
+        assert_eq!(None, Ipv6Network::parse("::/0").unwrap().supernet());
+    }
+
+    #[test]
+    fn ipv6_supernet_non_contiguous() {
+        let cases = [
+            (
+                "2001:db8::1:0:0:0/ffff:ffff::ffff:0:0:0",
+                "2001:db8::/ffff:ffff::fffe:0:0:0",
+            ),
+            // The lowest set bit is in the low 64 bits: the high half is kept.
+            (
+                "2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0",
+                "2a02:6b8:c00::1234:abcc:0:0/ffff:ffff:ff00::ffff:fffe:0:0",
+            ),
+            // The low half's lone mask bit goes, leaving a plain `/32`.
+            ("::8000:0:0:0/ffff:ffff:0:0:8000::", "::/32"),
+        ];
+        for (net, expected) in cases {
+            let expected = Ipv6Network::parse(expected).unwrap();
+            assert_eq!(Some(expected), Ipv6Network::parse(net).unwrap().supernet(), "{net}");
+        }
+    }
+
+    #[test]
+    fn ip_supernet_dispatches_by_family() {
+        let net = IpNetwork::parse("192.168.1.0/24").unwrap();
+        assert_eq!(Some(IpNetwork::parse("192.168.0.0/23").unwrap()), net.supernet());
+
+        let net = IpNetwork::parse("2001:db8:1::/48").unwrap();
+        assert_eq!(Some(IpNetwork::parse("2001:db8::/47").unwrap()), net.supernet());
+
+        assert_eq!(None, IpNetwork::parse("0.0.0.0/0").unwrap().supernet());
+        assert_eq!(None, IpNetwork::parse("::/0").unwrap().supernet());
+    }
+
+    proptest! {
+        // Exactly the lowest set bit of the mask is cleared, in the address
+        // too, so the supernet contains the network and has one more host bit.
+        #[test]
+        fn prop_ipv4_supernet_clears_lowest_mask_bit(net in arb_ipv4_network()) {
+            let (addr, mask) = net.to_bits();
+            match net.supernet() {
+                None => prop_assert_eq!(0, mask),
+                Some(supernet) => {
+                    let (super_addr, super_mask) = supernet.to_bits();
+                    prop_assert_eq!(mask & mask.wrapping_neg(), mask ^ super_mask);
+                    prop_assert_eq!(addr & super_mask, super_addr);
+                    prop_assert!(supernet.contains(&net));
+                    prop_assert_eq!(net.host_bits() + 1, supernet.host_bits());
+                }
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_supernet_clears_lowest_mask_bit(net in arb_ipv6_network()) {
+            let (addr, mask) = net.to_bits();
+            match net.supernet() {
+                None => prop_assert_eq!(0, mask),
+                Some(supernet) => {
+                    let (super_addr, super_mask) = supernet.to_bits();
+                    prop_assert_eq!(mask & mask.wrapping_neg(), mask ^ super_mask);
+                    prop_assert_eq!(addr & super_mask, super_addr);
+                    prop_assert!(supernet.contains(&net));
+                    prop_assert_eq!(net.host_bits() + 1, supernet.host_bits());
+                }
+            }
+        }
+
+        // The supernet is what `merge_by_lowest_mask_bit` makes of the network
+        // and its sibling across the lowest mask bit.
+        #[test]
+        fn prop_ipv4_supernet_is_merge_with_sibling(net in arb_ipv4_network()) {
+            let (addr, mask) = net.to_bits();
+            prop_assume!(mask != 0);
+            let sibling = Ipv4Network::from_bits(addr ^ (mask & mask.wrapping_neg()), mask);
+            prop_assert_eq!(net.merge_by_lowest_mask_bit(&sibling), net.supernet());
+        }
+
+        #[test]
+        fn prop_ipv6_supernet_is_merge_with_sibling(net in arb_ipv6_network()) {
+            let (addr, mask) = net.to_bits();
+            prop_assume!(mask != 0);
+            let sibling = Ipv6Network::from_bits(addr ^ (mask & mask.wrapping_neg()), mask);
+            prop_assert_eq!(net.merge_by_lowest_mask_bit(&sibling), net.supernet());
+        }
+
+        // For a contiguous network the supernet is the network of the same
+        // address one prefix bit shorter.
+        #[test]
+        fn prop_ipv4_supernet_shortens_prefix(addr in any::<u32>(), prefix in 0u8..=32) {
+            let addr = Ipv4Addr::from_bits(addr);
+            let net = Ipv4Network::try_from((addr, prefix)).unwrap();
+            let expected = prefix.checked_sub(1).map(|prefix| Ipv4Network::try_from((addr, prefix)).unwrap());
+            prop_assert_eq!(expected, net.supernet());
+        }
+
+        #[test]
+        fn prop_ipv6_supernet_shortens_prefix(addr in any::<u128>(), prefix in 0u8..=128) {
+            let addr = Ipv6Addr::from_bits(addr);
+            let net = Ipv6Network::try_from((addr, prefix)).unwrap();
+            let expected = prefix.checked_sub(1).map(|prefix| Ipv6Network::try_from((addr, prefix)).unwrap());
+            prop_assert_eq!(expected, net.supernet());
+        }
+
+        // Every step clears one mask bit, so the chain reaches `/0` after as
+        // many steps as the mask has set bits, and stops there.
+        #[test]
+        fn prop_ipv4_supernet_chain_ends_at_unspecified(net in arb_ipv4_network()) {
+            let (.., mask) = net.to_bits();
+            let mut net = net;
+            for _ in 0..mask.count_ones() {
+                net = net.supernet().unwrap();
+            }
+            prop_assert_eq!(Ipv4Network::from_bits(0, 0), net);
+            prop_assert_eq!(None, net.supernet());
+        }
+
+        #[test]
+        fn prop_ipv6_supernet_chain_ends_at_unspecified(net in arb_ipv6_network()) {
+            let (.., mask) = net.to_bits();
+            let mut net = net;
+            for _ in 0..mask.count_ones() {
+                net = net.supernet().unwrap();
+            }
+            prop_assert_eq!(Ipv6Network::from_bits(0, 0), net);
+            prop_assert_eq!(None, net.supernet());
+        }
+
+        #[test]
+        fn prop_ip_supernet_matches_inner_v4(net in arb_ipv4_network()) {
+            prop_assert_eq!(net.supernet().map(IpNetwork::V4), IpNetwork::V4(net).supernet());
+        }
+
+        #[test]
+        fn prop_ip_supernet_matches_inner_v6(net in arb_ipv6_network()) {
+            prop_assert_eq!(net.supernet().map(IpNetwork::V6), IpNetwork::V6(net).supernet());
+        }
     }
 
     #[test]

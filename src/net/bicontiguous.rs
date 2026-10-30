@@ -395,6 +395,57 @@ impl BiContiguous<Ipv6Network> {
             },
         }
     }
+
+    /// Returns the network one mask bit wider, or [`None`] for a `/0`: the
+    /// low half's prefix one bit shorter, or the high half's if the low one
+    /// is already 0.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{BiContiguous, Ipv6Network};
+    ///
+    /// let net = BiContiguous::<Ipv6Network>::parse(
+    ///     "2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0",
+    /// )
+    /// .unwrap();
+    /// let supernet = net.supernet().unwrap();
+    /// assert_eq!(40, supernet.hi_prefix());
+    /// assert_eq!(31, supernet.lo_prefix());
+    ///
+    /// // The low half's prefix is 0, so the high half's shrinks.
+    /// let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
+    /// let supernet = net.supernet().unwrap();
+    /// assert_eq!(39, supernet.hi_prefix());
+    /// assert_eq!(0, supernet.lo_prefix());
+    ///
+    /// assert_eq!(
+    ///     None,
+    ///     BiContiguous::<Ipv6Network>::parse("::/0")
+    ///         .unwrap()
+    ///         .supernet()
+    /// );
+    /// ```
+    ///
+    /// # Why overridden?
+    ///
+    /// The bi-contiguous class is closed under clearing the lowest mask bit:
+    /// that bit ends the low half's run of ones, or the high half's when the
+    /// low half has none, so the result is itself bi-contiguous and is
+    /// returned as `Option<Self>` with no re-validation. This is a closure/type
+    /// win, not a speed win -- the op count matches the general
+    /// [`Ipv6Network::supernet`] it delegates to.
+    #[inline]
+    #[must_use]
+    pub const fn supernet(&self) -> Option<Self> {
+        // NOTE: use `Option::map` when it becomes const.
+        match self {
+            Self(net) => match net.supernet() {
+                Some(net) => Some(Self(net)),
+                None => None,
+            },
+        }
+    }
 }
 
 impl BiContiguousIpv6NetworkAddrs {
@@ -1327,6 +1378,28 @@ mod test {
     }
 
     #[test]
+    fn bicontiguous_ipv6_network_supernet() {
+        // The low half's run shrinks first.
+        let net =
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        let expected =
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcc:0:0/ffff:ffff:ff00::ffff:fffe:0:0").unwrap();
+        assert_eq!(Some(expected), net.supernet());
+
+        // A lone low-half bit goes, leaving a plain `/32`.
+        let net = BiContiguous::<Ipv6Network>::parse("::8000:0:0:0/ffff:ffff:0:0:8000::").unwrap();
+        let expected = BiContiguous::<Ipv6Network>::parse("::/32").unwrap();
+        assert_eq!(Some(expected), net.supernet());
+
+        // With an empty low half, the high half's run shrinks.
+        let net = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
+        let expected = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::/39").unwrap();
+        assert_eq!(Some(expected), net.supernet());
+
+        assert_eq!(None, BiContiguous::<Ipv6Network>::parse("::/0").unwrap().supernet());
+    }
+
+    #[test]
     fn bicontiguous_ipv6_network_as_ref_borrows_the_wrapped_network() {
         let net =
             BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
@@ -1757,6 +1830,25 @@ mod test {
         fn prop_bicontiguous_ipv6_from_contiguous_preserves_value(net in arb_contiguous_ipv6_network()) {
             let converted = BiContiguous::<Ipv6Network>::from(net);
             prop_assert_eq!(*converted, *net);
+        }
+
+        // The typed supernet wraps the general one: the low half's prefix
+        // shrinks by one, or the high half's when the low one is 0, and the
+        // result stays bi-contiguous.
+        #[test]
+        fn prop_bicontiguous_ipv6_supernet_shrinks_low_prefix_first(net in arb_bicontiguous_ipv6_network()) {
+            let (hi, lo) = (net.hi_prefix(), net.lo_prefix());
+            let supernet = net.supernet();
+
+            prop_assert_eq!((*net).supernet(), supernet.map(|net| *net));
+            match supernet {
+                None => prop_assert_eq!((0, 0), (hi, lo)),
+                Some(supernet) => {
+                    let expected = if lo > 0 { (hi, lo - 1) } else { (hi - 1, 0) };
+                    prop_assert_eq!(expected, (supernet.hi_prefix(), supernet.lo_prefix()));
+                    prop_assert!((*supernet).is_bicontiguous());
+                }
+            }
         }
 
         // Through `AsRef`, a slice of `BiContiguous` splits exactly as the
