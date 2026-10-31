@@ -195,7 +195,10 @@ mod test {
     use super::{Compact, MacDots, MacHyphens};
     use crate::{
         macaddr::MacAddr,
-        net::{IpNetwork, Ipv4Network, Ipv6Network},
+        net::{
+            IpNetwork, Ipv4Network, Ipv6Network,
+            test::{arb_ipv4_network, arb_ipv6_network},
+        },
     };
 
     const MAC: MacAddr = MacAddr::new(0x3a, 0xac, 0x26, 0x9b, 0x5b, 0xf9);
@@ -281,14 +284,6 @@ mod test {
 
         let net = IpNetwork::parse("2001:db8::/32").unwrap();
         assert_eq!("2001:db8::/32", Compact(net).to_string());
-    }
-
-    fn arb_ipv4_network() -> impl Strategy<Value = Ipv4Network> {
-        (any::<u32>(), any::<u32>()).prop_map(|(a, m)| Ipv4Network::from_bits(a, m))
-    }
-
-    fn arb_ipv6_network() -> impl Strategy<Value = Ipv6Network> {
-        (any::<u128>(), any::<u128>()).prop_map(|(a, m)| Ipv6Network::from_bits(a, m))
     }
 
     proptest! {
