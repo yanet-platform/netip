@@ -13632,6 +13632,357 @@ mod test {
             })
     }
 
+    // A handful of bit positions: scattered anywhere in the word, or a run of
+    // up to eight, or up to four every other bit, the shapes the peel of the
+    // difference iterators predicts. Runs sit mostly at the bottom of the
+    // word, where they hold the lowest mask bit that sibling merging and
+    // adjacency look at, else at its top or anywhere, and for IPv6 also
+    // across bit 64, the boundary of the 64-bit halves that the difference
+    // iterator peels in.
+    fn arb_ipv4_free_bits() -> impl Strategy<Value = u32> {
+        let run = prop_oneof![
+            (1u32..=8).prop_map(|len| (u32::MAX >> (32 - len), len)),
+            (1u32..=4).prop_map(|len| (0x5555_5555u32 >> (32 - 2 * len), 2 * len - 1)),
+        ];
+        prop_oneof![
+            1 => prop::collection::vec(0u32..32, 1..=8)
+                .prop_map(|bits| bits.into_iter().fold(0, |free, bit| free | 1 << bit)),
+            2 => run.prop_flat_map(|(bits, span)| {
+                prop_oneof![2 => Just(0), 1 => Just(32 - span), 1 => 0u32..32].prop_map(move |at| bits.rotate_left(at))
+            }),
+        ]
+    }
+
+    fn arb_ipv6_free_bits() -> impl Strategy<Value = u128> {
+        let run = prop_oneof![
+            (1u32..=8).prop_map(|len| (u128::MAX >> (128 - len), len)),
+            (1u32..=4).prop_map(|len| (
+                0x5555_5555_5555_5555_5555_5555_5555_5555u128 >> (128 - 2 * len),
+                2 * len - 1
+            )),
+        ];
+        prop_oneof![
+            1 => prop::collection::vec(0u32..128, 1..=8)
+                .prop_map(|bits| bits.into_iter().fold(0, |free, bit| free | 1 << bit)),
+            2 => run.prop_flat_map(|(bits, span)| {
+                prop_oneof![
+                    2 => Just(0),
+                    2 => Just(64 - span.div_ceil(2)),
+                    1 => Just(128 - span),
+                    1 => 0u32..128,
+                ]
+                .prop_map(move |at| bits.rotate_left(at))
+            }),
+        ]
+    }
+
+    // Two networks that differ only on the `free` bits, returned with them:
+    // off those bits both masks are set and both addresses agree. Every
+    // relation between the two (disjoint, overlapping, nested, adjacent,
+    // equal) then depends on the `free` bits alone, so each comes up often,
+    // and the at most 256 addresses that vary only there hold every member of
+    // either. Half the pairs share a mask, which adjacency needs.
+    fn arb_ipv4_close_pair() -> impl Strategy<Value = (Ipv4Network, Ipv4Network, u32)> {
+        (arb_ipv4_free_bits(), any::<u32>(), any::<[u32; 4]>(), any::<bool>()).prop_map(
+            |(free, base, [a_addr, a_mask, b_addr, b_mask], same_mask)| {
+                let b_mask = if same_mask { a_mask } else { b_mask };
+                let a = Ipv4Network::from_bits(base & !free | a_addr & free, !free | a_mask & free);
+                let b = Ipv4Network::from_bits(base & !free | b_addr & free, !free | b_mask & free);
+                (a, b, free)
+            },
+        )
+    }
+
+    fn arb_ipv6_close_pair() -> impl Strategy<Value = (Ipv6Network, Ipv6Network, u128)> {
+        (arb_ipv6_free_bits(), any::<u128>(), any::<[u128; 4]>(), any::<bool>()).prop_map(
+            |(free, base, [a_addr, a_mask, b_addr, b_mask], same_mask)| {
+                let b_mask = if same_mask { a_mask } else { b_mask };
+                let a = Ipv6Network::from_bits(base & !free | a_addr & free, !free | a_mask & free);
+                let b = Ipv6Network::from_bits(base & !free | b_addr & free, !free | b_mask & free);
+                (a, b, free)
+            },
+        )
+    }
+
+    // The addresses that agree with `net` off the `free` bits: the network
+    // address with those bits replaced by each subset of them.
+    fn ipv4_universe(net: &Ipv4Network, free: u32) -> Vec<u32> {
+        let base = net.to_bits().0 & !free;
+        let mut subset = free;
+        let mut universe = vec![base | subset];
+        while subset != 0 {
+            subset = (subset - 1) & free;
+            universe.push(base | subset);
+        }
+        universe
+    }
+
+    fn ipv6_universe(net: &Ipv6Network, free: u128) -> Vec<u128> {
+        let base = net.to_bits().0 & !free;
+        let mut subset = free;
+        let mut universe = vec![base | subset];
+        while subset != 0 {
+            subset = (subset - 1) & free;
+            universe.push(base | subset);
+        }
+        universe
+    }
+
+    // Membership by definition: the address agrees with the network address
+    // on every bit of the mask.
+    fn ipv4_has(net: &Ipv4Network, addr: u32) -> bool {
+        let (a, m) = net.to_bits();
+        addr & m == a
+    }
+
+    fn ipv6_has(net: &Ipv6Network, addr: u128) -> bool {
+        let (a, m) = net.to_bits();
+        addr & m == a
+    }
+
+    // The number of addresses a network holds, if it fits a `usize`.
+    fn ipv4_size(net: &Ipv4Network) -> Option<usize> {
+        1usize.checked_shl((!net.to_bits().1).count_ones())
+    }
+
+    fn ipv6_size(net: &Ipv6Network) -> Option<usize> {
+        1usize.checked_shl((!net.to_bits().1).count_ones())
+    }
+
+    // Whether the members of `net` are exactly the addresses of `universe`
+    // that `expected` accepts: it holds those there, and holds nothing
+    // outside, since their count is all it holds.
+    fn ipv4_holds_exactly(net: &Ipv4Network, universe: &[u32], expected: impl Fn(u32) -> bool) -> bool {
+        let mut count = 0;
+        for &addr in universe {
+            if ipv4_has(net, addr) != expected(addr) {
+                return false;
+            }
+            count += usize::from(expected(addr));
+        }
+        Some(count) == ipv4_size(net)
+    }
+
+    fn ipv6_holds_exactly(net: &Ipv6Network, universe: &[u128], expected: impl Fn(u128) -> bool) -> bool {
+        let mut count = 0;
+        for &addr in universe {
+            if ipv6_has(net, addr) != expected(addr) {
+                return false;
+            }
+            count += usize::from(expected(addr));
+        }
+        Some(count) == ipv6_size(net)
+    }
+
+    // The union of the two networks, if it is a network itself: the smallest
+    // network that holds the members of both fixes every bit on which they
+    // all agree, and it is the union when it holds nothing else.
+    fn ipv4_union(a: &Ipv4Network, b: &Ipv4Network, universe: &[u32]) -> Option<Ipv4Network> {
+        let first = a.to_bits().0;
+        let varying = universe
+            .iter()
+            .filter(|&&addr| ipv4_has(a, addr) || ipv4_has(b, addr))
+            .fold(0, |varying, &addr| varying | addr ^ first);
+        let union = Ipv4Network::from_bits(first, !varying);
+        ipv4_holds_exactly(&union, universe, |addr| ipv4_has(a, addr) || ipv4_has(b, addr)).then_some(union)
+    }
+
+    fn ipv6_union(a: &Ipv6Network, b: &Ipv6Network, universe: &[u128]) -> Option<Ipv6Network> {
+        let first = a.to_bits().0;
+        let varying = universe
+            .iter()
+            .filter(|&&addr| ipv6_has(a, addr) || ipv6_has(b, addr))
+            .fold(0, |varying, &addr| varying | addr ^ first);
+        let union = Ipv6Network::from_bits(first, !varying);
+        ipv6_holds_exactly(&union, universe, |addr| ipv6_has(a, addr) || ipv6_has(b, addr)).then_some(union)
+    }
+
+    // Each relation and each set operation on a pair, checked against the
+    // members of the two networks.
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4096))]
+
+        #[test]
+        fn prop_ipv4_relations_match_members((a, b, free) in arb_ipv4_close_pair()) {
+            let universe = ipv4_universe(&a, free);
+            let a_in_b = universe.iter().all(|&addr| !ipv4_has(&a, addr) || ipv4_has(&b, addr));
+            let b_in_a = universe.iter().all(|&addr| !ipv4_has(&b, addr) || ipv4_has(&a, addr));
+            let meet = universe.iter().any(|&addr| ipv4_has(&a, addr) && ipv4_has(&b, addr));
+
+            prop_assert_eq!(b_in_a, a.contains(&b));
+            prop_assert_eq!(a_in_b, b.contains(&a));
+            prop_assert_eq!(meet, a.intersects(&b));
+            prop_assert_eq!(meet, b.intersects(&a));
+            prop_assert_eq!(!meet, a.is_disjoint(&b));
+            prop_assert_eq!(!meet, b.is_disjoint(&a));
+        }
+
+        #[test]
+        fn prop_ipv6_relations_match_members((a, b, free) in arb_ipv6_close_pair()) {
+            let universe = ipv6_universe(&a, free);
+            let a_in_b = universe.iter().all(|&addr| !ipv6_has(&a, addr) || ipv6_has(&b, addr));
+            let b_in_a = universe.iter().all(|&addr| !ipv6_has(&b, addr) || ipv6_has(&a, addr));
+            let meet = universe.iter().any(|&addr| ipv6_has(&a, addr) && ipv6_has(&b, addr));
+
+            prop_assert_eq!(b_in_a, a.contains(&b));
+            prop_assert_eq!(a_in_b, b.contains(&a));
+            prop_assert_eq!(meet, a.intersects(&b));
+            prop_assert_eq!(meet, b.intersects(&a));
+            prop_assert_eq!(!meet, a.is_disjoint(&b));
+            prop_assert_eq!(!meet, b.is_disjoint(&a));
+        }
+
+        #[test]
+        fn prop_ipv4_intersection_matches_members((a, b, free) in arb_ipv4_close_pair()) {
+            let universe = ipv4_universe(&a, free);
+            let common = |addr| ipv4_has(&a, addr) && ipv4_has(&b, addr);
+            let expected = universe.iter().any(|&addr| common(addr));
+
+            prop_assert_eq!(a.intersection(&b), b.intersection(&a));
+            match a.intersection(&b) {
+                Some(net) => prop_assert!(ipv4_holds_exactly(&net, &universe, common), "{a} ∩ {b} = {net}"),
+                None => prop_assert!(!expected, "{a} ∩ {b} = None"),
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_intersection_matches_members((a, b, free) in arb_ipv6_close_pair()) {
+            let universe = ipv6_universe(&a, free);
+            let common = |addr| ipv6_has(&a, addr) && ipv6_has(&b, addr);
+            let expected = universe.iter().any(|&addr| common(addr));
+
+            prop_assert_eq!(a.intersection(&b), b.intersection(&a));
+            match a.intersection(&b) {
+                Some(net) => prop_assert!(ipv6_holds_exactly(&net, &universe, common), "{a} ∩ {b} = {net}"),
+                None => prop_assert!(!expected, "{a} ∩ {b} = None"),
+            }
+        }
+
+        // The parts hold every member of `a` outside `b` once and nothing
+        // else, there are as many as the documentation promises, and
+        // iterating from the back yields them in reverse.
+        #[test]
+        fn prop_ipv4_difference_matches_members((a, b, free) in arb_ipv4_close_pair()) {
+            let universe = ipv4_universe(&a, free);
+            // No more parts than addresses: one more is enough to tell a
+            // runaway iterator.
+            let parts: Vec<_> = a.difference(&b).take(universe.len() + 1).collect();
+            let mut covered = 0;
+            for &addr in &universe {
+                let expected = ipv4_has(&a, addr) && !ipv4_has(&b, addr);
+                let covering = parts.iter().filter(|part| ipv4_has(part, addr)).count();
+                prop_assert_eq!(usize::from(expected), covering, "{} \\ {} = {:?} at {:#x}", a, b, parts, addr);
+                covered += covering;
+            }
+            // The parts hold nothing outside the universe: their sizes add up
+            // to what they cover in it.
+            prop_assert_eq!(Some(covered), parts.iter().map(ipv4_size).sum::<Option<usize>>());
+
+            let (_, m1) = a.to_bits();
+            let (_, m2) = b.to_bits();
+            let meet = universe.iter().any(|&addr| ipv4_has(&a, addr) && ipv4_has(&b, addr));
+            let len = if meet { (m2 & !m1).count_ones() as usize } else { 1 };
+            prop_assert_eq!(len, parts.len());
+
+            let mut back: Vec<_> = a.difference(&b).rev().take(universe.len() + 1).collect();
+            back.reverse();
+            prop_assert_eq!(parts, back);
+        }
+
+        #[test]
+        fn prop_ipv6_difference_matches_members((a, b, free) in arb_ipv6_close_pair()) {
+            let universe = ipv6_universe(&a, free);
+            // No more parts than addresses: one more is enough to tell a
+            // runaway iterator.
+            let parts: Vec<_> = a.difference(&b).take(universe.len() + 1).collect();
+            let mut covered = 0;
+            for &addr in &universe {
+                let expected = ipv6_has(&a, addr) && !ipv6_has(&b, addr);
+                let covering = parts.iter().filter(|part| ipv6_has(part, addr)).count();
+                prop_assert_eq!(usize::from(expected), covering, "{} \\ {} = {:?} at {:#x}", a, b, parts, addr);
+                covered += covering;
+            }
+            // The parts hold nothing outside the universe: their sizes add up
+            // to what they cover in it.
+            prop_assert_eq!(Some(covered), parts.iter().map(ipv6_size).sum::<Option<usize>>());
+
+            let (_, m1) = a.to_bits();
+            let (_, m2) = b.to_bits();
+            let meet = universe.iter().any(|&addr| ipv6_has(&a, addr) && ipv6_has(&b, addr));
+            let len = if meet { (m2 & !m1).count_ones() as usize } else { 1 };
+            prop_assert_eq!(len, parts.len());
+
+            let mut back: Vec<_> = a.difference(&b).rev().take(universe.len() + 1).collect();
+            back.reverse();
+            prop_assert_eq!(parts, back);
+        }
+
+        // `merge` returns the union exactly when it is one network.
+        // `merge_by_lowest_mask_bit` returns it too when the pair is nested,
+        // or when it is a pair of siblings, which then share a mask and
+        // differ in its lowest bit, and `None` otherwise.
+        #[test]
+        fn prop_ipv4_merge_matches_members((a, b, free) in arb_ipv4_close_pair()) {
+            let universe = ipv4_universe(&a, free);
+            let union = ipv4_union(&a, &b, &universe);
+            prop_assert_eq!(union, a.merge(&b));
+            prop_assert_eq!(union, b.merge(&a));
+
+            let nested = universe.iter().all(|&addr| !ipv4_has(&a, addr) || ipv4_has(&b, addr))
+                || universe.iter().all(|&addr| !ipv4_has(&b, addr) || ipv4_has(&a, addr));
+            let (_, mask) = a.to_bits();
+            let expected = union.filter(|union| nested || mask ^ union.to_bits().1 == mask & mask.wrapping_neg());
+            prop_assert_eq!(expected, a.merge_by_lowest_mask_bit(&b));
+            prop_assert_eq!(expected, b.merge_by_lowest_mask_bit(&a));
+        }
+
+        #[test]
+        fn prop_ipv6_merge_matches_members((a, b, free) in arb_ipv6_close_pair()) {
+            let universe = ipv6_universe(&a, free);
+            let union = ipv6_union(&a, &b, &universe);
+            prop_assert_eq!(union, a.merge(&b));
+            prop_assert_eq!(union, b.merge(&a));
+
+            let nested = universe.iter().all(|&addr| !ipv6_has(&a, addr) || ipv6_has(&b, addr))
+                || universe.iter().all(|&addr| !ipv6_has(&b, addr) || ipv6_has(&a, addr));
+            let (_, mask) = a.to_bits();
+            let expected = union.filter(|union| nested || mask ^ union.to_bits().1 == mask & mask.wrapping_neg());
+            prop_assert_eq!(expected, a.merge_by_lowest_mask_bit(&b));
+            prop_assert_eq!(expected, b.merge_by_lowest_mask_bit(&a));
+        }
+
+        // Two networks are adjacent when they are disjoint and their union is
+        // one network, and adjacent by the lowest mask bit when the bit they
+        // differ in is the lowest bit of their shared mask.
+        #[test]
+        fn prop_ipv4_adjacency_matches_members((a, b, free) in arb_ipv4_close_pair()) {
+            let universe = ipv4_universe(&a, free);
+            let meet = universe.iter().any(|&addr| ipv4_has(&a, addr) && ipv4_has(&b, addr));
+            let union = ipv4_union(&a, &b, &universe).filter(|_| !meet);
+            prop_assert_eq!(union.is_some(), a.is_adjacent(&b));
+            prop_assert_eq!(union.is_some(), b.is_adjacent(&a));
+
+            let (_, mask) = a.to_bits();
+            let lowest = union.is_some_and(|union| mask ^ union.to_bits().1 == mask & mask.wrapping_neg());
+            prop_assert_eq!(lowest, a.is_adjacent_by_lowest_mask_bit(&b));
+            prop_assert_eq!(lowest, b.is_adjacent_by_lowest_mask_bit(&a));
+        }
+
+        #[test]
+        fn prop_ipv6_adjacency_matches_members((a, b, free) in arb_ipv6_close_pair()) {
+            let universe = ipv6_universe(&a, free);
+            let meet = universe.iter().any(|&addr| ipv6_has(&a, addr) && ipv6_has(&b, addr));
+            let union = ipv6_union(&a, &b, &universe).filter(|_| !meet);
+            prop_assert_eq!(union.is_some(), a.is_adjacent(&b));
+            prop_assert_eq!(union.is_some(), b.is_adjacent(&a));
+
+            let (_, mask) = a.to_bits();
+            let lowest = union.is_some_and(|union| mask ^ union.to_bits().1 == mask & mask.wrapping_neg());
+            prop_assert_eq!(lowest, a.is_adjacent_by_lowest_mask_bit(&b));
+            prop_assert_eq!(lowest, b.is_adjacent_by_lowest_mask_bit(&a));
+        }
+    }
+
     proptest! {
         #[test]
         fn prop_ipv4_prefix_some_iff_is_contiguous(net in arb_ipv4_network()) {
@@ -13739,40 +14090,6 @@ mod test {
         }
 
         #[test]
-        fn prop_ipv4_intersection_membership_brute_force(
-            a_addr in 0u32..=255,
-            a_mask in 0u32..=255,
-            b_addr in 0u32..=255,
-            b_mask in 0u32..=255,
-        ) {
-            // Use 8-bit networks (top byte) to exhaustively verify membership.
-            let a = Ipv4Network::from_bits((a_addr & a_mask) << 24, a_mask << 24);
-            let b = Ipv4Network::from_bits((b_addr & b_mask) << 24, b_mask << 24);
-            let result = a.intersection(&b);
-
-            let (a_a, a_m) = a.to_bits();
-            let (b_a, b_m) = b.to_bits();
-
-            for x in 0u32..=255 {
-                let xaddr = x << 24;
-                let in_a = (xaddr & a_m) == a_a;
-                let in_b = (xaddr & b_m) == b_a;
-                let in_result = match result {
-                    Some(r) => {
-                        let (r_a, r_m) = r.to_bits();
-                        (xaddr & r_m) == r_a
-                    }
-                    None => false,
-                };
-                prop_assert_eq!(
-                    in_a && in_b,
-                    in_result,
-                    "x={}, a={}, b={}, result={:?}", x, a, b, result
-                );
-            }
-        }
-
-        #[test]
         fn prop_ipv4_merge_commutativity(
             a in arb_ipv4_network(),
             b in arb_ipv4_network(),
@@ -13850,43 +14167,6 @@ mod test {
         }
 
         #[test]
-        fn prop_ipv4_merge_by_lowest_mask_bit_membership_brute_force(
-            a_addr in 0u32..=255,
-            a_mask in 0u32..=255,
-            b_addr in 0u32..=255,
-            b_mask in 0u32..=255,
-        ) {
-            let a = Ipv4Network::from_bits((a_addr & a_mask) << 24, a_mask << 24);
-            let b = Ipv4Network::from_bits((b_addr & b_mask) << 24, b_mask << 24);
-            let result = a.merge_by_lowest_mask_bit(&b);
-
-            let (a_a, a_m) = a.to_bits();
-            let (b_a, b_m) = b.to_bits();
-
-            for x in 0u32..=255 {
-                let xaddr = x << 24;
-                let in_a = (xaddr & a_m) == a_a;
-                let in_b = (xaddr & b_m) == b_a;
-                let in_result = match result {
-                    Some(r) => {
-                        let (r_a, r_m) = r.to_bits();
-                        (xaddr & r_m) == r_a
-                    }
-                    None => false,
-                };
-
-                // Whenever it fires, the result is exactly the union of A and B.
-                if result.is_some() {
-                    prop_assert_eq!(
-                        in_a || in_b,
-                        in_result,
-                        "x={} not matching A∪B: a={}, b={}, result={:?}", x, a, b, result
-                    );
-                }
-            }
-        }
-
-        #[test]
         fn prop_ipv4_merge_self_is_self(
             a in arb_ipv4_network(),
         ) {
@@ -13923,48 +14203,6 @@ mod test {
             if let Some(c) = a.merge(&b) {
                 let supernet = a.supernet_for(&[b]);
                 prop_assert_eq!(c, supernet, "merge must equal supernet_for when Some: a={}, b={}", a, b);
-            }
-        }
-
-        #[test]
-        fn prop_ipv4_merge_membership_brute_force(
-            a_addr in 0u32..=255,
-            a_mask in 0u32..=255,
-            b_addr in 0u32..=255,
-            b_mask in 0u32..=255,
-        ) {
-            let a = Ipv4Network::from_bits((a_addr & a_mask) << 24, a_mask << 24);
-            let b = Ipv4Network::from_bits((b_addr & b_mask) << 24, b_mask << 24);
-            let result = a.merge(&b);
-
-            let (a_a, a_m) = a.to_bits();
-            let (b_a, b_m) = b.to_bits();
-
-            for x in 0u32..=255 {
-                let xaddr = x << 24;
-                let in_a = (xaddr & a_m) == a_a;
-                let in_b = (xaddr & b_m) == b_a;
-                let in_result = match result {
-                    Some(r) => {
-                        let (r_a, r_m) = r.to_bits();
-                        (xaddr & r_m) == r_a
-                    }
-                    None => false,
-                };
-
-                if (in_a || in_b)
-                    && result.is_some() {
-                        prop_assert!(
-                            in_result,
-                            "x={x} in A∪B but not in merge result: a={a}, b={b}, result={result:?}"
-                        );
-                    }
-                if in_result {
-                    prop_assert!(
-                        in_a || in_b,
-                        "x={x} in merge result but not in A∪B: a={a}, b={b}, result={result:?}"
-                    );
-                }
             }
         }
 
@@ -14050,40 +14288,6 @@ mod test {
             if let Some(c) = a.intersection(&b) {
                 let (addr, mask) = c.to_bits();
                 prop_assert_eq!(addr & mask, addr, "intersection not normalized: a={}, b={}, c={}", a, b, c);
-            }
-        }
-
-        #[test]
-        fn prop_ipv6_intersection_membership_brute_force(
-            a_addr in 0u128..=255,
-            a_mask in 0u128..=255,
-            b_addr in 0u128..=255,
-            b_mask in 0u128..=255,
-        ) {
-            // Use 8-bit networks (top byte) to exhaustively verify membership.
-            let a = Ipv6Network::from_bits((a_addr & a_mask) << 120, a_mask << 120);
-            let b = Ipv6Network::from_bits((b_addr & b_mask) << 120, b_mask << 120);
-            let result = a.intersection(&b);
-
-            let (a_a, a_m) = a.to_bits();
-            let (b_a, b_m) = b.to_bits();
-
-            for x in 0u128..=255 {
-                let xaddr = x << 120;
-                let in_a = (xaddr & a_m) == a_a;
-                let in_b = (xaddr & b_m) == b_a;
-                let in_result = match result {
-                    Some(r) => {
-                        let (r_a, r_m) = r.to_bits();
-                        (xaddr & r_m) == r_a
-                    }
-                    None => false,
-                };
-                prop_assert_eq!(
-                    in_a && in_b,
-                    in_result,
-                    "x={}, a={}, b={}, result={:?}", x, a, b, result
-                );
             }
         }
 
@@ -14375,43 +14579,6 @@ mod test {
         }
 
         #[test]
-        fn prop_ipv6_merge_by_lowest_mask_bit_membership_brute_force(
-            a_addr in 0u128..=255,
-            a_mask in 0u128..=255,
-            b_addr in 0u128..=255,
-            b_mask in 0u128..=255,
-        ) {
-            let a = Ipv6Network::from_bits((a_addr & a_mask) << 120, a_mask << 120);
-            let b = Ipv6Network::from_bits((b_addr & b_mask) << 120, b_mask << 120);
-            let result = a.merge_by_lowest_mask_bit(&b);
-
-            let (a_a, a_m) = a.to_bits();
-            let (b_a, b_m) = b.to_bits();
-
-            for x in 0u128..=255 {
-                let xaddr = x << 120;
-                let in_a = (xaddr & a_m) == a_a;
-                let in_b = (xaddr & b_m) == b_a;
-                let in_result = match result {
-                    Some(r) => {
-                        let (r_a, r_m) = r.to_bits();
-                        (xaddr & r_m) == r_a
-                    }
-                    None => false,
-                };
-
-                // Whenever it fires, the result is exactly the union of A and B.
-                if result.is_some() {
-                    prop_assert_eq!(
-                        in_a || in_b,
-                        in_result,
-                        "x={} not matching A∪B: a={}, b={}, result={:?}", x, a, b, result
-                    );
-                }
-            }
-        }
-
-        #[test]
         fn prop_ipv6_merge_self_is_self(
             a in arb_ipv6_network(),
         ) {
@@ -14448,48 +14615,6 @@ mod test {
             if let Some(c) = a.merge(&b) {
                 let supernet = a.supernet_for(&[b]);
                 prop_assert_eq!(c, supernet, "merge must equal supernet_for when Some: a={}, b={}", a, b);
-            }
-        }
-
-        #[test]
-        fn prop_ipv6_merge_membership_brute_force(
-            a_addr in 0u128..=255,
-            a_mask in 0u128..=255,
-            b_addr in 0u128..=255,
-            b_mask in 0u128..=255,
-        ) {
-            let a = Ipv6Network::from_bits((a_addr & a_mask) << 120, a_mask << 120);
-            let b = Ipv6Network::from_bits((b_addr & b_mask) << 120, b_mask << 120);
-            let result = a.merge(&b);
-
-            let (a_a, a_m) = a.to_bits();
-            let (b_a, b_m) = b.to_bits();
-
-            for x in 0u128..=255 {
-                let xaddr = x << 120;
-                let in_a = (xaddr & a_m) == a_a;
-                let in_b = (xaddr & b_m) == b_a;
-                let in_result = match result {
-                    Some(r) => {
-                        let (r_a, r_m) = r.to_bits();
-                        (xaddr & r_m) == r_a
-                    }
-                    None => false,
-                };
-
-                if (in_a || in_b)
-                    && result.is_some() {
-                        prop_assert!(
-                            in_result,
-                            "x={x} in A∪B but not in merge result: a={a}, b={b}, result={result:?}"
-                        );
-                    }
-                if in_result {
-                    prop_assert!(
-                        in_a || in_b,
-                        "x={x} in merge result but not in A∪B: a={a}, b={b}, result={result:?}"
-                    );
-                }
             }
         }
 
