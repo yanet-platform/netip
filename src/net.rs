@@ -1147,12 +1147,6 @@ impl TryFrom<(Ipv4Addr, u8)> for IpNetwork {
     }
 }
 
-impl From<(Ipv4Addr, Ipv4Addr)> for IpNetwork {
-    fn from((addr, mask): (Ipv4Addr, Ipv4Addr)) -> Self {
-        Self::V4(Ipv4Network::new(addr, mask))
-    }
-}
-
 impl From<Ipv4Network> for IpNetwork {
     #[inline]
     fn from(net: Ipv4Network) -> Self {
@@ -1174,12 +1168,6 @@ impl TryFrom<(Ipv6Addr, u8)> for IpNetwork {
     #[inline]
     fn try_from((addr, cidr): (Ipv6Addr, u8)) -> Result<Self, Self::Error> {
         Ok(Self::V6(Ipv6Network::new(addr, ipv6_mask_from_cidr(cidr)?)))
-    }
-}
-
-impl From<(Ipv6Addr, Ipv6Addr)> for IpNetwork {
-    fn from((addr, mask): (Ipv6Addr, Ipv6Addr)) -> Self {
-        Self::V6(Ipv6Network::new(addr, mask))
     }
 }
 
@@ -1373,6 +1361,31 @@ impl Ipv4Network {
     ///
     /// assert_eq!(Ipv4Addr::new(192, 168, 1, 0), net.addr());
     /// assert_eq!(Ipv4Addr::new(255, 255, 255, 0), net.mask());
+    /// ```
+    ///
+    /// An [`IpNetwork`] comes from the result through `From`. A pair of
+    /// addresses has no `From` into a network: `new` drops the host bits, and
+    /// the pair reads just as well as the first and the last address of a
+    /// range.
+    ///
+    /// ```
+    /// use core::net::Ipv4Addr;
+    ///
+    /// use netip::{IpNetwork, Ipv4Network};
+    ///
+    /// let (addr, mask) = (Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(255, 0, 0, 0));
+    /// let net: IpNetwork = Ipv4Network::new(addr, mask).into();
+    /// assert_eq!("10.0.0.0/8", net.to_string());
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use core::net::Ipv4Addr;
+    ///
+    /// use netip::IpNetwork;
+    ///
+    /// let (addr, mask) = (Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(255, 0, 0, 0));
+    /// // No `From`: write `Ipv4Network::new(addr, mask).into()`.
+    /// let net = IpNetwork::from((addr, mask));
     /// ```
     #[inline]
     #[must_use]
@@ -3555,6 +3568,34 @@ impl Ipv6Network {
     /// Initializes a new [`Ipv6Network`] using specified address and mask.
     ///
     /// During construction, the address is normalized using mask.
+    ///
+    /// An [`IpNetwork`] comes from the result through `From`. A pair of
+    /// addresses has no `From` into a network, for the reasons given at
+    /// [`Ipv4Network::new`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::{IpNetwork, Ipv6Network};
+    ///
+    /// let addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+    /// let mask = Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0);
+    /// let net: IpNetwork = Ipv6Network::new(addr, mask).into();
+    /// assert_eq!("2001:db8::/32", net.to_string());
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::IpNetwork;
+    ///
+    /// let addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+    /// let mask = Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0);
+    /// // No `From`: write `Ipv6Network::new(addr, mask).into()`.
+    /// let net = IpNetwork::from((addr, mask));
+    /// ```
     #[inline]
     #[must_use]
     pub const fn new(addr: Ipv6Addr, mask: Ipv6Addr) -> Self {
