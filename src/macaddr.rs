@@ -18,6 +18,7 @@
 
 use core::{
     fmt::{self, Display, Formatter, LowerHex, UpperHex},
+    net::Ipv6Addr,
     str::{self, FromStr},
 };
 
@@ -264,6 +265,111 @@ impl MacAddr {
     #[must_use]
     pub const fn is_universally_administered(&self) -> bool {
         !self.is_locally_administered()
+    }
+
+    /// Returns the modified EUI-64 interface identifier of this address, as
+    /// defined in [IETF RFC 4291 appendix A].
+    ///
+    /// The octets `aa:bb:cc:dd:ee:ff` become `aa^02:bb:cc:ff:fe:dd:ee:ff`:
+    /// `ff:fe` goes between the third and the fourth octet, and the U/L bit
+    /// of the first octet is inverted. The first octet is the highest of the
+    /// 64 bits. These are the low 64 bits of the IPv6 addresses that
+    /// stateless autoconfiguration ([IETF RFC 4862]) forms from a MAC address,
+    /// [`to_ipv6_link_local`](MacAddr::to_ipv6_link_local) among them.
+    ///
+    /// [`from_modified_eui64`](MacAddr::from_modified_eui64) converts it back.
+    ///
+    /// [IETF RFC 4291 appendix A]: https://tools.ietf.org/html/rfc4291#appendix-A
+    /// [IETF RFC 4862]: https://tools.ietf.org/html/rfc4862
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::MacAddr;
+    ///
+    /// let mac = MacAddr::new(0x00, 0x11, 0x22, 0x33, 0x44, 0x55);
+    /// assert_eq!(0x0211_22ff_fe33_4455, mac.to_modified_eui64());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn to_modified_eui64(&self) -> u64 {
+        let bits = self.as_u64();
+        let oui = bits >> 24;
+        let nic = bits & 0xff_ffff;
+
+        // NOTE: `0x02 << 56` is the U/L bit of the first octet.
+        (oui << 40 | 0xfffe << 24 | nic) ^ 0x02 << 56
+    }
+
+    /// Returns the MAC address that a modified EUI-64 interface identifier
+    /// was formed from, or [`None`] if the identifier was not formed from one.
+    ///
+    /// The inverse of [`to_modified_eui64`](MacAddr::to_modified_eui64): an
+    /// identifier `aa:bb:cc:ff:fe:dd:ee:ff` gives `aa^02:bb:cc:dd:ee:ff`. An
+    /// identifier without `ff:fe` in its middle octets, such as a random one
+    /// of temporary addresses ([IETF RFC 8981]), gives [`None`]. So the MAC
+    /// address behind an address of stateless autoconfiguration is
+    /// `MacAddr::from_modified_eui64(addr.to_bits() as u64)`.
+    ///
+    /// [IETF RFC 8981]: https://tools.ietf.org/html/rfc8981
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::MacAddr;
+    ///
+    /// let mac = MacAddr::new(0x00, 0x11, 0x22, 0x33, 0x44, 0x55);
+    /// assert_eq!(
+    ///     Some(mac),
+    ///     MacAddr::from_modified_eui64(0x0211_22ff_fe33_4455)
+    /// );
+    ///
+    /// // The low 64 bits of an autoconfigured address.
+    /// let addr: Ipv6Addr = "2001:db8::211:22ff:fe33:4455".parse().unwrap();
+    /// assert_eq!(
+    ///     Some(mac),
+    ///     MacAddr::from_modified_eui64(addr.to_bits() as u64)
+    /// );
+    ///
+    /// // No `ff:fe` in the middle.
+    /// assert_eq!(None, MacAddr::from_modified_eui64(0x0211_2233_4455_6677));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn from_modified_eui64(iid: u64) -> Option<MacAddr> {
+        if (iid >> 24) & 0xffff != 0xfffe {
+            return None;
+        }
+
+        let oui = (iid >> 40) ^ 0x02 << 16;
+        let nic = iid & 0xff_ffff;
+        Some(Self(oui << 24 | nic))
+    }
+
+    /// Returns the IPv6 link-local address of this MAC address: `fe80::/64`
+    /// with the [modified EUI-64](MacAddr::to_modified_eui64) interface
+    /// identifier, the one stateless autoconfiguration forms ([IETF RFC 4862
+    /// section 5.3]).
+    ///
+    /// [IETF RFC 4862 section 5.3]: https://tools.ietf.org/html/rfc4862#section-5.3
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::MacAddr;
+    ///
+    /// let mac = MacAddr::new(0x00, 0x11, 0x22, 0x33, 0x44, 0x55);
+    /// let expected: Ipv6Addr = "fe80::211:22ff:fe33:4455".parse().unwrap();
+    /// assert_eq!(expected, mac.to_ipv6_link_local());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn to_ipv6_link_local(&self) -> Ipv6Addr {
+        Ipv6Addr::from_bits(0xfe80 << 112 | self.to_modified_eui64() as u128)
     }
 }
 
@@ -623,6 +729,55 @@ mod test {
     }
 
     #[test]
+    fn modified_eui64() {
+        let mac = MacAddr::new(0x00, 0x11, 0x22, 0x33, 0x44, 0x55);
+        assert_eq!(0x0211_22ff_fe33_4455, mac.to_modified_eui64());
+        assert_eq!(0x3aac_26ff_fe9b_5bf9 ^ 0x02 << 56, MAC.to_modified_eui64());
+        assert_eq!(0x0200_00ff_fe00_0000, MacAddr::ZERO.to_modified_eui64());
+        assert_eq!(0xfdff_ffff_feff_ffff, MacAddr::BROADCAST.to_modified_eui64());
+    }
+
+    #[test]
+    fn from_modified_eui64() {
+        let mac = MacAddr::new(0x00, 0x11, 0x22, 0x33, 0x44, 0x55);
+        assert_eq!(Some(mac), MacAddr::from_modified_eui64(0x0211_22ff_fe33_4455));
+        assert_eq!(Some(MacAddr::ZERO), MacAddr::from_modified_eui64(0x0200_00ff_fe00_0000));
+        assert_eq!(
+            Some(MacAddr::BROADCAST),
+            MacAddr::from_modified_eui64(0xfdff_ffff_feff_ffff)
+        );
+
+        // Anything else in the middle octets.
+        assert_eq!(None, MacAddr::from_modified_eui64(0x0211_22fe_ff33_4455));
+        assert_eq!(None, MacAddr::from_modified_eui64(0x0211_22ff_ff33_4455));
+        assert_eq!(None, MacAddr::from_modified_eui64(0));
+        assert_eq!(None, MacAddr::from_modified_eui64(u64::MAX));
+    }
+
+    #[test]
+    fn to_ipv6_link_local() {
+        let mac = MacAddr::new(0x00, 0x11, 0x22, 0x33, 0x44, 0x55);
+        assert_eq!(
+            Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0211, 0x22ff, 0xfe33, 0x4455),
+            mac.to_ipv6_link_local()
+        );
+        assert_eq!(
+            Ipv6Addr::new(0xfe80, 0, 0, 0, 0xfdff, 0xffff, 0xfeff, 0xffff),
+            MacAddr::BROADCAST.to_ipv6_link_local()
+        );
+    }
+
+    #[test]
+    fn modified_eui64_in_const() {
+        const IID: u64 = MAC.to_modified_eui64();
+        const BACK: Option<MacAddr> = MacAddr::from_modified_eui64(IID);
+        const LINK_LOCAL: Ipv6Addr = MAC.to_ipv6_link_local();
+
+        assert_eq!(Some(MAC), BACK);
+        assert_eq!(IID, LINK_LOCAL.to_bits() as u64);
+    }
+
+    #[test]
     fn hex_formats() {
         assert_eq!("3a:ac:26:9b:5b:f9", format!("{MAC:x}"));
         assert_eq!("3A:AC:26:9B:5B:F9", format!("{MAC:X}"));
@@ -875,6 +1030,44 @@ mod test {
             let text = std::string::String::from_utf8(text).unwrap();
 
             prop_assert_eq!(parse_cisco_reference(&text).ok_or(MacAddrParseError), text.parse::<MacAddr>(), "{}", text);
+        }
+
+        // The identifier is the octets laid out as RFC 4291 lays them out,
+        // and it converts back to the address.
+        #[test]
+        fn prop_modified_eui64_matches_octets(mac in arb_mac_addr()) {
+            let [a, b, c, d, e, f] = mac.octets();
+            let expected = u64::from_be_bytes([a ^ 0x02, b, c, 0xff, 0xfe, d, e, f]);
+
+            prop_assert_eq!(expected, mac.to_modified_eui64());
+            prop_assert_eq!(Some(mac), MacAddr::from_modified_eui64(expected));
+        }
+
+        // Back from any identifier: `Some` exactly for `ff:fe` in the middle,
+        // and then the identifier is that of the address returned.
+        #[test]
+        fn prop_from_modified_eui64_needs_fffe(
+            iid in prop_oneof![
+                any::<u64>(),
+                any::<u64>().prop_map(|iid| iid & !(0xffff << 24) | 0xfffe << 24),
+            ]
+        ) {
+            let mac = MacAddr::from_modified_eui64(iid);
+
+            prop_assert_eq!(iid.to_be_bytes()[3..5] == [0xff, 0xfe], mac.is_some());
+            if let Some(mac) = mac {
+                prop_assert_eq!(iid, mac.to_modified_eui64());
+            }
+        }
+
+        // `fe80::/64`, the identifier in the low 64 bits.
+        #[test]
+        fn prop_to_ipv6_link_local(mac in arb_mac_addr()) {
+            let addr = mac.to_ipv6_link_local();
+
+            prop_assert_eq!(&[0xfe80, 0, 0, 0], &addr.segments()[..4]);
+            prop_assert!(addr.is_unicast_link_local());
+            prop_assert_eq!(mac.to_modified_eui64(), addr.to_bits() as u64);
         }
 
         #[test]
