@@ -53,3 +53,44 @@ pub use net::{
     ipv6_range_to_networks,
 };
 pub use parser::IpNetParseError;
+
+/// The error types are non-exhaustive. Outside netip, a `match` on an error
+/// enum needs a wildcard arm, and a unit error struct can't be built, so each
+/// block below fails to compile.
+///
+/// ```compile_fail
+/// fn kind(err: netip::IpNetParseError) -> u8 {
+///     match err {
+///         netip::IpNetParseError::AddrParseError(..) => 0,
+///         netip::IpNetParseError::CidrOverflow(..) => 1,
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// fn kind(err: netip::ContiguousIpNetParseError) -> u8 {
+///     match err {
+///         netip::ContiguousIpNetParseError::NonContiguousNetwork => 0,
+///         netip::ContiguousIpNetParseError::IpNetParseError(..) => 1,
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// fn kind(err: netip::BiContiguousIpNetParseError) -> u8 {
+///     match err {
+///         netip::BiContiguousIpNetParseError::NonBiContiguousNetwork => 0,
+///         netip::BiContiguousIpNetParseError::IpNetParseError(..) => 1,
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// let _ = netip::MacAddrParseError;
+/// ```
+///
+/// ```compile_fail
+/// let _ = netip::IpVersionMismatchError;
+/// ```
+#[cfg(doctest)]
+struct NonExhaustiveErrors;

@@ -394,10 +394,10 @@ impl Default for MacAddr {
 /// let mac = MacAddr::try_from(0x3aac_269b_5bf9).unwrap();
 /// assert_eq!("3a:ac:26:9b:5b:f9", mac.to_string());
 ///
-/// assert_eq!(
-///     Err(MacAddrParseError),
-///     MacAddr::try_from(0xabcd_3aac_269b_5bf9)
-/// );
+/// assert!(matches!(
+///     MacAddr::try_from(0xabcd_3aac_269b_5bf9),
+///     Err(MacAddrParseError { .. })
+/// ));
 /// ```
 impl TryFrom<u64> for MacAddr {
     type Error = MacAddrParseError;
@@ -608,6 +608,7 @@ fn parse_dotted(b: &[u8; 14]) -> Result<MacAddr, MacAddrParseError> {
 /// Error returned when parsing a MAC address string fails, or when a [`u64`]
 /// with any of the upper 16 bits set is converted to a MAC address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MacAddrParseError;
 
 impl Display for MacAddrParseError {

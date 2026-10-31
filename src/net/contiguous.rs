@@ -18,6 +18,7 @@ use super::{
 
 /// An error that occurs when parsing a contiguous IP network.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ContiguousIpNetParseError {
     /// The network is not contiguous.
     NonContiguousNetwork,
@@ -1043,10 +1044,10 @@ impl TryFrom<Contiguous<IpNetwork>> for Contiguous<Ipv4Network> {
     /// );
     ///
     /// let net = Contiguous::<IpNetwork>::parse("2001:db8::/32").unwrap();
-    /// assert_eq!(
-    ///     Err(IpVersionMismatchError),
-    ///     Contiguous::<Ipv4Network>::try_from(net)
-    /// );
+    /// assert!(matches!(
+    ///     Contiguous::<Ipv4Network>::try_from(net),
+    ///     Err(IpVersionMismatchError { .. })
+    /// ));
     /// ```
     #[inline]
     fn try_from(net: Contiguous<IpNetwork>) -> Result<Self, Self::Error> {
@@ -1074,10 +1075,10 @@ impl TryFrom<Contiguous<IpNetwork>> for Contiguous<Ipv6Network> {
     /// );
     ///
     /// let net = Contiguous::<IpNetwork>::parse("10.0.0.0/8").unwrap();
-    /// assert_eq!(
-    ///     Err(IpVersionMismatchError),
-    ///     Contiguous::<Ipv6Network>::try_from(net)
-    /// );
+    /// assert!(matches!(
+    ///     Contiguous::<Ipv6Network>::try_from(net),
+    ///     Err(IpVersionMismatchError { .. })
+    /// ));
     /// ```
     #[inline]
     fn try_from(net: Contiguous<IpNetwork>) -> Result<Self, Self::Error> {
