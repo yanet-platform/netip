@@ -3221,7 +3221,7 @@ impl Ipv4NetworkDiff {
     /// `S(source) \ S(other)`.
     #[inline]
     #[must_use]
-    pub const fn new(source: &Ipv4Network, other: &Ipv4Network) -> Self {
+    const fn new(source: &Ipv4Network, other: &Ipv4Network) -> Self {
         let (addr, mask) = source.to_bits();
 
         match source.intersection(other) {
@@ -5517,7 +5517,7 @@ impl Ipv6NetworkDiff {
     /// `S(source) \ S(other)`.
     #[inline]
     #[must_use]
-    pub const fn new(source: &Ipv6Network, other: &Ipv6Network) -> Self {
+    const fn new(source: &Ipv6Network, other: &Ipv6Network) -> Self {
         let (addr, mask) = source.to_bits();
 
         match source.intersection(other) {

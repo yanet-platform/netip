@@ -94,3 +94,19 @@ pub use parser::IpNetParseError;
 /// ```
 #[cfg(doctest)]
 struct NonExhaustiveErrors;
+
+/// The difference iterators have no public constructor. Outside netip,
+/// [`Ipv4NetworkDiff`] and [`Ipv6NetworkDiff`] come only from `difference`, so
+/// each block below fails to compile.
+///
+/// ```compile_fail
+/// let net = netip::Ipv4Network::parse("10.0.0.0/8").unwrap();
+/// let _ = netip::Ipv4NetworkDiff::new(&net, &net);
+/// ```
+///
+/// ```compile_fail
+/// let net = netip::Ipv6Network::parse("2001:db8::/32").unwrap();
+/// let _ = netip::Ipv6NetworkDiff::new(&net, &net);
+/// ```
+#[cfg(doctest)]
+struct PrivateDiffConstructors;
