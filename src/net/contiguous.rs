@@ -473,6 +473,10 @@ impl Contiguous<Ipv4Network> {
 /// directly -- the same ascending numeric order [`crate::Ipv4NetworkAddrs`]
 /// produces for a contiguous mask.
 ///
+/// [`nth`](Iterator::nth) and [`nth_back`](DoubleEndedIterator::nth_back) skip
+/// in O(1), and leave the iterator as `n + 1` calls of `next` or `next_back`
+/// would.
+///
 /// When the iterator is exhausted it enters a sentinel state where
 /// `front > back`, so every subsequent call to [`next`](Iterator::next) or
 /// [`next_back`](DoubleEndedIterator::next_back) returns [`None`].
@@ -536,6 +540,27 @@ impl Iterator for ContiguousIpv4NetworkAddrs {
             Err(..) => (usize::MAX, None),
         }
     }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        if self.front > self.back {
+            return None;
+        }
+
+        // NOTE: lossless, `usize` is at most 64 bits wide.
+        if n as u64 > u64::from(self.back - self.front) {
+            // `n + 1` calls of `next` drain the iterator: the one that takes
+            // the last address leaves the drained state, and the calls after
+            // it change nothing.
+            self.front = self.back;
+            self.next();
+            return None;
+        }
+
+        // NOTE: lossless and in range, `n <= back - front`.
+        self.front += n as u32;
+        self.next()
+    }
 }
 
 impl DoubleEndedIterator for ContiguousIpv4NetworkAddrs {
@@ -555,6 +580,27 @@ impl DoubleEndedIterator for ContiguousIpv4NetworkAddrs {
         }
 
         Some(Ipv4Addr::from_bits(self.base | index))
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        if self.front > self.back {
+            return None;
+        }
+
+        // NOTE: lossless, `usize` is at most 64 bits wide.
+        if n as u64 > u64::from(self.back - self.front) {
+            // `n + 1` calls of `next_back` drain the iterator: the one that
+            // takes the last address leaves the drained state, and the calls
+            // after it change nothing.
+            self.back = self.front;
+            self.next_back();
+            return None;
+        }
+
+        // NOTE: lossless and in range, `n <= back - front`.
+        self.back -= n as u32;
+        self.next_back()
     }
 }
 
@@ -827,6 +873,10 @@ impl Contiguous<Ipv6Network> {
 /// plain integer increment/decrement -- the same ascending numeric order
 /// [`crate::Ipv6NetworkAddrs`] produces for a contiguous mask.
 ///
+/// [`nth`](Iterator::nth) and [`nth_back`](DoubleEndedIterator::nth_back) skip
+/// in O(1), and leave the iterator as `n + 1` calls of `next` or `next_back`
+/// would.
+///
 /// When the iterator is exhausted it enters a sentinel state where
 /// `current > last`, so every subsequent call to [`next`](Iterator::next) or
 /// [`next_back`](DoubleEndedIterator::next_back) returns [`None`].
@@ -890,6 +940,27 @@ impl Iterator for ContiguousIpv6NetworkAddrs {
             }
         }
     }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        if self.current > self.last {
+            return None;
+        }
+
+        // NOTE: lossless, `usize` is at most 64 bits wide.
+        let n = n as u128;
+        if n > self.last - self.current {
+            // `n + 1` calls of `next` drain the iterator: the one that takes
+            // the last address leaves the drained state, and the calls after
+            // it change nothing.
+            self.current = self.last;
+            self.next();
+            return None;
+        }
+
+        self.current += n;
+        self.next()
+    }
 }
 
 impl DoubleEndedIterator for ContiguousIpv6NetworkAddrs {
@@ -909,6 +980,27 @@ impl DoubleEndedIterator for ContiguousIpv6NetworkAddrs {
         }
 
         Some(Ipv6Addr::from_bits(addr))
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        if self.current > self.last {
+            return None;
+        }
+
+        // NOTE: lossless, `usize` is at most 64 bits wide.
+        let n = n as u128;
+        if n > self.last - self.current {
+            // `n + 1` calls of `next_back` drain the iterator: the one that
+            // takes the last address leaves the drained state, and the calls
+            // after it change nothing.
+            self.last = self.current;
+            self.next_back();
+            return None;
+        }
+
+        self.last -= n;
+        self.next_back()
     }
 }
 

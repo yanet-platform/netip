@@ -7573,6 +7573,61 @@ mod test {
             assert_nth_matches_stepping(net6.subnets_with_prefix(128).unwrap(), &script);
         }
 
+        // The cursors of `Contiguous` and `BiContiguous` skip exactly as
+        // stepping does, item and state alike.
+        #[test]
+        fn prop_cursors_nth_matches_stepping(
+            a4 in any::<u32>(),
+            prefix4 in 27u8..=32,
+            a6 in any::<u128>(),
+            prefix6 in 123u8..=128,
+            hi_prefix in 62u32..=64,
+            lo_prefix in 62u32..=64,
+            script in prop::collection::vec((any::<bool>(), 0usize..12), 1..12),
+        ) {
+            let net = Contiguous::<Ipv4Network>::try_from((Ipv4Addr::from_bits(a4), prefix4)).unwrap();
+            assert_nth_matches_stepping(net.addrs(), &script);
+            let net = Contiguous::<Ipv6Network>::try_from((Ipv6Addr::from_bits(a6), prefix6)).unwrap();
+            assert_nth_matches_stepping(net.addrs(), &script);
+
+            let half = |prefix: u32| !u64::MAX.checked_shr(prefix).unwrap_or(0);
+            let mask = u128::from(half(hi_prefix)) << 64 | u128::from(half(lo_prefix));
+            let net = BiContiguous::<Ipv6Network>::try_from(Ipv6Network::from_bits(a6, mask)).unwrap();
+            assert_nth_matches_stepping(net.addrs(), &script);
+        }
+
+        // Far skips, out of stepping's reach, land where the general iterator
+        // of the same network lands, from either end.
+        #[test]
+        fn prop_cursors_nth_matches_general_far(
+            a4 in any::<u32>(),
+            prefix4 in 0u8..=32,
+            a6 in any::<u128>(),
+            prefix6 in 0u8..=128,
+            hi_prefix in 0u32..=64,
+            lo_prefix in 0u32..=64,
+            bits in any::<usize>(),
+            shift in 0u32..64,
+        ) {
+            // Every order of magnitude, so that IPv4 skips land inside the
+            // network as often as past its end.
+            let n = bits.checked_shr(shift).unwrap_or(0);
+
+            let net = Contiguous::<Ipv4Network>::try_from((Ipv4Addr::from_bits(a4), prefix4)).unwrap();
+            prop_assert_eq!((*net).addrs().nth(n), net.addrs().nth(n));
+            prop_assert_eq!((*net).addrs().nth_back(n), net.addrs().nth_back(n));
+
+            let net = Contiguous::<Ipv6Network>::try_from((Ipv6Addr::from_bits(a6), prefix6)).unwrap();
+            prop_assert_eq!((*net).addrs().nth(n), net.addrs().nth(n));
+            prop_assert_eq!((*net).addrs().nth_back(n), net.addrs().nth_back(n));
+
+            let half = |prefix: u32| !u64::MAX.checked_shr(prefix).unwrap_or(0);
+            let mask = u128::from(half(hi_prefix)) << 64 | u128::from(half(lo_prefix));
+            let net = BiContiguous::<Ipv6Network>::try_from(Ipv6Network::from_bits(a6, mask)).unwrap();
+            prop_assert_eq!((*net).addrs().nth(n), net.addrs().nth(n));
+            prop_assert_eq!((*net).addrs().nth_back(n), net.addrs().nth_back(n));
+        }
+
         #[test]
         fn prop_subnets_nth_matches_stepping(
             (net4, mask4) in arb_ipv4_few_subnets(),
@@ -12194,6 +12249,43 @@ mod test {
             Some(IpAddr::V6(expected)),
             IpNetwork::V6(net).addrs().nth(index as usize)
         );
+    }
+
+    // The cursors skip far too. Draining `0.0.0.0/0` wraps its front cursor,
+    // which must leave the same state as draining it by stepping the last
+    // two addresses.
+    #[test]
+    fn cursors_nth_skips_far() {
+        let net = Contiguous::<Ipv4Network>::parse("0.0.0.0/0").unwrap();
+        let mut addrs = net.addrs();
+        assert_eq!(Some(Ipv4Addr::new(255, 255, 255, 254)), addrs.nth(0xffff_fffe));
+        assert_eq!(Some(Ipv4Addr::new(255, 255, 255, 255)), addrs.next());
+        assert_eq!(None, addrs.next_back());
+
+        #[cfg(target_pointer_width = "64")]
+        {
+            let mut drained = net.addrs();
+            assert_eq!(None, drained.nth(1 << 32));
+            let mut stepped = net.addrs();
+            assert_eq!(Some(Ipv4Addr::new(0, 0, 0, 1)), stepped.nth_back(0xffff_fffe));
+            assert_eq!(Some(Ipv4Addr::new(0, 0, 0, 0)), stepped.next());
+            assert_eq!(None, stepped.next());
+            assert_eq!(stepped, drained);
+        }
+
+        let net = Contiguous::<Ipv6Network>::parse("::/0").unwrap();
+        let top = Ipv6Addr::new(0, 0, 0, 0, 0xffff, 0xffff, 0xffff, 0xffff);
+        assert_eq!(Some(top), net.addrs().nth(usize::MAX));
+        let bottom = Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0, 0, 0, 0);
+        assert_eq!(Some(bottom), net.addrs().nth_back(usize::MAX));
+
+        // Index `2^40` of a bi-contiguous network with 32 host bits in each
+        // half: the low 32 bits of the index are zero, and bit 8 of the rest
+        // lands in the fourth group.
+        let net = BiContiguous::<Ipv6Network>::parse("2001:db8::/ffff:ffff::ffff:ffff:0:0").unwrap();
+        let expected = Ipv6Addr::new(0x2001, 0xdb8, 0, 0x100, 0, 0, 0, 0);
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(Some(expected), net.addrs().nth(1 << 40));
     }
 
     // The wrappers skip through the address iterator: subnet `2^40` of a

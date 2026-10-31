@@ -478,6 +478,10 @@ impl BiContiguousIpv6NetworkAddrs {
 /// index is therefore kept as its own cursor, paying the closed form's per-step
 /// cost.
 ///
+/// [`nth`](Iterator::nth) and [`nth_back`](DoubleEndedIterator::nth_back) skip
+/// in O(1): the host index moves by `n` and maps through the same closed form.
+/// They leave the iterator as `n + 1` calls of `next` or `next_back` would.
+///
 /// When the iterator is exhausted it enters a sentinel state where
 /// `front > back`, so every subsequent call to [`next`](Iterator::next) or
 /// [`next_back`](DoubleEndedIterator::next_back) returns [`None`].
@@ -536,6 +540,27 @@ impl Iterator for BiContiguousIpv6NetworkAddrs {
             }
         }
     }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        if self.front > self.back {
+            return None;
+        }
+
+        // NOTE: lossless, `usize` is at most 64 bits wide.
+        let n = n as u128;
+        if n > self.back - self.front {
+            // `n + 1` calls of `next` drain the iterator: the one that takes
+            // the last address leaves the drained state, and the calls after
+            // it change nothing.
+            self.front = self.back;
+            self.next();
+            return None;
+        }
+
+        self.front += n;
+        self.next()
+    }
 }
 
 impl DoubleEndedIterator for BiContiguousIpv6NetworkAddrs {
@@ -555,6 +580,27 @@ impl DoubleEndedIterator for BiContiguousIpv6NetworkAddrs {
         }
 
         Some(Ipv6Addr::from_bits(addr))
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        if self.front > self.back {
+            return None;
+        }
+
+        // NOTE: lossless, `usize` is at most 64 bits wide.
+        let n = n as u128;
+        if n > self.back - self.front {
+            // `n + 1` calls of `next_back` drain the iterator: the one that
+            // takes the last address leaves the drained state, and the calls
+            // after it change nothing.
+            self.back = self.front;
+            self.next_back();
+            return None;
+        }
+
+        self.back -= n;
+        self.next_back()
     }
 }
 
