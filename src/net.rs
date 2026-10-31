@@ -56,6 +56,7 @@ impl Error for CidrOverflowError {}
 /// [`Ipv6Network`] return it, as do those from [`Contiguous<IpNetwork>`] to
 /// [`Contiguous<Ipv4Network>`] and [`Contiguous<Ipv6Network>`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct IpVersionMismatchError;
 
 impl Display for IpVersionMismatchError {
@@ -2681,11 +2682,17 @@ impl TryFrom<IpNetwork> for Ipv4Network {
     /// );
     ///
     /// let net = IpNetwork::parse("2001:db8::/32").unwrap();
-    /// assert_eq!(Err(IpVersionMismatchError), Ipv4Network::try_from(net));
+    /// assert!(matches!(
+    ///     Ipv4Network::try_from(net),
+    ///     Err(IpVersionMismatchError { .. })
+    /// ));
     ///
     /// // An IPv4-mapped network converts only in its canonical form.
     /// let net = IpNetwork::parse("::ffff:10.0.0.0/104").unwrap();
-    /// assert_eq!(Err(IpVersionMismatchError), Ipv4Network::try_from(net));
+    /// assert!(matches!(
+    ///     Ipv4Network::try_from(net),
+    ///     Err(IpVersionMismatchError { .. })
+    /// ));
     /// assert_eq!(
     ///     Ok(Ipv4Network::parse("10.0.0.0/8").unwrap()),
     ///     Ipv4Network::try_from(net.to_canonical())
@@ -5735,7 +5742,10 @@ impl TryFrom<IpNetwork> for Ipv6Network {
     /// );
     ///
     /// let net = IpNetwork::parse("10.0.0.0/8").unwrap();
-    /// assert_eq!(Err(IpVersionMismatchError), Ipv6Network::try_from(net));
+    /// assert!(matches!(
+    ///     Ipv6Network::try_from(net),
+    ///     Err(IpVersionMismatchError { .. })
+    /// ));
     /// assert_eq!(
     ///     Ipv6Network::parse("::ffff:10.0.0.0/104").unwrap(),
     ///     net.to_ipv6_mapped()

@@ -23,6 +23,7 @@ use crate::net::{CidrOverflowError, IPV4_ALL_BITS, IPV6_ALL_BITS, IpNetwork, Ipv
 
 /// An error that is returned during IP network parsing.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum IpNetParseError {
     /// Failed to parse IP address.
     AddrParseError(AddrParseError),
