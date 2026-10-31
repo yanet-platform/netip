@@ -14,11 +14,14 @@
 //! version bump while netip is `0.x`, and in a major one from `1.0` on.
 //!
 //! - **Text.** The [`Display`](core::fmt::Display) text of every network type,
-//!   of [`fmt::Compact`] and of [`MacAddr`] does not change, and parsing reads
-//!   it back: for a value `v` of type `T`, `v.to_string().parse::<T>()` returns
-//!   `Ok(v)`, as do `T::parse` and `T::parse_ascii` where `T` has them. The
-//!   same holds for the text of `Compact(v)`. Only the plain text is covered: a
-//!   width or a precision in the format string pads or truncates it.
+//!   of [`fmt::Compact`], of [`MacAddr`] and of the MAC adapters
+//!   [`fmt::MacHyphens`] and [`fmt::MacDots`] does not change, and parsing
+//!   reads it back: for a value `v` of type `T`, `v.to_string().parse::<T>()`
+//!   returns `Ok(v)`, as do `T::parse` and `T::parse_ascii` where `T` has them.
+//!   The same holds for the text of `Compact(v)`, and for the text of a MAC
+//!   address in either adapter and either case, `{:x}` or `{:X}`, read as a
+//!   [`MacAddr`]. Only the plain text is covered: a width or a precision in the
+//!   format string pads or truncates it.
 //! - **Bits.** [`Ipv4Network::to_bits`] and [`Ipv6Network::to_bits`] return the
 //!   address and the mask as integers in the bit order of
 //!   [`Ipv4Addr::to_bits`](core::net::Ipv4Addr::to_bits), and `from_bits`
