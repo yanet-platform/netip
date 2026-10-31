@@ -43,7 +43,7 @@ IpNetwork::to_contiguous                            edd3032413b19439  Netip/Impl
 IpNetwork::is_contiguous                            c4a01d0c05d6fd5e  Netip/Impl/IpNetwork.lean:IpNet.isContiguous
 IpNetwork::prefix                                   302e24256e88a46c  Netip/Impl/IpNetwork.lean:IpNet.prefixLen
 IpNetwork::host_bits                                fe3cc9b67fa65000  Netip/HostIndex.lean:cpop_not_eq_hostBits Netip/HostIndex.lean:card_S
-IpNetwork::last_addr                                1a0a70fd38ea445f  Netip/Impl/IpNetwork.lean:IpNet.lastAddr
+IpNetwork::last_addr                                b808a098e557d701  Netip/Impl/IpNetwork.lean:IpNet.lastAddr
 IpNetwork::intersects                               3fbc07f4d47841e0  Netip/Impl/IpNetwork.lean:IpNet.intersects
 IpNetwork::is_disjoint                              3d401129e5f0b91b  Netip/Impl/IpNetwork.lean:IpNet.isDisjoint
 IpNetwork::intersection                             4d221133894498ec  Netip/Impl/IpNetwork.lean:IpNet.intersection

@@ -646,7 +646,7 @@ impl IpNetwork {
     /// ```
     #[inline]
     #[must_use]
-    pub fn last_addr(&self) -> IpAddr {
+    pub const fn last_addr(&self) -> IpAddr {
         match self {
             Self::V4(net) => IpAddr::V4(net.last_addr()),
             Self::V6(net) => IpAddr::V6(net.last_addr()),
@@ -12338,6 +12338,32 @@ mod test {
         let expected = IpNetwork::parse("192.168.0.0/16").unwrap();
         assert_eq!(expected, CONTIGUOUS);
         assert_eq!(NET.to_contiguous(), CONTIGUOUS);
+    }
+
+    #[test]
+    fn ipnetwork_last_addr_const_fn() {
+        use core::net::IpAddr;
+
+        const V4: IpNetwork = IpNetwork::V4(Ipv4Network::new(
+            Ipv4Addr::new(192, 168, 0, 0),
+            Ipv4Addr::new(255, 255, 0, 255),
+        ));
+        const V6: IpNetwork = IpNetwork::V6(Ipv6Network::new(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0),
+        ));
+        const V4_LAST: IpAddr = V4.last_addr();
+        const V6_LAST: IpAddr = V6.last_addr();
+
+        assert_eq!(IpAddr::V4(Ipv4Addr::new(192, 168, 255, 0)), V4_LAST);
+        assert_eq!(
+            IpAddr::V6(Ipv6Addr::new(
+                0x2001, 0xdb8, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff
+            )),
+            V6_LAST
+        );
+        assert_eq!(V4.last_addr(), V4_LAST);
+        assert_eq!(V6.last_addr(), V6_LAST);
     }
 
     #[test]
