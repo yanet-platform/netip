@@ -18,7 +18,7 @@
 
 use core::{
     fmt::{self, Display, Formatter, LowerHex, UpperHex},
-    net::Ipv6Addr,
+    net::{Ipv4Addr, Ipv6Addr},
     str::{self, FromStr},
 };
 
@@ -370,6 +370,86 @@ impl MacAddr {
     #[must_use]
     pub const fn to_ipv6_link_local(&self) -> Ipv6Addr {
         Ipv6Addr::from_bits(0xfe80 << 112 | self.to_modified_eui64() as u128)
+    }
+
+    /// Returns the MAC address that an IPv4 multicast group maps to, or
+    /// [`None`] if `group` is not a multicast address.
+    ///
+    /// The address is `01:00:5e` followed by the low 23 bits of the group, as
+    /// defined in [IETF RFC 1112 section 6.4]. The upper 5 of the 28 group
+    /// bits are dropped, so 32 groups share each address: `224.1.1.1` and
+    /// `239.129.1.1` both map to `01:00:5e:01:01:01`.
+    ///
+    /// [IETF RFC 1112 section 6.4]: https://tools.ietf.org/html/rfc1112#section-6.4
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv4Addr;
+    ///
+    /// use netip::MacAddr;
+    ///
+    /// // mDNS.
+    /// assert_eq!(
+    ///     Some(MacAddr::new(0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb)),
+    ///     MacAddr::from_ipv4_multicast(Ipv4Addr::new(224, 0, 0, 251))
+    /// );
+    ///
+    /// assert_eq!(
+    ///     MacAddr::from_ipv4_multicast(Ipv4Addr::new(224, 1, 1, 1)),
+    ///     MacAddr::from_ipv4_multicast(Ipv4Addr::new(239, 129, 1, 1))
+    /// );
+    ///
+    /// assert_eq!(
+    ///     None,
+    ///     MacAddr::from_ipv4_multicast(Ipv4Addr::new(10, 0, 0, 1))
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn from_ipv4_multicast(group: Ipv4Addr) -> Option<MacAddr> {
+        if !group.is_multicast() {
+            return None;
+        }
+
+        Some(Self(0x0100_5e00_0000 | (group.to_bits() & 0x7f_ffff) as u64))
+    }
+
+    /// Returns the MAC address that an IPv6 multicast group maps to, or
+    /// [`None`] if `group` is not a multicast address.
+    ///
+    /// The address is `33:33` followed by the low 32 bits of the group, as
+    /// defined in [IETF RFC 2464 section 7], so groups that differ only in
+    /// their upper 96 bits share an address. An IPv4-mapped address is not a
+    /// multicast group here, even if the IPv4 address is one.
+    ///
+    /// [IETF RFC 2464 section 7]: https://tools.ietf.org/html/rfc2464#section-7
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::MacAddr;
+    ///
+    /// // The solicited-node group of `2001:db8::1`.
+    /// let group: Ipv6Addr = "ff02::1:ff00:1".parse().unwrap();
+    /// assert_eq!(
+    ///     Some(MacAddr::new(0x33, 0x33, 0xff, 0x00, 0x00, 0x01)),
+    ///     MacAddr::from_ipv6_multicast(group)
+    /// );
+    ///
+    /// let addr: Ipv6Addr = "2001:db8::1".parse().unwrap();
+    /// assert_eq!(None, MacAddr::from_ipv6_multicast(addr));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn from_ipv6_multicast(group: Ipv6Addr) -> Option<MacAddr> {
+        if !group.is_multicast() {
+            return None;
+        }
+
+        Some(Self(0x3333_0000_0000 | (group.to_bits() & 0xffff_ffff) as u64))
     }
 }
 
@@ -769,6 +849,90 @@ mod test {
     }
 
     #[test]
+    fn from_ipv4_multicast() {
+        // All hosts, mDNS and SSDP.
+        assert_eq!(
+            Some(MacAddr::new(0x01, 0x00, 0x5e, 0x00, 0x00, 0x01)),
+            MacAddr::from_ipv4_multicast(Ipv4Addr::new(224, 0, 0, 1))
+        );
+        assert_eq!(
+            Some(MacAddr::new(0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb)),
+            MacAddr::from_ipv4_multicast(Ipv4Addr::new(224, 0, 0, 251))
+        );
+        assert_eq!(
+            Some(MacAddr::new(0x01, 0x00, 0x5e, 0x7f, 0xff, 0xfa)),
+            MacAddr::from_ipv4_multicast(Ipv4Addr::new(239, 255, 255, 250))
+        );
+        // The ends of 224.0.0.0/4.
+        assert_eq!(
+            Some(MacAddr::new(0x01, 0x00, 0x5e, 0x00, 0x00, 0x00)),
+            MacAddr::from_ipv4_multicast(Ipv4Addr::new(224, 0, 0, 0))
+        );
+        assert_eq!(
+            Some(MacAddr::new(0x01, 0x00, 0x5e, 0x7f, 0xff, 0xff)),
+            MacAddr::from_ipv4_multicast(Ipv4Addr::new(239, 255, 255, 255))
+        );
+        // The upper 5 group bits are dropped.
+        assert_eq!(
+            Some(MacAddr::new(0x01, 0x00, 0x5e, 0x01, 0x01, 0x01)),
+            MacAddr::from_ipv4_multicast(Ipv4Addr::new(239, 129, 1, 1))
+        );
+
+        // Just outside 224.0.0.0/4, and the special addresses.
+        assert_eq!(None, MacAddr::from_ipv4_multicast(Ipv4Addr::new(223, 255, 255, 255)));
+        assert_eq!(None, MacAddr::from_ipv4_multicast(Ipv4Addr::new(240, 0, 0, 0)));
+        assert_eq!(None, MacAddr::from_ipv4_multicast(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(None, MacAddr::from_ipv4_multicast(Ipv4Addr::BROADCAST));
+    }
+
+    #[test]
+    fn from_ipv6_multicast() {
+        // All nodes, mDNS and a solicited-node group.
+        assert_eq!(
+            Some(MacAddr::new(0x33, 0x33, 0x00, 0x00, 0x00, 0x01)),
+            MacAddr::from_ipv6_multicast(Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1))
+        );
+        assert_eq!(
+            Some(MacAddr::new(0x33, 0x33, 0x00, 0x00, 0x00, 0xfb)),
+            MacAddr::from_ipv6_multicast(Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xfb))
+        );
+        assert_eq!(
+            Some(MacAddr::new(0x33, 0x33, 0xff, 0x33, 0x44, 0x55)),
+            MacAddr::from_ipv6_multicast(Ipv6Addr::new(0xff02, 0, 0, 0, 0, 1, 0xff33, 0x4455))
+        );
+        // The ends of ff00::/8.
+        assert_eq!(
+            Some(MacAddr::new(0x33, 0x33, 0x00, 0x00, 0x00, 0x00)),
+            MacAddr::from_ipv6_multicast(Ipv6Addr::new(0xff00, 0, 0, 0, 0, 0, 0, 0))
+        );
+        assert_eq!(
+            Some(MacAddr::new(0x33, 0x33, 0xff, 0xff, 0xff, 0xff)),
+            MacAddr::from_ipv6_multicast(Ipv6Addr::from_bits(u128::MAX))
+        );
+
+        // Just below ff00::/8, the unspecified address, and an IPv4-mapped
+        // multicast group, which stays IPv6.
+        assert_eq!(
+            None,
+            MacAddr::from_ipv6_multicast(Ipv6Addr::from_bits((0xff << 120) - 1))
+        );
+        assert_eq!(None, MacAddr::from_ipv6_multicast(Ipv6Addr::UNSPECIFIED));
+        assert_eq!(
+            None,
+            MacAddr::from_ipv6_multicast(Ipv4Addr::new(224, 0, 0, 1).to_ipv6_mapped())
+        );
+    }
+
+    #[test]
+    fn from_multicast_in_const() {
+        const V4: Option<MacAddr> = MacAddr::from_ipv4_multicast(Ipv4Addr::new(224, 0, 0, 251));
+        const V6: Option<MacAddr> = MacAddr::from_ipv6_multicast(Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xfb));
+
+        assert_eq!(Some(MacAddr::new(0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb)), V4);
+        assert_eq!(Some(MacAddr::new(0x33, 0x33, 0x00, 0x00, 0x00, 0xfb)), V6);
+    }
+
+    #[test]
     fn modified_eui64_in_const() {
         const IID: u64 = MAC.to_modified_eui64();
         const BACK: Option<MacAddr> = MacAddr::from_modified_eui64(IID);
@@ -1058,6 +1222,45 @@ mod test {
             prop_assert_eq!(iid.to_be_bytes()[3..5] == [0xff, 0xfe], mac.is_some());
             if let Some(mac) = mac {
                 prop_assert_eq!(iid, mac.to_modified_eui64());
+            }
+        }
+
+        // `Some` exactly for 224.0.0.0/4, and then `01:00:5e` and the low 23
+        // bits of the group, read from its octets. A uniform group is
+        // multicast once in 16 draws, so half the draws are forced into it.
+        #[test]
+        fn prop_from_ipv4_multicast_maps_low_23_bits(
+            bits in prop_oneof![
+                any::<u32>(),
+                any::<u32>().prop_map(|bits| bits & 0x0fff_ffff | 0xe000_0000),
+            ]
+        ) {
+            let group = Ipv4Addr::from_bits(bits);
+            let [a, b, c, d] = group.octets();
+            let mac = MacAddr::from_ipv4_multicast(group);
+
+            prop_assert_eq!(a >> 4 == 0b1110, mac.is_some());
+            if let Some(mac) = mac {
+                prop_assert_eq!([0x01, 0x00, 0x5e, b & 0x7f, c, d], mac.octets());
+                prop_assert!(mac.is_multicast());
+            }
+        }
+
+        // `Some` exactly for ff00::/8, and then `33:33` and the last four
+        // octets of the group. A uniform group is multicast once in 256
+        // draws, so half the draws are forced into it.
+        #[test]
+        fn prop_from_ipv6_multicast_maps_last_four_octets(
+            bits in prop_oneof![any::<u128>(), any::<u128>().prop_map(|bits| bits | 0xff << 120)]
+        ) {
+            let group = Ipv6Addr::from_bits(bits);
+            let o = group.octets();
+            let mac = MacAddr::from_ipv6_multicast(group);
+
+            prop_assert_eq!(o[0] == 0xff, mac.is_some());
+            if let Some(mac) = mac {
+                prop_assert_eq!([0x33, 0x33, o[12], o[13], o[14], o[15]], mac.octets());
+                prop_assert!(mac.is_multicast());
             }
         }
 
