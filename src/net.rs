@@ -6744,7 +6744,7 @@ fn ip_aggregate<T: Aggregate>(nets: &mut [T]) -> usize {
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
     use core::cmp::Ordering;
 
     use proptest::prelude::*;
@@ -13519,17 +13519,53 @@ mod test {
         }
     }
 
-    // Shared with `net::contiguous`'s test module: `arb_contiguous_ipv4_network`
-    // there calls this directly.
-    pub(crate) fn arb_ipv4_network() -> impl Strategy<Value = Ipv4Network> {
-        (any::<u32>(), any::<u32>()).prop_map(|(a, m)| Ipv4Network::from_bits(a, m))
+    // A mask in one of the shapes that matter: uniform, the bulk of the
+    // non-contiguous masks; a prefix of any length; a few set or a few clear
+    // bits anywhere; a run of set bits anywhere, two runs when it wraps
+    // around the ends; and the ends themselves, no bits and all of them.
+    // Uniform masks alone have about half their bits set and almost never
+    // take any of the other shapes.
+    fn arb_ipv4_mask() -> impl Strategy<Value = u32> {
+        let bits = || {
+            prop::collection::vec(0u32..32, 1..=3)
+                .prop_map(|bits| bits.into_iter().fold(0, |mask, bit| mask | 1 << bit))
+        };
+        prop_oneof![
+            4 => any::<u32>(),
+            2 => (0u32..=32).prop_map(|prefix| u32::MAX.checked_shl(32 - prefix).unwrap_or(0)),
+            1 => bits(),
+            1 => bits().prop_map(|mask| !mask),
+            1 => (1u32..=32, 0u32..32).prop_map(|(len, at)| (u32::MAX >> (32 - len)).rotate_left(at)),
+            1 => prop_oneof![Just(0), Just(u32::MAX)],
+        ]
     }
 
-    // Shared with `net::bicontiguous`'s test module: two of its
+    fn arb_ipv6_mask() -> impl Strategy<Value = u128> {
+        let bits = || {
+            prop::collection::vec(0u32..128, 1..=3)
+                .prop_map(|bits| bits.into_iter().fold(0, |mask, bit| mask | 1 << bit))
+        };
+        prop_oneof![
+            4 => any::<u128>(),
+            2 => (0u32..=128).prop_map(|prefix| u128::MAX.checked_shl(128 - prefix).unwrap_or(0)),
+            1 => bits(),
+            1 => bits().prop_map(|mask| !mask),
+            1 => (1u32..=128, 0u32..128).prop_map(|(len, at)| (u128::MAX >> (128 - len)).rotate_left(at)),
+            1 => prop_oneof![Just(0), Just(u128::MAX)],
+        ]
+    }
+
+    // Shared with `net::contiguous`'s test module, where
+    // `arb_contiguous_ipv4_network` calls this directly, and with `fmt`'s.
+    pub(crate) fn arb_ipv4_network() -> impl Strategy<Value = Ipv4Network> {
+        (any::<u32>(), arb_ipv4_mask()).prop_map(|(a, m)| Ipv4Network::from_bits(a, m))
+    }
+
+    // Shared with `net::bicontiguous`'s test module, where two of its
     // `prop_ipv6_is_bicontiguous_*`/`prop_bicontiguous_ipv6_tryfrom_*` tests
-    // call this directly.
+    // call this directly, and with `fmt`'s.
     pub(crate) fn arb_ipv6_network() -> impl Strategy<Value = Ipv6Network> {
-        (any::<u128>(), any::<u128>()).prop_map(|(a, m)| Ipv6Network::from_bits(a, m))
+        (any::<u128>(), arb_ipv6_mask()).prop_map(|(a, m)| Ipv6Network::from_bits(a, m))
     }
 
     // Shared with both `net::contiguous`'s and `net::bicontiguous`'s test
@@ -13548,7 +13584,7 @@ mod test {
     // sibling or inside the sibling, at another address under the same mask,
     // or equal.
     fn arb_ipv4_network_pair() -> impl Strategy<Value = (Ipv4Network, Ipv4Network)> {
-        (arb_ipv4_network(), any::<u32>(), any::<u32>(), 0u8..7, any::<u8>()).prop_map(
+        (arb_ipv4_network(), any::<u32>(), arb_ipv4_mask(), 0u8..7, any::<u8>()).prop_map(
             |(a, bits, extra, relation, flags)| {
                 let (addr, mask) = a.to_bits();
                 let b = match relation {
@@ -13575,7 +13611,7 @@ mod test {
     }
 
     fn arb_ipv6_network_pair() -> impl Strategy<Value = (Ipv6Network, Ipv6Network)> {
-        (arb_ipv6_network(), any::<u128>(), any::<u128>(), 0u8..7, any::<u8>()).prop_map(
+        (arb_ipv6_network(), any::<u128>(), arb_ipv6_mask(), 0u8..7, any::<u8>()).prop_map(
             |(a, bits, extra, relation, flags)| {
                 let (addr, mask) = a.to_bits();
                 let b = match relation {
@@ -14427,17 +14463,18 @@ mod test {
         fn prop_ipv6_difference_completeness(
             (a, b) in arb_ipv6_network_pair(),
         ) {
+            // Sizes modulo 2^128: only `::/0`, the whole space, wraps to 0.
             let size = |n: &Ipv6Network| -> u128 {
                 let (.., m) = n.to_bits();
-                1u128 << (!m).count_ones()
+                1u128.checked_shl((!m).count_ones()).unwrap_or(0)
             };
 
             let a_size = size(&a);
             let inter_size = a.intersection(&b).map_or(0, |c| size(&c));
-            let diff_size: u128 = a.difference(&b).map(|r| size(&r)).sum();
+            let diff_size = a.difference(&b).fold(0u128, |sum, r| sum.wrapping_add(size(&r)));
 
             prop_assert_eq!(
-                diff_size + inter_size,
+                diff_size.wrapping_add(inter_size),
                 a_size,
                 "a={}, b={}, inter={:?}", a, b, a.intersection(&b)
             );
