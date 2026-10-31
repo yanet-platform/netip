@@ -695,7 +695,7 @@ impl Display for MacAddrParseError {
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "invalid MAC address, expected EUI-48: xx:xx:xx:xx:xx:xx or a u64 below 2^48"
+            "invalid MAC address, expected xx:xx:xx:xx:xx:xx, xx-xx-xx-xx-xx-xx, xxxx.xxxx.xxxx or a u64 below 2^48"
         )
     }
 }
@@ -807,6 +807,17 @@ mod test {
                 "byte {byte:#04x}"
             );
         }
+    }
+
+    // The message names every text form `parse_ascii` accepts, and the `u64`
+    // range of `TryFrom<u64>`.
+    #[test]
+    fn parse_error_message_names_every_form() {
+        const MESSAGE: &str =
+            "invalid MAC address, expected xx:xx:xx:xx:xx:xx, xx-xx-xx-xx-xx-xx, xxxx.xxxx.xxxx or a u64 below 2^48";
+
+        assert_eq!(MESSAGE, "3a:ac:26:9b:5b".parse::<MacAddr>().unwrap_err().to_string());
+        assert_eq!(MESSAGE, MacAddr::try_from(1 << 48).unwrap_err().to_string());
     }
 
     #[test]
