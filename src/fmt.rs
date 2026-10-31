@@ -79,7 +79,7 @@ impl Display for Compact<Ipv4Network> {
     fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
         let Self(net) = self;
         match net.prefix() {
-            Some(32) => Display::fmt(net.addr(), fmt),
+            Some(32) => Display::fmt(&net.addr(), fmt),
             // Every other network reads the same as in the base `Display`.
             _ => Display::fmt(net, fmt),
         }
@@ -90,7 +90,7 @@ impl Display for Compact<Ipv6Network> {
     fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
         let Self(net) = self;
         match net.prefix() {
-            Some(128) => Display::fmt(net.addr(), fmt),
+            Some(128) => Display::fmt(&net.addr(), fmt),
             // Every other network reads the same as in the base `Display`.
             _ => Display::fmt(net, fmt),
         }

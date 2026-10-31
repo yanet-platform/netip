@@ -35,8 +35,8 @@ IpNetwork                                           d6a404c98a78c34c  Netip/Impl
 IpNetwork::parse                                    41e87390d4041b75  Netip/Impl/ParseNet.lean:Parse.parseIpNetworkAscii
 IpNetwork::parse_ascii                              cad6768bc96d9f37  Netip/Impl/ParseNet.lean:Parse.parseIpNetworkAscii
 IpNetwork::parse_next_ascii                         d59136afe3e960b8  Netip/Impl/ParseToken.lean:Parse.parseIpNetworkNextAscii
-IpNetwork::addr                                     519ab67d10382cce  Netip/Impl/IpNetwork.lean:IpNet.addr
-IpNetwork::mask                                     5e4b8d7d48bfec91  Netip/Impl/IpNetwork.lean:IpNet.mask
+IpNetwork::addr                                     bea407e6df7fc2c6  Netip/Impl/IpNetwork.lean:IpNet.addr
+IpNetwork::mask                                     53a0dba942d820e7  Netip/Impl/IpNetwork.lean:IpNet.mask
 IpNetwork::contains                                 7db8fecf35afdaad  Netip/Impl/IpNetwork.lean:IpNet.contains
 IpNetwork::contains_addr                            effba7cb2b2015bb  Netip/Network.lean:S
 IpNetwork::to_contiguous                            edd3032413b19439  Netip/Impl/IpNetwork.lean:IpNet.toContiguous
@@ -61,8 +61,8 @@ Ipv4Network::new                                    613108d07971d6c5  Netip/Netw
 Ipv4Network::parse                                  78b7d3474503b66d  Netip/Impl/ParseNet.lean:Parse.parseIpv4NetworkAscii
 Ipv4Network::parse_ascii                            38e22dc398db36cf  Netip/Impl/ParseNet.lean:Parse.parseIpv4NetworkAscii
 Ipv4Network::parse_next_ascii                       73640e7ef168cf9c  Netip/Impl/ParseToken.lean:Parse.parseIpv4NetworkNextAscii
-Ipv4Network::addr                                   be2f122f01fc28a4  Netip/Impl/Basic.lean
-Ipv4Network::mask                                   51e6065dd9b5f369  Netip/Impl/Basic.lean
+Ipv4Network::addr                                   a4d60fc39e017998  Netip/Impl/Basic.lean
+Ipv4Network::mask                                   7251e243966c12b3  Netip/Impl/Basic.lean
 Ipv4Network::from_bits                              d7b1c2d1384f7ccd  Netip/Impl/ParseNet.lean:Parse.newNet Netip/Impl/BinarySplitSearch.lean:linear
 Ipv4Network::to_bits                                d702b2eba3e5a0b6  Netip/Impl/Basic.lean
 Ipv4Network::contains                               3a146409ca26863c  Netip/Impl/SetOps.lean:Ipv4.contains_iff Netip/Impl/Supernet.lean:Contains
@@ -114,8 +114,8 @@ Ipv6Network::new                                    73f569070334e335  Netip/Netw
 Ipv6Network::parse                                  ccddd16c389138c1  Netip/Impl/ParseNet.lean:Parse.parseIpv6NetworkAscii
 Ipv6Network::parse_ascii                            50b7480ae35b9573  Netip/Impl/ParseNet.lean:Parse.parseIpv6NetworkAscii
 Ipv6Network::parse_next_ascii                       2ef4afe8a4f71d58  Netip/Impl/ParseToken.lean:Parse.parseIpv6NetworkNextAscii
-Ipv6Network::addr                                   6113eb911ff76485  Netip/Impl/Basic.lean
-Ipv6Network::mask                                   ab9fc77ea7e52546  Netip/Impl/Basic.lean
+Ipv6Network::addr                                   fba0b808fec16065  Netip/Impl/Basic.lean
+Ipv6Network::mask                                   7fc52bd91e6034d0  Netip/Impl/Basic.lean
 Ipv6Network::from_bits                              6503ad9e06f2c51f  Netip/Impl/ParseNet.lean:Parse.newNet Netip/Impl/BinarySplitSearch.lean:linear
 Ipv6Network::to_bits                                91e3786f1907a1b4  Netip/Impl/Basic.lean
 Ipv6Network::contains                               758cc16581c7e504  Netip/Impl/SetOps.lean:Ipv6.contains_iff Netip/Impl/Supernet.lean:Contains
@@ -185,14 +185,14 @@ u128::Word::clear_bit                               01649fe28c4ef7d4  Netip/Impl
 BinarySplit                                         45549fc5da491985  Netip/Impl/BinarySplitSearch.lean:supernetStep
 Ipv4Network::BinarySplit::Mask                      8ba7c24b03a8fc0b  Netip/Impl/BinarySplitSearch.lean:quadratic
 Ipv4Network::BinarySplit::Bits                      6e8d3ade2fdab87b  Netip/Impl/BinarySplitSearch.lean:linear
-Ipv4Network::BinarySplit::mask                      0a5141bdd9938b6f  Netip/Impl/BinarySplitSearch.lean:quadratic
+Ipv4Network::BinarySplit::mask                      6782710c083e29e7  Netip/Impl/BinarySplitSearch.lean:quadratic
 Ipv4Network::BinarySplit::contains                  71c8e8c8bc105564  Netip/Impl/BinarySplit.lean:splitBlock
 Ipv4Network::BinarySplit::supernet_for              fc727f556b32ac71  Netip/Impl/BinarySplitSearch.lean:supernetStep
 Ipv4Network::BinarySplit::to_bits                   704648919af321cd  Netip/Impl/BinarySplitSearch.lean:killAt
 Ipv4Network::BinarySplit::from_bits                 c031080efd3e5e44  Netip/Impl/BinarySplitSearch.lean:linear
 Ipv6Network::BinarySplit::Mask                      3678ab96b70b8693  Netip/Impl/BinarySplitSearch.lean:quadratic
 Ipv6Network::BinarySplit::Bits                      32da431aa39ce32d  Netip/Impl/BinarySplitSearch.lean:linear
-Ipv6Network::BinarySplit::mask                      fa819786dc7427e5  Netip/Impl/BinarySplitSearch.lean:quadratic
+Ipv6Network::BinarySplit::mask                      6fce9a0950e2c9b5  Netip/Impl/BinarySplitSearch.lean:quadratic
 Ipv6Network::BinarySplit::contains                  18bf102583b746f6  Netip/Impl/BinarySplit.lean:splitBlock
 Ipv6Network::BinarySplit::supernet_for              d8c228074687e095  Netip/Impl/BinarySplitSearch.lean:supernetStep
 Ipv6Network::BinarySplit::to_bits                   ff3dc5b75bcae723  Netip/Impl/BinarySplitSearch.lean:killAt
