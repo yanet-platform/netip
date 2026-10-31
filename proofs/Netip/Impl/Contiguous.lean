@@ -4,7 +4,8 @@ import Netip.Impl.Basic
 # The `Contiguous<T>` wrapper
 
 Specializations that rely on the wrapper's contiguous mask: `contains` with an
-integer comparison, and the address iterators that step a plain index.
+integer comparison, the address iterators that step a plain index, and
+`intersection`, whose result stays contiguous.
 -/
 
 namespace Netip.Impl
@@ -15,6 +16,13 @@ namespace Ipv4
 is the integer comparison `m1 <= m2`. -/
 theorem contains_mask_iff_le (m1 m2 : BitVec 32) (h1 : IsContiguous m1) (h2 : IsContiguous m2) :
     m2 &&& m1 = m1 ↔ m1 ≤ m2 := by
+  unfold IsContiguous at *
+  bv_decide
+
+/-- `Contiguous::intersection`: the class is closed under the mask `m1 | m2` of an
+intersection, so the result needs no re-validation. -/
+theorem isContiguous_or (m1 m2 : BitVec 32) (h1 : IsContiguous m1) (h2 : IsContiguous m2) :
+    IsContiguous (m1 ||| m2) := by
   unfold IsContiguous at *
   bv_decide
 
@@ -44,6 +52,11 @@ namespace Ipv6
 
 theorem contains_mask_iff_le (m1 m2 : BitVec 128) (h1 : IsContiguous m1) (h2 : IsContiguous m2) :
     m2 &&& m1 = m1 ↔ m1 ≤ m2 := by
+  unfold IsContiguous at *
+  bv_decide
+
+theorem isContiguous_or (m1 m2 : BitVec 128) (h1 : IsContiguous m1) (h2 : IsContiguous m2) :
+    IsContiguous (m1 ||| m2) := by
   unfold IsContiguous at *
   bv_decide
 

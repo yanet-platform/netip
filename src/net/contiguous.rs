@@ -48,6 +48,23 @@ impl Error for ContiguousIpNetParseError {}
 ///
 /// Represents a wrapper around an IP network that is **guaranteed to be
 /// contiguous**.
+///
+/// The wrapper dereferences to the network, so every method of the network
+/// applies to it. Some are specialized:
+/// - `contains` compares the masks as integers, and `addrs` of an
+///   [`Ipv4Network`] or an [`Ipv6Network`] steps a plain index, both faster
+///   than the inherited ones;
+/// - `prefix` returns the prefix length with no [`Option`];
+/// - `intersection`, `merge_by_lowest_mask_bit` and `supernet` return a
+///   [`Contiguous`] network, since the class is closed under them.
+///
+/// A specialized method takes a [`Contiguous`] operand. Reach the inherited
+/// one with a possibly non-contiguous network through [`Deref`], e.g.
+/// `(*net).contains(&other)`.
+///
+/// `merge` is deliberately not specialized: the class is not closed under it,
+/// since two prefixes that differ in a bit above the last one of the prefix
+/// merge into a non-contiguous network.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Contiguous<T>(pub(crate) T);
 
@@ -192,6 +209,84 @@ impl Contiguous<IpNetwork> {
             (Self(IpNetwork::V4(a)), Self(IpNetwork::V4(b))) => Contiguous(*a).contains(&Contiguous(*b)),
             (Self(IpNetwork::V6(a)), Self(IpNetwork::V6(b))) => Contiguous(*a).contains(&Contiguous(*b)),
             _ => false,
+        }
+    }
+
+    /// Returns the intersection of this IP network with the specified one,
+    /// or [`None`] if they are disjoint or of different address families.
+    ///
+    /// Two prefixes are either nested or disjoint, so the intersection of two
+    /// contiguous networks is the longer of the two, and its mask stays
+    /// contiguous. This overrides [`IpNetwork::intersection`] to return the
+    /// result as a [`Contiguous`] network, with no re-validation. Reach the
+    /// general intersection with a possibly non-contiguous network through
+    /// [`Deref`], e.g. `(*net).intersection(&other)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, IpNetwork};
+    ///
+    /// let a = Contiguous::<IpNetwork>::parse("192.168.0.0/16").unwrap();
+    /// let b = Contiguous::<IpNetwork>::parse("192.168.1.0/24").unwrap();
+    /// assert_eq!(Some(b), a.intersection(&b));
+    ///
+    /// // Different address families.
+    /// let v6 = Contiguous::<IpNetwork>::parse("2001:db8::/32").unwrap();
+    /// assert_eq!(None, a.intersection(&v6));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn intersection(&self, other: &Self) -> Option<Self> {
+        // NOTE: use `Option::map` when it becomes const.
+        match (self, other) {
+            (Self(a), Self(b)) => match a.intersection(b) {
+                Some(net) => Some(Self(net)),
+                None => None,
+            },
+        }
+    }
+
+    /// Merges this IP network with the specified one when one contains the
+    /// other or they are the two halves of the network one prefix bit shorter,
+    /// returning the combined network. Returns [`None`] for networks of
+    /// different address families.
+    ///
+    /// The lowest bit of a contiguous mask is the last bit of the prefix, so
+    /// siblings merge into the network one prefix bit shorter, and containment
+    /// returns the larger input: either way the mask stays contiguous. This
+    /// overrides [`IpNetwork::merge_by_lowest_mask_bit`] to return the result
+    /// as a [`Contiguous`] network, with no re-validation. Reach the
+    /// general merge with a possibly non-contiguous network through
+    /// [`Deref`], e.g. `(*net).merge_by_lowest_mask_bit(&other)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, IpNetwork};
+    ///
+    /// let a = Contiguous::<IpNetwork>::parse("192.168.0.0/24").unwrap();
+    /// let b = Contiguous::<IpNetwork>::parse("192.168.1.0/24").unwrap();
+    /// let merged = a.merge_by_lowest_mask_bit(&b).unwrap();
+    /// assert_eq!(
+    ///     Contiguous::<IpNetwork>::parse("192.168.0.0/23").unwrap(),
+    ///     merged
+    /// );
+    /// assert_eq!(23, merged.prefix());
+    ///
+    /// // Different address families.
+    /// let v6 = Contiguous::<IpNetwork>::parse("2001:db8::/32").unwrap();
+    /// assert_eq!(None, a.merge_by_lowest_mask_bit(&v6));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn merge_by_lowest_mask_bit(&self, other: &Self) -> Option<Self> {
+        // NOTE: use `Option::map` when it becomes const.
+        match (self, other) {
+            (Self(a), Self(b)) => match a.merge_by_lowest_mask_bit(b) {
+                Some(net) => Some(Self(net)),
+                None => None,
+            },
         }
     }
 
@@ -373,6 +468,88 @@ impl Contiguous<Ipv4Network> {
 
                 (a2 & m1 == a1) && (m1 <= m2)
             }
+        }
+    }
+
+    /// Returns the intersection of this IPv4 network with the specified one,
+    /// or [`None`] if they are disjoint.
+    ///
+    /// Two prefixes are either nested or disjoint, so the intersection of two
+    /// contiguous networks is the longer of the two, and its mask stays
+    /// contiguous. This overrides [`Ipv4Network::intersection`] to return the
+    /// result as a [`Contiguous`] network, with no re-validation. Reach the
+    /// general intersection with a possibly non-contiguous network through
+    /// [`Deref`], e.g. `(*net).intersection(&other)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, Ipv4Network};
+    ///
+    /// let a = Contiguous::<Ipv4Network>::parse("192.168.0.0/16").unwrap();
+    /// let b = Contiguous::<Ipv4Network>::parse("192.168.1.0/24").unwrap();
+    /// assert_eq!(Some(b), a.intersection(&b));
+    /// assert_eq!(Some(b), b.intersection(&a));
+    ///
+    /// let c = Contiguous::<Ipv4Network>::parse("10.0.0.0/8").unwrap();
+    /// assert_eq!(None, a.intersection(&c));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn intersection(&self, other: &Self) -> Option<Self> {
+        // NOTE: use `Option::map` when it becomes const.
+        match (self, other) {
+            (Self(a), Self(b)) => match a.intersection(b) {
+                Some(net) => Some(Self(net)),
+                None => None,
+            },
+        }
+    }
+
+    /// Merges this IPv4 network with the specified one when one contains the
+    /// other or they are the two halves of the network one prefix bit shorter,
+    /// returning the combined network.
+    ///
+    /// The lowest bit of a contiguous mask is the last bit of the prefix, so
+    /// siblings merge into the network one prefix bit shorter, and containment
+    /// returns the larger input: either way the mask stays contiguous. This
+    /// overrides [`Ipv4Network::merge_by_lowest_mask_bit`] to return the result
+    /// as a [`Contiguous`] network, with no re-validation. Reach the
+    /// general merge with a possibly non-contiguous network through
+    /// [`Deref`], e.g. `(*net).merge_by_lowest_mask_bit(&other)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, Ipv4Network};
+    ///
+    /// let a = Contiguous::<Ipv4Network>::parse("192.168.0.0/24").unwrap();
+    /// let b = Contiguous::<Ipv4Network>::parse("192.168.1.0/24").unwrap();
+    /// let merged = a.merge_by_lowest_mask_bit(&b).unwrap();
+    /// assert_eq!(
+    ///     Contiguous::<Ipv4Network>::parse("192.168.0.0/23").unwrap(),
+    ///     merged
+    /// );
+    /// assert_eq!(23, merged.prefix());
+    ///
+    /// // Containment: the larger network is returned.
+    /// let outer = Contiguous::<Ipv4Network>::parse("192.168.0.0/16").unwrap();
+    /// assert_eq!(Some(outer), a.merge_by_lowest_mask_bit(&outer));
+    ///
+    /// // These differ above the last prefix bit: merging them would leave a
+    /// // non-contiguous mask.
+    /// let c = Contiguous::<Ipv4Network>::parse("192.168.2.0/24").unwrap();
+    /// assert_eq!(None, a.merge_by_lowest_mask_bit(&c));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn merge_by_lowest_mask_bit(&self, other: &Self) -> Option<Self> {
+        // NOTE: use `Option::map` when it becomes const.
+        match (self, other) {
+            (Self(a), Self(b)) => match a.merge_by_lowest_mask_bit(b) {
+                Some(net) => Some(Self(net)),
+                None => None,
+            },
         }
     }
 
@@ -757,6 +934,88 @@ impl Contiguous<Ipv6Network> {
 
                 (a2 & m1 == a1) && (m1 <= m2)
             }
+        }
+    }
+
+    /// Returns the intersection of this IPv6 network with the specified one,
+    /// or [`None`] if they are disjoint.
+    ///
+    /// Two prefixes are either nested or disjoint, so the intersection of two
+    /// contiguous networks is the longer of the two, and its mask stays
+    /// contiguous. This overrides [`Ipv6Network::intersection`] to return the
+    /// result as a [`Contiguous`] network, with no re-validation. Reach the
+    /// general intersection with a possibly non-contiguous network through
+    /// [`Deref`], e.g. `(*net).intersection(&other)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, Ipv6Network};
+    ///
+    /// let a = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+    /// let b = Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap();
+    /// assert_eq!(Some(b), a.intersection(&b));
+    /// assert_eq!(Some(b), b.intersection(&a));
+    ///
+    /// let c = Contiguous::<Ipv6Network>::parse("fe80::/10").unwrap();
+    /// assert_eq!(None, a.intersection(&c));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn intersection(&self, other: &Self) -> Option<Self> {
+        // NOTE: use `Option::map` when it becomes const.
+        match (self, other) {
+            (Self(a), Self(b)) => match a.intersection(b) {
+                Some(net) => Some(Self(net)),
+                None => None,
+            },
+        }
+    }
+
+    /// Merges this IPv6 network with the specified one when one contains the
+    /// other or they are the two halves of the network one prefix bit shorter,
+    /// returning the combined network.
+    ///
+    /// The lowest bit of a contiguous mask is the last bit of the prefix, so
+    /// siblings merge into the network one prefix bit shorter, and containment
+    /// returns the larger input: either way the mask stays contiguous. This
+    /// overrides [`Ipv6Network::merge_by_lowest_mask_bit`] to return the result
+    /// as a [`Contiguous`] network, with no re-validation. Reach the
+    /// general merge with a possibly non-contiguous network through
+    /// [`Deref`], e.g. `(*net).merge_by_lowest_mask_bit(&other)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, Ipv6Network};
+    ///
+    /// let a = Contiguous::<Ipv6Network>::parse("2001:db8::/48").unwrap();
+    /// let b = Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap();
+    /// let merged = a.merge_by_lowest_mask_bit(&b).unwrap();
+    /// assert_eq!(
+    ///     Contiguous::<Ipv6Network>::parse("2001:db8::/47").unwrap(),
+    ///     merged
+    /// );
+    /// assert_eq!(47, merged.prefix());
+    ///
+    /// // Containment: the larger network is returned.
+    /// let outer = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+    /// assert_eq!(Some(outer), a.merge_by_lowest_mask_bit(&outer));
+    ///
+    /// // These differ above the last prefix bit: merging them would leave a
+    /// // non-contiguous mask.
+    /// let c = Contiguous::<Ipv6Network>::parse("2001:db8:2::/48").unwrap();
+    /// assert_eq!(None, a.merge_by_lowest_mask_bit(&c));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn merge_by_lowest_mask_bit(&self, other: &Self) -> Option<Self> {
+        // NOTE: use `Option::map` when it becomes const.
+        match (self, other) {
+            (Self(a), Self(b)) => match a.merge_by_lowest_mask_bit(b) {
+                Some(net) => Some(Self(net)),
+                None => None,
+            },
         }
     }
 
@@ -2292,6 +2551,77 @@ mod test {
     }
 
     #[test]
+    fn contiguous_intersection_keeps_the_type() {
+        let a = Contiguous::<Ipv4Network>::parse("172.16.0.0/16").unwrap();
+        let b = Contiguous::<Ipv4Network>::parse("172.16.1.0/24").unwrap();
+        let c = Contiguous::<Ipv4Network>::parse("172.16.2.0/24").unwrap();
+        assert_eq!(Some(b), a.intersection(&b));
+        assert_eq!(Some(b), b.intersection(&a));
+        assert_eq!(None, b.intersection(&c));
+
+        let a = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+        let b = Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap();
+        let c = Contiguous::<Ipv6Network>::parse("2001:db8:2::/48").unwrap();
+        assert_eq!(Some(b), a.intersection(&b));
+        assert_eq!(Some(b), b.intersection(&a));
+        assert_eq!(None, b.intersection(&c));
+
+        let a = Contiguous::<IpNetwork>::parse("172.16.0.0/16").unwrap();
+        let b = Contiguous::<IpNetwork>::parse("172.16.1.0/24").unwrap();
+        assert_eq!(Some(b), a.intersection(&b));
+
+        let a = Contiguous::<IpNetwork>::parse("2001:db8::/32").unwrap();
+        let b = Contiguous::<IpNetwork>::parse("2001:db8:1::/48").unwrap();
+        assert_eq!(Some(b), a.intersection(&b));
+
+        // Different address families.
+        let v4 = Contiguous::<IpNetwork>::parse("0.0.0.0/0").unwrap();
+        let v6 = Contiguous::<IpNetwork>::parse("::/0").unwrap();
+        assert_eq!(None, v4.intersection(&v6));
+        assert_eq!(None, v6.intersection(&v4));
+    }
+
+    #[test]
+    fn contiguous_merge_by_lowest_mask_bit_keeps_the_type() {
+        let a = Contiguous::<Ipv4Network>::parse("172.16.0.0/24").unwrap();
+        let b = Contiguous::<Ipv4Network>::parse("172.16.1.0/24").unwrap();
+        let c = Contiguous::<Ipv4Network>::parse("172.16.2.0/24").unwrap();
+        let parent = Contiguous::<Ipv4Network>::parse("172.16.0.0/23").unwrap();
+        assert_eq!(Some(parent), a.merge_by_lowest_mask_bit(&b));
+        assert_eq!(Some(parent), b.merge_by_lowest_mask_bit(&a));
+        assert_eq!(Some(parent), a.merge_by_lowest_mask_bit(&parent));
+        assert_eq!(None, a.merge_by_lowest_mask_bit(&c));
+
+        let a = Contiguous::<Ipv6Network>::parse("2001:db8::/48").unwrap();
+        let b = Contiguous::<Ipv6Network>::parse("2001:db8:1::/48").unwrap();
+        let c = Contiguous::<Ipv6Network>::parse("2001:db8:2::/48").unwrap();
+        let parent = Contiguous::<Ipv6Network>::parse("2001:db8::/47").unwrap();
+        assert_eq!(Some(parent), a.merge_by_lowest_mask_bit(&b));
+        assert_eq!(Some(parent), b.merge_by_lowest_mask_bit(&a));
+        assert_eq!(Some(parent), a.merge_by_lowest_mask_bit(&parent));
+        assert_eq!(None, a.merge_by_lowest_mask_bit(&c));
+
+        let a = Contiguous::<IpNetwork>::parse("172.16.0.0/24").unwrap();
+        let b = Contiguous::<IpNetwork>::parse("172.16.1.0/24").unwrap();
+        let c = Contiguous::<IpNetwork>::parse("172.16.2.0/24").unwrap();
+        let parent = Contiguous::<IpNetwork>::parse("172.16.0.0/23").unwrap();
+        assert_eq!(Some(parent), a.merge_by_lowest_mask_bit(&b));
+        assert_eq!(None, a.merge_by_lowest_mask_bit(&c));
+
+        let a = Contiguous::<IpNetwork>::parse("2001:db8::/48").unwrap();
+        let b = Contiguous::<IpNetwork>::parse("2001:db8:1::/48").unwrap();
+        let parent = Contiguous::<IpNetwork>::parse("2001:db8::/47").unwrap();
+        assert_eq!(Some(parent), a.merge_by_lowest_mask_bit(&b));
+
+        // Different address families, even where one would contain the other
+        // within a family.
+        let v4 = Contiguous::<IpNetwork>::parse("0.0.0.0/0").unwrap();
+        let v6 = Contiguous::<IpNetwork>::parse("::/0").unwrap();
+        assert_eq!(None, v4.merge_by_lowest_mask_bit(&v6));
+        assert_eq!(None, v6.merge_by_lowest_mask_bit(&v4));
+    }
+
+    #[test]
     fn contiguous_as_ref_borrows_the_wrapped_network() {
         let net = Contiguous::<Ipv4Network>::parse("192.168.0.0/16").unwrap();
         assert!(core::ptr::eq(&*net, net.as_ref()));
@@ -2759,6 +3089,71 @@ mod test {
         ]
     }
 
+    // Pairs of contiguous networks in four relations, in equal measure: nested,
+    // siblings under the network one prefix bit shorter, equal prefixes that
+    // differ in one random bit of it, and unrelated. Two random prefixes are
+    // almost always disjoint, which would leave the `Some` branches of
+    // `intersection` and `merge_by_lowest_mask_bit` untested, and the third
+    // relation is where `merge` and `merge_by_lowest_mask_bit` part.
+    fn arb_related_contiguous_ipv4_networks()
+    -> impl Strategy<Value = (Contiguous<Ipv4Network>, Contiguous<Ipv4Network>)> {
+        (any::<u32>(), any::<u32>(), 0u8..=32, 0u8..=32, 0u8..4).prop_map(|(addr, other, p, q, relation)| {
+            let net = |addr, prefix| Contiguous::<Ipv4Network>::from_prefix(Ipv4Addr::from_bits(addr), prefix).unwrap();
+            // The last bit of the prefix, and a random one of its bits; none
+            // for a `/0`.
+            let last = 1u32.checked_shl(32 - u32::from(p)).unwrap_or(0);
+            let any = 1u32.checked_shl(31 - other % u32::from(p.max(1))).unwrap_or(0)
+                & !u32::MAX.checked_shr(u32::from(p)).unwrap_or(0);
+
+            let b = match relation {
+                0 => net(addr, q),
+                1 => net(addr ^ last, p),
+                2 => net(addr ^ any, p),
+                _ => net(other, q),
+            };
+            (net(addr, p), b)
+        })
+    }
+
+    fn arb_related_contiguous_ipv6_networks()
+    -> impl Strategy<Value = (Contiguous<Ipv6Network>, Contiguous<Ipv6Network>)> {
+        (any::<u128>(), any::<u128>(), 0u8..=128, 0u8..=128, 0u8..4).prop_map(|(addr, other, p, q, relation)| {
+            let net = |addr, prefix| Contiguous::<Ipv6Network>::from_prefix(Ipv6Addr::from_bits(addr), prefix).unwrap();
+            let last = 1u128.checked_shl(128 - u32::from(p)).unwrap_or(0);
+            let any = 1u128
+                .checked_shl(127 - (other % u128::from(p.max(1))) as u32)
+                .unwrap_or(0)
+                & !u128::MAX.checked_shr(u32::from(p)).unwrap_or(0);
+
+            let b = match relation {
+                0 => net(addr, q),
+                1 => net(addr ^ last, p),
+                2 => net(addr ^ any, p),
+                _ => net(other, q),
+            };
+            (net(addr, p), b)
+        })
+    }
+
+    // The related pairs of each family, and pairs of different families.
+    fn arb_related_contiguous_ip_networks() -> impl Strategy<Value = (Contiguous<IpNetwork>, Contiguous<IpNetwork>)> {
+        prop_oneof![
+            arb_related_contiguous_ipv4_networks()
+                .prop_map(|(a, b)| (Contiguous::<IpNetwork>::from(a), Contiguous::<IpNetwork>::from(b))),
+            arb_related_contiguous_ipv6_networks()
+                .prop_map(|(a, b)| (Contiguous::<IpNetwork>::from(a), Contiguous::<IpNetwork>::from(b))),
+            (
+                arb_contiguous_ipv4_network(),
+                arb_contiguous_ipv6_network(),
+                any::<bool>()
+            )
+                .prop_map(|(v4, v6, swap)| {
+                    let (v4, v6) = (Contiguous::<IpNetwork>::from(v4), Contiguous::<IpNetwork>::from(v6));
+                    if swap { (v6, v4) } else { (v4, v6) }
+                }),
+        ]
+    }
+
     // Bounded to at most 8 host bits (256 addresses) so `addrs()` can be
     // fully collected/brute-forced in a proptest case without allocating an
     // unbounded amount of memory.
@@ -3168,6 +3563,72 @@ mod test {
             prop_assert_eq!((*net).supernet(), supernet.map(|net| *net));
             if let Some(supernet) = supernet {
                 prop_assert!((*supernet).is_contiguous());
+            }
+        }
+
+        // The typed intersection and merge wrap the general ones, and their
+        // results are contiguous, as the wrapper promises.
+        #[test]
+        fn prop_contiguous_ipv4_intersection_matches_general((a, b) in arb_related_contiguous_ipv4_networks()) {
+            let intersection = a.intersection(&b);
+
+            prop_assert_eq!((*a).intersection(&b), intersection.map(|net| *net));
+            if let Some(net) = intersection {
+                prop_assert!((*net).is_contiguous());
+            }
+        }
+
+        #[test]
+        fn prop_contiguous_ipv6_intersection_matches_general((a, b) in arb_related_contiguous_ipv6_networks()) {
+            let intersection = a.intersection(&b);
+
+            prop_assert_eq!((*a).intersection(&b), intersection.map(|net| *net));
+            if let Some(net) = intersection {
+                prop_assert!((*net).is_contiguous());
+            }
+        }
+
+        #[test]
+        fn prop_contiguous_ip_intersection_matches_general((a, b) in arb_related_contiguous_ip_networks()) {
+            let intersection = a.intersection(&b);
+
+            prop_assert_eq!((*a).intersection(&b), intersection.map(|net| *net));
+            if let Some(net) = intersection {
+                prop_assert!((*net).is_contiguous());
+            }
+        }
+
+        #[test]
+        fn prop_contiguous_ipv4_merge_by_lowest_mask_bit_matches_general(
+            (a, b) in arb_related_contiguous_ipv4_networks(),
+        ) {
+            let merged = a.merge_by_lowest_mask_bit(&b);
+
+            prop_assert_eq!((*a).merge_by_lowest_mask_bit(&b), merged.map(|net| *net));
+            if let Some(net) = merged {
+                prop_assert!((*net).is_contiguous());
+            }
+        }
+
+        #[test]
+        fn prop_contiguous_ipv6_merge_by_lowest_mask_bit_matches_general(
+            (a, b) in arb_related_contiguous_ipv6_networks(),
+        ) {
+            let merged = a.merge_by_lowest_mask_bit(&b);
+
+            prop_assert_eq!((*a).merge_by_lowest_mask_bit(&b), merged.map(|net| *net));
+            if let Some(net) = merged {
+                prop_assert!((*net).is_contiguous());
+            }
+        }
+
+        #[test]
+        fn prop_contiguous_ip_merge_by_lowest_mask_bit_matches_general((a, b) in arb_related_contiguous_ip_networks()) {
+            let merged = a.merge_by_lowest_mask_bit(&b);
+
+            prop_assert_eq!((*a).merge_by_lowest_mask_bit(&b), merged.map(|net| *net));
+            if let Some(net) = merged {
+                prop_assert!((*net).is_contiguous());
             }
         }
 

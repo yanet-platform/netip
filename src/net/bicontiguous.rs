@@ -67,7 +67,9 @@ impl Error for BiContiguousIpNetParseError {}
 /// - [`Ipv6Network::merge`] -- the class is not closed under it: an equal-mask
 ///   single-bit merge stays in-class only when it clears the bottom bit of a
 ///   run, whereas an interior bit punches a hole, so merging returns a plain
-///   [`Ipv6Network`].
+///   [`Ipv6Network`]. Its subset that clears only the lowest mask bit,
+///   [`merge_by_lowest_mask_bit`](Self::merge_by_lowest_mask_bit), is
+///   specialized.
 /// - [`Ipv6Network::intersects`] / [`Ipv6Network::is_disjoint`] -- the general
 ///   check already tests both halves in one pass, so a per-half version would
 ///   cost more.
@@ -391,6 +393,57 @@ impl BiContiguous<Ipv6Network> {
         // NOTE: use `Option::map` when it becomes const.
         match (self, other) {
             (Self(a), Self(b)) => match a.intersection(b) {
+                Some(net) => Some(Self(net)),
+                None => None,
+            },
+        }
+    }
+
+    /// Merges this network with another bi-contiguous network when one
+    /// contains the other or they differ only in the lowest set bit of their
+    /// shared mask, returning the combined network.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{BiContiguous, Ipv6Network};
+    ///
+    /// // Siblings in the last mask bit of the low half merge into the network
+    /// // whose low prefix is one bit shorter.
+    /// let a =
+    ///     BiContiguous::<Ipv6Network>::parse("2001:db8::1234:0:0:0/ffff:ffff::ffff:0:0:0").unwrap();
+    /// let b =
+    ///     BiContiguous::<Ipv6Network>::parse("2001:db8::1235:0:0:0/ffff:ffff::ffff:0:0:0").unwrap();
+    /// let merged = a.merge_by_lowest_mask_bit(&b).unwrap();
+    /// assert_eq!(32, merged.hi_prefix());
+    /// assert_eq!(15, merged.lo_prefix());
+    ///
+    /// // Containment: the larger network is returned.
+    /// let outer = BiContiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+    /// assert_eq!(Some(outer), a.merge_by_lowest_mask_bit(&outer));
+    ///
+    /// // These differ above the lowest mask bit: merging them would punch a
+    /// // hole in the low half's run.
+    /// let c =
+    ///     BiContiguous::<Ipv6Network>::parse("2001:db8::1236:0:0:0/ffff:ffff::ffff:0:0:0").unwrap();
+    /// assert_eq!(None, a.merge_by_lowest_mask_bit(&c));
+    /// ```
+    ///
+    /// # Why overridden?
+    ///
+    /// The bi-contiguous class is closed under this merge: clearing the
+    /// mask's lowest set bit shortens the low half's run, or the high half's
+    /// when the low one is empty, and containment returns the larger input, so
+    /// the result is itself bi-contiguous and is returned as `Option<Self>`
+    /// with no re-validation. This is a closure/type win, not a speed win --
+    /// the op count matches the general
+    /// [`Ipv6Network::merge_by_lowest_mask_bit`] it delegates to.
+    #[inline]
+    #[must_use]
+    pub const fn merge_by_lowest_mask_bit(&self, other: &Self) -> Option<Self> {
+        // NOTE: use `Option::map` when it becomes const.
+        match (self, other) {
+            (Self(a), Self(b)) => match a.merge_by_lowest_mask_bit(b) {
                 Some(net) => Some(Self(net)),
                 None => None,
             },
@@ -1447,6 +1500,41 @@ mod test {
     }
 
     #[test]
+    fn bicontiguous_ipv6_merge_by_lowest_mask_bit_keeps_the_type() {
+        // Siblings in the last bit of the low half's run.
+        let a =
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcc:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        let b =
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        let parent =
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcc:0:0/ffff:ffff:ff00::ffff:fffe:0:0").unwrap();
+        assert_eq!(Some(parent), a.merge_by_lowest_mask_bit(&b));
+        assert_eq!(Some(parent), b.merge_by_lowest_mask_bit(&a));
+
+        // Containment returns the larger network.
+        assert_eq!(Some(parent), a.merge_by_lowest_mask_bit(&parent));
+
+        // A difference above the lowest mask bit is refused: merging it would
+        // punch a hole in the low half's run.
+        let c =
+            BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abce:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
+        assert_eq!(None, a.merge_by_lowest_mask_bit(&c));
+
+        // A lone low-half bit goes, leaving a plain `/32`.
+        let a = BiContiguous::<Ipv6Network>::parse("::/ffff:ffff:0:0:8000::").unwrap();
+        let b = BiContiguous::<Ipv6Network>::parse("::8000:0:0:0/ffff:ffff:0:0:8000::").unwrap();
+        let parent = BiContiguous::<Ipv6Network>::parse("::/32").unwrap();
+        assert_eq!(Some(parent), a.merge_by_lowest_mask_bit(&b));
+
+        // With an empty low half, siblings in the last bit of the high half's
+        // run merge.
+        let a = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::/40").unwrap();
+        let b = BiContiguous::<Ipv6Network>::parse("2a02:6b8:d00::/40").unwrap();
+        let parent = BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::/39").unwrap();
+        assert_eq!(Some(parent), a.merge_by_lowest_mask_bit(&b));
+    }
+
+    #[test]
     fn bicontiguous_ipv6_network_as_ref_borrows_the_wrapped_network() {
         let net =
             BiContiguous::<Ipv6Network>::parse("2a02:6b8:c00::1234:abcd:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap();
@@ -1818,6 +1906,38 @@ mod test {
         })
     }
 
+    // Pairs of bi-contiguous networks in four relations, in equal measure: the
+    // first network and its supernet, siblings in the mask's lowest set bit,
+    // equal masks that differ in one random bit of it, and unrelated. The third
+    // relation is where `merge` and `merge_by_lowest_mask_bit` part, since
+    // clearing a bit inside a run leaves the class.
+    fn arb_related_bicontiguous_ipv6_networks()
+    -> impl Strategy<Value = (BiContiguous<Ipv6Network>, BiContiguous<Ipv6Network>)> {
+        (
+            arb_bicontiguous_ipv6_network(),
+            arb_bicontiguous_ipv6_network(),
+            any::<u32>(),
+            0u8..4,
+        )
+            .prop_map(|(a, other, seed, relation)| {
+                let (addr, mask) = (*a).to_bits();
+                // The `seed`-th set bit of the mask, counting from the lowest.
+                let mut bits = mask;
+                for _ in 0..seed % mask.count_ones().max(1) {
+                    bits &= bits - 1;
+                }
+                let any = bits & bits.wrapping_neg();
+
+                let b = match relation {
+                    0 => a.supernet().unwrap_or(a),
+                    1 => BiContiguous(Ipv6Network::from_bits(addr ^ (mask & mask.wrapping_neg()), mask)),
+                    2 => BiContiguous(Ipv6Network::from_bits(addr ^ any, mask)),
+                    _ => other,
+                };
+                (a, b)
+            })
+    }
+
     proptest! {
         #[test]
         fn prop_ipv6_is_bicontiguous_matches_reference(net in arb_ipv6_network()) {
@@ -1927,6 +2047,22 @@ mod test {
         ) {
             let expected = (*a).intersection(&b);
             let actual = a.intersection(&b);
+
+            prop_assert_eq!(actual.map(|net| *net), expected);
+
+            if let Some(net) = expected {
+                prop_assert!(net.is_bicontiguous());
+            }
+        }
+
+        // The typed merge wraps the general one, and its result is
+        // bi-contiguous: the class is closed under the merge.
+        #[test]
+        fn prop_bicontiguous_ipv6_merge_by_lowest_mask_bit_closure_matches_general(
+            (a, b) in arb_related_bicontiguous_ipv6_networks(),
+        ) {
+            let expected = (*a).merge_by_lowest_mask_bit(&b);
+            let actual = a.merge_by_lowest_mask_bit(&b);
 
             prop_assert_eq!(actual.map(|net| *net), expected);
 

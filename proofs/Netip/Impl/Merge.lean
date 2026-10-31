@@ -13,8 +13,9 @@ Proved, for every input of the width:
   value, and its result is normalized (the `NOTE` on `a1 & a2`).
 * Its result mask is an input mask or one with the lowest set bit cleared, which
   never adds a run of ones: contiguous inputs stay contiguous
-  (`ipv*_aggregate_contiguous` relies on it) and bi-contiguous inputs stay
-  bi-contiguous (`ipv6_aggregate_bicontiguous` relies on it), while a
+  (`ipv*_aggregate_contiguous` and `Contiguous::merge_by_lowest_mask_bit` rely on
+  it) and bi-contiguous inputs stay bi-contiguous (`ipv6_aggregate_bicontiguous`
+  and `BiContiguous::merge_by_lowest_mask_bit` rely on it), while a
   non-contiguous pair can land in the contiguous class.
 
 The other half of `merge`'s documentation, `None` only when the union is not a
