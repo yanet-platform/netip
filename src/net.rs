@@ -619,6 +619,57 @@ impl IpNetwork {
         }
     }
 
+    /// Returns an iterator over the addresses of this network, in ascending
+    /// order for any mask, contiguous or not.
+    ///
+    /// Dispatches to [`Ipv4Network::addrs`] or [`Ipv6Network::addrs`] and
+    /// yields their addresses as [`IpAddr`], from [`addr()`](Self::addr) to
+    /// [`last_addr()`](Self::last_addr). The iterator is double-ended, like
+    /// theirs, but does not implement [`ExactSizeIterator`]: an IPv6 network
+    /// can hold more addresses than a `usize` counts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    ///
+    /// use netip::IpNetwork;
+    ///
+    /// let net = IpNetwork::parse("192.168.1.0/30").unwrap();
+    /// let addrs: Vec<_> = net.addrs().collect();
+    /// assert_eq!(
+    ///     vec![
+    ///         IpAddr::V4(Ipv4Addr::new(192, 168, 1, 0)),
+    ///         IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+    ///         IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2)),
+    ///         IpAddr::V4(Ipv4Addr::new(192, 168, 1, 3)),
+    ///     ],
+    ///     addrs
+    /// );
+    ///
+    /// // The host bits of this mask are the lowest bits of the last two
+    /// // groups: four addresses, taken here from both ends.
+    /// let net = IpNetwork::parse("2001:db8::/ffff:ffff:ffff:ffff:ffff:ffff:fffe:fffe").unwrap();
+    /// let mut addrs = net.addrs();
+    /// assert_eq!(
+    ///     Some(IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0))),
+    ///     addrs.next()
+    /// );
+    /// assert_eq!(
+    ///     Some(IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 1, 1))),
+    ///     addrs.next_back()
+    /// );
+    /// assert_eq!(2, addrs.count());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn addrs(self) -> IpNetworkAddrs {
+        match self {
+            Self::V4(net) => IpNetworkAddrs(IpNetworkAddrsInner::V4(net.addrs())),
+            Self::V6(net) => IpNetworkAddrs(IpNetworkAddrsInner::V6(net.addrs())),
+        }
+    }
+
     /// Returns `true` if this IP network and the specified one share at
     /// least one common address.
     ///
@@ -1135,6 +1186,69 @@ impl FromStr for IpNetwork {
         IpNetwork::parse(s)
     }
 }
+
+/// Bidirectional iterator over [`IpAddr`] in an [`IpNetwork`].
+///
+/// Created by [`IpNetwork::addrs`]. Yields the addresses of
+/// [`Ipv4NetworkAddrs`] or [`Ipv6NetworkAddrs`], in ascending order for any
+/// mask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IpNetworkAddrs(IpNetworkAddrsInner);
+
+/// The iterator of the network's family behind [`IpNetworkAddrs`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IpNetworkAddrsInner {
+    V4(Ipv4NetworkAddrs),
+    V6(Ipv6NetworkAddrs),
+}
+
+impl Iterator for IpNetworkAddrs {
+    type Item = IpAddr;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.0 {
+            IpNetworkAddrsInner::V4(addrs) => addrs.next().map(IpAddr::V4),
+            IpNetworkAddrsInner::V6(addrs) => addrs.next().map(IpAddr::V6),
+        }
+    }
+
+    #[inline]
+    fn count(self) -> usize {
+        match self.0 {
+            IpNetworkAddrsInner::V4(addrs) => addrs.count(),
+            IpNetworkAddrsInner::V6(addrs) => addrs.count(),
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match &self.0 {
+            IpNetworkAddrsInner::V4(addrs) => addrs.size_hint(),
+            IpNetworkAddrsInner::V6(addrs) => addrs.size_hint(),
+        }
+    }
+
+    // The back end yields the last address in O(1), where the default
+    // `last` drains the whole network.
+    #[inline]
+    fn last(mut self) -> Option<Self::Item> {
+        self.next_back()
+    }
+}
+
+impl DoubleEndedIterator for IpNetworkAddrs {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        match &mut self.0 {
+            IpNetworkAddrsInner::V4(addrs) => addrs.next_back().map(IpAddr::V4),
+            IpNetworkAddrsInner::V6(addrs) => addrs.next_back().map(IpAddr::V6),
+        }
+    }
+}
+
+// Both iterators it wraps are fused.
+impl core::iter::FusedIterator for IpNetworkAddrs {}
 
 /// Represents the network range in which IP addresses are IPv4.
 ///
@@ -7056,6 +7170,8 @@ mod test {
         ) {
             assert_stays_exhausted(Ipv4Network::from_bits(a4, m4).addrs(), &script);
             assert_stays_exhausted(Ipv6Network::from_bits(a6, m6).addrs(), &script);
+            assert_stays_exhausted(IpNetwork::V4(Ipv4Network::from_bits(a4, m4)).addrs(), &script);
+            assert_stays_exhausted(IpNetwork::V6(Ipv6Network::from_bits(a6, m6)).addrs(), &script);
 
             let net = Contiguous::<Ipv4Network>::try_from((Ipv4Addr::from_bits(a4), prefix4)).unwrap();
             assert_stays_exhausted(net.addrs(), &script);
@@ -7078,6 +7194,86 @@ mod test {
         ) {
             assert_stays_exhausted(a4.difference(&b4), &script);
             assert_stays_exhausted(a6.difference(&b6), &script);
+        }
+    }
+
+    proptest! {
+        // `IpNetwork::addrs` yields what the family's iterator yields, from
+        // either end, with the same count, size hint and last address.
+        #[test]
+        fn prop_ipnetwork_addrs_matches_family_v4(addr in any::<u32>(), mask in arb_few_host_bits_u32()) {
+            let net = Ipv4Network::from_bits(addr, mask);
+            let addrs = IpNetwork::V4(net).addrs();
+            let expected: Vec<_> = net.addrs().map(IpAddr::V4).collect();
+
+            prop_assert_eq!(&expected, &addrs.collect::<Vec<_>>());
+            prop_assert_eq!(
+                expected.iter().rev().copied().collect::<Vec<_>>(),
+                addrs.rev().collect::<Vec<_>>()
+            );
+            prop_assert_eq!(net.addrs().size_hint(), addrs.size_hint());
+            prop_assert_eq!(expected.len(), addrs.count());
+            prop_assert_eq!(expected.last().copied(), addrs.last());
+        }
+
+        #[test]
+        fn prop_ipnetwork_addrs_matches_family_v6(addr in any::<u128>(), mask in arb_few_host_bits_u128()) {
+            let net = Ipv6Network::from_bits(addr, mask);
+            let addrs = IpNetwork::V6(net).addrs();
+            let expected: Vec<_> = net.addrs().map(IpAddr::V6).collect();
+
+            prop_assert_eq!(&expected, &addrs.collect::<Vec<_>>());
+            prop_assert_eq!(
+                expected.iter().rev().copied().collect::<Vec<_>>(),
+                addrs.rev().collect::<Vec<_>>()
+            );
+            prop_assert_eq!(net.addrs().size_hint(), addrs.size_hint());
+            prop_assert_eq!(expected.len(), addrs.count());
+            prop_assert_eq!(expected.last().copied(), addrs.last());
+        }
+
+        // Driven from both ends in any order, it stays in step with the
+        // family's iterator, and what is left ends at the same address.
+        #[test]
+        fn prop_ipnetwork_addrs_interleaved_matches_family_v4(
+            addr in any::<u32>(),
+            mask in arb_few_host_bits_u32(),
+            script in prop::collection::vec(any::<bool>(), 1..40),
+        ) {
+            let net = Ipv4Network::from_bits(addr, mask);
+            let mut family = net.addrs();
+            let mut addrs = IpNetwork::V4(net).addrs();
+            for front in script {
+                let (expected, actual) = if front {
+                    (family.next(), addrs.next())
+                } else {
+                    (family.next_back(), addrs.next_back())
+                };
+                prop_assert_eq!(expected.map(IpAddr::V4), actual);
+                prop_assert_eq!(family.size_hint(), addrs.size_hint());
+            }
+            prop_assert_eq!(family.next_back().map(IpAddr::V4), addrs.last());
+        }
+
+        #[test]
+        fn prop_ipnetwork_addrs_interleaved_matches_family_v6(
+            addr in any::<u128>(),
+            mask in arb_few_host_bits_u128(),
+            script in prop::collection::vec(any::<bool>(), 1..40),
+        ) {
+            let net = Ipv6Network::from_bits(addr, mask);
+            let mut family = net.addrs();
+            let mut addrs = IpNetwork::V6(net).addrs();
+            for front in script {
+                let (expected, actual) = if front {
+                    (family.next(), addrs.next())
+                } else {
+                    (family.next_back(), addrs.next_back())
+                };
+                prop_assert_eq!(expected.map(IpAddr::V6), actual);
+                prop_assert_eq!(family.size_hint(), addrs.size_hint());
+            }
+            prop_assert_eq!(family.next_back().map(IpAddr::V6), addrs.last());
         }
     }
 
@@ -11604,6 +11800,48 @@ mod test {
             assert!(net.is_ipv6(), "{net}");
             assert!(!net.is_ipv4(), "{net}");
         }
+    }
+
+    #[test]
+    fn ipnetwork_addrs_v4_matches_ipv4_network() {
+        let net = Ipv4Network::parse("10.0.0.0/255.255.254.254").unwrap();
+        let expected: Vec<_> = net.addrs().map(IpAddr::V4).collect();
+        assert_eq!(4, expected.len());
+        assert_eq!(expected, IpNetwork::V4(net).addrs().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn ipnetwork_addrs_v6_matches_ipv6_network() {
+        let net = Ipv6Network::parse("2001:db8::/ffff:ffff:ffff:ffff:ffff:ffff:fffe:fffe").unwrap();
+        let expected: Vec<_> = net.addrs().map(IpAddr::V6).collect();
+        assert_eq!(4, expected.len());
+        assert_eq!(expected, IpNetwork::V6(net).addrs().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn ipnetwork_addrs_host_network_yields_its_address() {
+        for net in ["192.168.0.1", "2001:db8::1"] {
+            let net = IpNetwork::parse(net).unwrap();
+            let mut addrs = net.addrs();
+            assert_eq!((1, Some(1)), addrs.size_hint());
+            assert_eq!(Some(net.addr()), addrs.next());
+            assert_eq!(None, addrs.next());
+            assert_eq!(None, addrs.next_back());
+        }
+    }
+
+    // `/0`: the IPv4 count fits a 64-bit `usize`, the IPv6 one does not, and
+    // `last` reaches the top address without draining either.
+    #[test]
+    fn ipnetwork_addrs_unspecified() {
+        let net = IpNetwork::parse("0.0.0.0/0").unwrap();
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!((1 << 32, Some(1 << 32)), net.addrs().size_hint());
+        assert_eq!(Some(net.last_addr()), net.addrs().last());
+
+        let net = IpNetwork::parse("::/0").unwrap();
+        assert_eq!((usize::MAX, None), net.addrs().size_hint());
+        assert_eq!(Some(net.last_addr()), net.addrs().last());
     }
 
     // An IPv4-mapped network is IPv6 until `to_canonical` collapses it.
