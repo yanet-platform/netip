@@ -387,6 +387,52 @@ impl IpNetwork {
         }
     }
 
+    /// Returns `true` if this is an IPv4 network, and `false` otherwise.
+    ///
+    /// As for [`IpAddr::is_ipv4`], an IPv4-mapped IPv6 network is IPv6:
+    /// [`to_canonical`](Self::to_canonical) turns it into IPv4 first.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::IpNetwork;
+    ///
+    /// assert!(IpNetwork::parse("192.168.0.0/24").unwrap().is_ipv4());
+    /// assert!(!IpNetwork::parse("2001:db8::/32").unwrap().is_ipv4());
+    ///
+    /// let net = IpNetwork::parse("::ffff:192.168.0.0/120").unwrap();
+    /// assert!(!net.is_ipv4());
+    /// assert!(net.to_canonical().is_ipv4());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn is_ipv4(&self) -> bool {
+        matches!(self, Self::V4(..))
+    }
+
+    /// Returns `true` if this is an IPv6 network, and `false` otherwise.
+    ///
+    /// As for [`IpAddr::is_ipv6`], an IPv4-mapped IPv6 network is IPv6.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::IpNetwork;
+    ///
+    /// assert!(IpNetwork::parse("2001:db8::/32").unwrap().is_ipv6());
+    /// assert!(
+    ///     IpNetwork::parse("::ffff:192.168.0.0/120")
+    ///         .unwrap()
+    ///         .is_ipv6()
+    /// );
+    /// assert!(!IpNetwork::parse("192.168.0.0/24").unwrap().is_ipv6());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn is_ipv6(&self) -> bool {
+        matches!(self, Self::V6(..))
+    }
+
     /// Returns `true` if this IP network fully contains the specified one.
     ///
     /// Returns `false` for networks of different address families.
@@ -11546,6 +11592,30 @@ mod test {
     }
 
     #[test]
+    fn ipnetwork_is_ipv4_and_is_ipv6() {
+        for net in ["192.168.0.0/24", "0.0.0.0/0", "10.0.0.1/255.0.255.255"] {
+            let net = IpNetwork::parse(net).unwrap();
+            assert!(net.is_ipv4(), "{net}");
+            assert!(!net.is_ipv6(), "{net}");
+        }
+
+        for net in ["2001:db8::/32", "::/0", "2001:db8::1/ffff:ffff::ffff"] {
+            let net = IpNetwork::parse(net).unwrap();
+            assert!(net.is_ipv6(), "{net}");
+            assert!(!net.is_ipv4(), "{net}");
+        }
+    }
+
+    // An IPv4-mapped network is IPv6 until `to_canonical` collapses it.
+    #[test]
+    fn ipnetwork_is_ipv4_v6_mapped_needs_to_canonical() {
+        let net = IpNetwork::parse("::ffff:c0a8:0/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ff00").unwrap();
+        assert!(net.is_ipv6());
+        assert!(!net.is_ipv4());
+        assert!(net.to_canonical().is_ipv4());
+    }
+
+    #[test]
     fn ipnetwork_to_ipv6_mapped_v4_contiguous() {
         let net = IpNetwork::parse("192.168.1.0/24").unwrap();
         let expected = Ipv6Network::parse("::ffff:c0a8:100/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ff00").unwrap();
@@ -14000,6 +14070,35 @@ mod test {
             let recovered = recovered.unwrap();
             let (addr, mask) = (recovered.addr().to_bits(), recovered.mask().to_bits());
             prop_assert_eq!(addr & mask, addr, "net4={}, mapped={}", net4, mapped);
+        }
+
+        // Exactly one of the two holds, and it agrees with the address, and
+        // with which narrowing succeeds.
+        #[test]
+        fn prop_ipnetwork_is_ipv4_matches_version_v4(net4 in arb_ipv4_network()) {
+            let net = IpNetwork::from(net4);
+            prop_assert!(net.is_ipv4());
+            prop_assert!(!net.is_ipv6());
+            prop_assert_eq!(net.addr().is_ipv4(), net.is_ipv4());
+            prop_assert_eq!(Ipv4Network::try_from(net).is_ok(), net.is_ipv4());
+        }
+
+        #[test]
+        fn prop_ipnetwork_is_ipv6_matches_version_v6(net6 in arb_ipv6_network()) {
+            let net = IpNetwork::from(net6);
+            prop_assert!(net.is_ipv6());
+            prop_assert!(!net.is_ipv4());
+            prop_assert_eq!(net.addr().is_ipv6(), net.is_ipv6());
+            prop_assert_eq!(Ipv6Network::try_from(net).is_ok(), net.is_ipv6());
+        }
+
+        // A random IPv6 network is almost never IPv4-mapped, so build one.
+        #[test]
+        fn prop_ipnetwork_is_ipv6_for_v6_mapped(net4 in arb_ipv4_network()) {
+            let net = IpNetwork::from(net4.to_ipv6_mapped());
+            prop_assert!(net.is_ipv6());
+            prop_assert!(!net.is_ipv4());
+            prop_assert!(net.to_canonical().is_ipv4());
         }
 
         #[test]
