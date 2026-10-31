@@ -17,7 +17,7 @@
 //! ```
 
 use core::{
-    fmt::{self, Display, Formatter},
+    fmt::{self, Display, Formatter, LowerHex, UpperHex},
     str::{self, FromStr},
 };
 
@@ -41,7 +41,13 @@ use core::{
 /// # Display
 ///
 /// The [`Display`] implementation always uses lowercase colon-separated
-/// format: `aa:bb:cc:dd:ee:ff`.
+/// format: `aa:bb:cc:dd:ee:ff`. [`LowerHex`] (`{:x}`) prints the same text,
+/// and [`UpperHex`] (`{:X}`) prints it in uppercase: `AA:BB:CC:DD:EE:FF`.
+///
+/// For hyphens or Cisco's dots, wrap the address in
+/// [`fmt::MacHyphens`](crate::fmt::MacHyphens) or
+/// [`fmt::MacDots`](crate::fmt::MacDots). For the bare hex digits, format the
+/// integer: `format!("{:012x}", mac.as_u64())` prints `aabbccddeeff`.
 ///
 /// # Examples
 ///
@@ -317,32 +323,96 @@ impl From<MacAddr> for [u8; 6] {
     }
 }
 
-impl Display for MacAddr {
-    fn fmt(&self, fmt: &mut Formatter) -> Result<(), fmt::Error> {
+impl MacAddr {
+    /// Writes the octets as pairs of hex digits, `SEP` between the pairs and
+    /// uppercase letters if `UPPER`, and pads the text as a whole.
+    ///
+    /// The text of [`Display`], [`LowerHex`] and [`UpperHex`], and of
+    /// [`fmt::MacHyphens`](crate::fmt::MacHyphens). The separator and the
+    /// case are const parameters, so that each caller gets a copy with them
+    /// folded in, and it is always inlined: `Display` then costs the same
+    /// instructions as when it filled the buffer itself.
+    #[inline(always)]
+    pub(crate) fn fmt_pairs<const SEP: u8, const UPPER: bool>(&self, fmt: &mut Formatter) -> Result<(), fmt::Error> {
         let octets = self.octets();
 
-        // Colon separators land at 2, 5, 8, 11, 14 by construction (every
-        // third byte) and are never overwritten by the loop below.
-        let mut buf = [b':'; 17];
+        // Separators land at 2, 5, 8, 11, 14 by construction (every third
+        // byte) and are never overwritten by the loop below.
+        let mut buf = [SEP; 17];
         for (i, &octet) in octets.iter().enumerate() {
-            buf[3 * i] = hex_nibble(octet >> 4);
-            buf[3 * i + 1] = hex_nibble(octet & 0x0f);
+            buf[3 * i] = hex_nibble(octet >> 4, UPPER);
+            buf[3 * i + 1] = hex_nibble(octet & 0x0f, UPPER);
         }
 
         // `pad` applies width, fill, alignment and precision to the whole text.
-        fmt.pad(str::from_utf8(&buf).expect("buffer holds only ASCII hex digits and ':', always valid UTF-8"))
+        fmt.pad(str::from_utf8(&buf).expect("buffer holds only ASCII hex digits and the separator, always valid UTF-8"))
+    }
+
+    /// Writes the octets as Cisco's three groups of four hex digits, dots
+    /// between the groups and uppercase letters if `UPPER`, and pads the text
+    /// as a whole.
+    ///
+    /// The text of [`fmt::MacDots`](crate::fmt::MacDots). Inlined like
+    /// [`fmt_pairs`](Self::fmt_pairs).
+    #[inline(always)]
+    pub(crate) fn fmt_dotted<const UPPER: bool>(&self, fmt: &mut Formatter) -> Result<(), fmt::Error> {
+        let octets = self.octets();
+
+        // Dots land at 4 and 9 by construction (after every two octets) and
+        // are never overwritten by the loop below.
+        let mut buf = [b'.'; 14];
+        for (i, &octet) in octets.iter().enumerate() {
+            let off = 2 * i + i / 2;
+            buf[off] = hex_nibble(octet >> 4, UPPER);
+            buf[off + 1] = hex_nibble(octet & 0x0f, UPPER);
+        }
+
+        fmt.pad(str::from_utf8(&buf).expect("buffer holds only ASCII hex digits and '.', always valid UTF-8"))
     }
 }
 
-/// Encodes a 4-bit nibble (must be `< 16`) as its lowercase ASCII hex digit.
+impl Display for MacAddr {
+    fn fmt(&self, fmt: &mut Formatter) -> Result<(), fmt::Error> {
+        self.fmt_pairs::<b':', false>(fmt)
+    }
+}
+
+impl LowerHex for MacAddr {
+    /// Formats the address as [`Display`] does: `aa:bb:cc:dd:ee:ff`.
+    fn fmt(&self, fmt: &mut Formatter) -> Result<(), fmt::Error> {
+        self.fmt_pairs::<b':', false>(fmt)
+    }
+}
+
+impl UpperHex for MacAddr {
+    /// Formats the address as [`Display`] does, in uppercase:
+    /// `AA:BB:CC:DD:EE:FF`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::MacAddr;
+    ///
+    /// let mac = MacAddr::new(0x3a, 0xac, 0x26, 0x9b, 0x5b, 0xf9);
+    /// assert_eq!("3A:AC:26:9B:5B:F9", format!("{mac:X}"));
+    /// assert_eq!("3a:ac:26:9b:5b:f9", format!("{mac:x}"));
+    /// ```
+    fn fmt(&self, fmt: &mut Formatter) -> Result<(), fmt::Error> {
+        self.fmt_pairs::<b':', true>(fmt)
+    }
+}
+
+/// Encodes a 4-bit nibble (must be `< 16`) as its ASCII hex digit, an
+/// uppercase letter if `upper` and a lowercase one otherwise.
 ///
 /// Branchless: digits `0..=9` map to `'0'..='9'`, while digits `10..=15` need
-/// an extra `'a' - '0' - 10` offset to land in the lowercase letter range,
-/// added via a 0/1 multiplier instead of a conditional.
+/// an extra `'a' - '0' - 10` (or `'A' - '0' - 10`) offset to land in the
+/// letter range, added via a 0/1 multiplier instead of a conditional.
 #[inline]
-const fn hex_nibble(nibble: u8) -> u8 {
+const fn hex_nibble(nibble: u8, upper: bool) -> u8 {
     let is_letter = (nibble > 9) as u8;
-    nibble + b'0' + is_letter * (b'a' - b'0' - 10)
+    let letter = if upper { b'A' } else { b'a' };
+    nibble + b'0' + is_letter * (letter - b'0' - 10)
 }
 
 impl FromStr for MacAddr {
@@ -525,24 +595,44 @@ mod test {
 
     #[test]
     fn hex_nibble_all_values() {
-        let expected = b"0123456789abcdef";
-        for (nibble, &digit) in expected.iter().enumerate() {
-            assert_eq!(digit, hex_nibble(nibble as u8), "nibble {nibble}");
+        for (nibble, (&lower, &upper)) in b"0123456789abcdef".iter().zip(b"0123456789ABCDEF").enumerate() {
+            assert_eq!(lower, hex_nibble(nibble as u8, false), "nibble {nibble}");
+            assert_eq!(upper, hex_nibble(nibble as u8, true), "nibble {nibble}");
         }
     }
 
     #[test]
     fn hex_nibble_pair_matches_format_spec_for_all_bytes() {
-        // `MacAddr::fmt` encodes each byte as `hex_nibble(byte >> 4)` then
-        // `hex_nibble(byte & 0x0f)`. Every byte value must match `{:02x}`.
+        // The formatters encode each byte as `hex_nibble(byte >> 4, ..)` then
+        // `hex_nibble(byte & 0x0f, ..)`. Every byte value must match `{:02x}`
+        // and `{:02X}`.
         for byte in 0..=u8::MAX {
             let expected = format!("{byte:02x}");
             assert_eq!(
                 expected.as_bytes(),
-                [hex_nibble(byte >> 4), hex_nibble(byte & 0x0f)],
+                [hex_nibble(byte >> 4, false), hex_nibble(byte & 0x0f, false)],
+                "byte {byte:#04x}"
+            );
+            let expected = format!("{byte:02X}");
+            assert_eq!(
+                expected.as_bytes(),
+                [hex_nibble(byte >> 4, true), hex_nibble(byte & 0x0f, true)],
                 "byte {byte:#04x}"
             );
         }
+    }
+
+    #[test]
+    fn hex_formats() {
+        assert_eq!("3a:ac:26:9b:5b:f9", format!("{MAC:x}"));
+        assert_eq!("3A:AC:26:9B:5B:F9", format!("{MAC:X}"));
+        assert_eq!("[  3A:AC:26:9B:5B:F9]", format!("[{MAC:>19X}]"));
+        // The bare digits come from the integer, as the docs show.
+        assert_eq!("3aac269b5bf9", format!("{:012x}", MAC.as_u64()));
+        assert_eq!(
+            "000000000001",
+            format!("{:012x}", MacAddr::new(0, 0, 0, 0, 0, 1).as_u64())
+        );
     }
 
     #[test]

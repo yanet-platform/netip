@@ -1,11 +1,14 @@
-//! Alternative formatting adapters for network types.
+//! Alternative formatting adapters for network types and MAC addresses.
 
 use core::{
-    fmt::{self, Display, Formatter, Write},
+    fmt::{self, Display, Formatter, LowerHex, UpperHex, Write},
     str,
 };
 
-use crate::net::{IpNetwork, Ipv4Network, Ipv6Network};
+use crate::{
+    macaddr::MacAddr,
+    net::{IpNetwork, Ipv4Network, Ipv6Network},
+};
 
 /// The longest text a network's [`Display`] writes: an IPv6 address and an
 /// explicit IPv6 mask, both with no zero group to compress.
@@ -103,14 +106,122 @@ impl Display for Compact<IpNetwork> {
     }
 }
 
+/// Displays a MAC address with hyphens between the octets:
+/// `aa-bb-cc-dd-ee-ff`, the form of IEEE 802 and of Windows.
+///
+/// `{}` and `{:x}` print lowercase hex digits, `{:X}` uppercase ones. Width,
+/// fill, alignment and precision apply to the whole text, as for [`MacAddr`],
+/// and [`MacAddr::parse_ascii`] reads the text back.
+///
+/// # Examples
+///
+/// ```
+/// use netip::{MacAddr, fmt::MacHyphens};
+///
+/// let mac = MacAddr::new(0x3a, 0xac, 0x26, 0x9b, 0x5b, 0xf9);
+/// assert_eq!("3a-ac-26-9b-5b-f9", MacHyphens(mac).to_string());
+/// assert_eq!("3A-AC-26-9B-5B-F9", format!("{:X}", MacHyphens(mac)));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MacHyphens(pub MacAddr);
+
+impl Display for MacHyphens {
+    fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
+        let Self(mac) = self;
+        mac.fmt_pairs::<b'-', false>(fmt)
+    }
+}
+
+impl LowerHex for MacHyphens {
+    fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
+        let Self(mac) = self;
+        mac.fmt_pairs::<b'-', false>(fmt)
+    }
+}
+
+impl UpperHex for MacHyphens {
+    fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
+        let Self(mac) = self;
+        mac.fmt_pairs::<b'-', true>(fmt)
+    }
+}
+
+/// Displays a MAC address in Cisco's dotted form: `aabb.ccdd.eeff`, the form
+/// network hardware prints.
+///
+/// `{}` and `{:x}` print lowercase hex digits, `{:X}` uppercase ones. Width,
+/// fill, alignment and precision apply to the whole text, as for [`MacAddr`],
+/// and [`MacAddr::parse_ascii`] reads the text back.
+///
+/// # Examples
+///
+/// ```
+/// use netip::{MacAddr, fmt::MacDots};
+///
+/// let mac = MacAddr::new(0x3a, 0xac, 0x26, 0x9b, 0x5b, 0xf9);
+/// assert_eq!("3aac.269b.5bf9", MacDots(mac).to_string());
+/// assert_eq!("3AAC.269B.5BF9", format!("{:X}", MacDots(mac)));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MacDots(pub MacAddr);
+
+impl Display for MacDots {
+    fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
+        let Self(mac) = self;
+        mac.fmt_dotted::<false>(fmt)
+    }
+}
+
+impl LowerHex for MacDots {
+    fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
+        let Self(mac) = self;
+        mac.fmt_dotted::<false>(fmt)
+    }
+}
+
+impl UpperHex for MacDots {
+    fn fmt(&self, fmt: &mut Formatter) -> Result<(), core::fmt::Error> {
+        let Self(mac) = self;
+        mac.fmt_dotted::<true>(fmt)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use core::net::{Ipv4Addr, Ipv6Addr};
 
     use proptest::prelude::*;
 
-    use super::Compact;
-    use crate::net::{IpNetwork, Ipv4Network, Ipv6Network};
+    use super::{Compact, MacDots, MacHyphens};
+    use crate::{
+        macaddr::MacAddr,
+        net::{IpNetwork, Ipv4Network, Ipv6Network},
+    };
+
+    const MAC: MacAddr = MacAddr::new(0x3a, 0xac, 0x26, 0x9b, 0x5b, 0xf9);
+
+    #[test]
+    fn mac_hyphens() {
+        assert_eq!("3a-ac-26-9b-5b-f9", MacHyphens(MAC).to_string());
+        assert_eq!("3a-ac-26-9b-5b-f9", format!("{:x}", MacHyphens(MAC)));
+        assert_eq!("3A-AC-26-9B-5B-F9", format!("{:X}", MacHyphens(MAC)));
+        assert_eq!("00-00-00-00-00-00", MacHyphens(MacAddr::ZERO).to_string());
+    }
+
+    #[test]
+    fn mac_dots() {
+        assert_eq!("3aac.269b.5bf9", MacDots(MAC).to_string());
+        assert_eq!("3aac.269b.5bf9", format!("{:x}", MacDots(MAC)));
+        assert_eq!("3AAC.269B.5BF9", format!("{:X}", MacDots(MAC)));
+        assert_eq!("ffff.ffff.ffff", MacDots(MacAddr::BROADCAST).to_string());
+    }
+
+    #[test]
+    fn mac_adapters_pad_whole_text() {
+        assert_eq!("[3a-ac-26-9b-5b-f9   ]", format!("[{:20}]", MacHyphens(MAC)));
+        assert_eq!("[   3AAC.269B.5BF9]", format!("[{:>17X}]", MacDots(MAC)));
+        assert_eq!("[3aac.2]", format!("[{:.6}]", MacDots(MAC)));
+    }
 
     #[test]
     fn ipv4_host_route_is_bare() {
@@ -260,6 +371,36 @@ mod test {
             let text = Compact(net).to_string();
             prop_assert_eq!(format!("{:>width$}", Compact(net)), format!("{text:>width$}"));
             prop_assert_eq!(format!("{:.precision$}", Compact(net)), format!("{text:.precision$}"));
+        }
+    }
+
+    fn arb_mac_addr() -> impl Strategy<Value = MacAddr> {
+        any::<[u8; 6]>().prop_map(MacAddr::from)
+    }
+
+    proptest! {
+        // Each form lays out the octets as `{:02x}` writes them, upper or
+        // lower case, and parses back to the address.
+        #[test]
+        fn prop_mac_forms_match_octets_and_parse_back(mac in arb_mac_addr()) {
+            let [a, b, c, d, e, f] = mac.octets();
+            let colons = std::format!("{a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{f:02x}");
+            let hyphens = std::format!("{a:02x}-{b:02x}-{c:02x}-{d:02x}-{e:02x}-{f:02x}");
+            let dots = std::format!("{a:02x}{b:02x}.{c:02x}{d:02x}.{e:02x}{f:02x}");
+
+            for (expected, lower, upper) in [
+                (&colons, std::format!("{mac:x}"), std::format!("{mac:X}")),
+                (&hyphens, std::format!("{:x}", MacHyphens(mac)), std::format!("{:X}", MacHyphens(mac))),
+                (&dots, std::format!("{:x}", MacDots(mac)), std::format!("{:X}", MacDots(mac))),
+            ] {
+                prop_assert_eq!(expected, &lower);
+                prop_assert_eq!(expected.to_uppercase(), upper.clone());
+                prop_assert_eq!(Ok(mac), lower.parse::<MacAddr>());
+                prop_assert_eq!(Ok(mac), upper.parse::<MacAddr>());
+            }
+            prop_assert_eq!(&colons, &mac.to_string());
+            prop_assert_eq!(&hyphens, &MacHyphens(mac).to_string());
+            prop_assert_eq!(&dots, &MacDots(mac).to_string());
         }
     }
 }
