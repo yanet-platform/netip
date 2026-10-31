@@ -388,6 +388,39 @@ impl IpNetwork {
         }
     }
 
+    /// Returns the host mask of this network: the inverse of the mask, with
+    /// a one in every host bit.
+    ///
+    /// See [`Ipv4Network::hostmask`] and [`Ipv6Network::hostmask`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    ///
+    /// use netip::IpNetwork;
+    ///
+    /// assert_eq!(
+    ///     IpAddr::V4(Ipv4Addr::new(0, 0, 0, 255)),
+    ///     IpNetwork::parse("192.168.0.0/24").unwrap().hostmask()
+    /// );
+    ///
+    /// assert_eq!(
+    ///     IpAddr::V6(Ipv6Addr::new(
+    ///         0, 0, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff
+    ///     )),
+    ///     IpNetwork::parse("2001:db8::/32").unwrap().hostmask()
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn hostmask(&self) -> IpAddr {
+        match self {
+            Self::V4(net) => IpAddr::V4(net.hostmask()),
+            Self::V6(net) => IpAddr::V6(net.hostmask()),
+        }
+    }
+
     /// Returns `true` if this is an IPv4 network, and `false` otherwise.
     ///
     /// As for [`IpAddr::is_ipv4`], an IPv4-mapped IPv6 network is IPv6:
@@ -1481,6 +1514,34 @@ impl Ipv4Network {
         match self {
             Self(.., mask) => *mask,
         }
+    }
+
+    /// Returns the host mask of this IPv4 network: the inverse of the mask,
+    /// with a one in every host bit.
+    ///
+    /// This is the wildcard mask of Cisco ACLs. The mask may be
+    /// non-contiguous, so every wildcard describes a network:
+    /// `Ipv4Network::new(addr, !wildcard)` builds it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv4Addr;
+    ///
+    /// use netip::Ipv4Network;
+    ///
+    /// let net = Ipv4Network::parse("192.168.0.0/24").unwrap();
+    /// assert_eq!(Ipv4Addr::new(0, 0, 0, 255), net.hostmask());
+    ///
+    /// // The wildcard `0.0.255.0`: any third octet.
+    /// let net = Ipv4Network::new(Ipv4Addr::new(10, 1, 0, 1), !Ipv4Addr::new(0, 0, 255, 0));
+    /// assert_eq!("10.1.0.1/255.255.0.255", net.to_string());
+    /// assert_eq!(Ipv4Addr::new(0, 0, 255, 0), net.hostmask());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn hostmask(&self) -> Ipv4Addr {
+        Ipv4Addr::from_bits(!self.mask().to_bits())
     }
 
     /// Converts a pair of IPv4 address and mask represented as a pair of host
@@ -3670,6 +3731,34 @@ impl Ipv6Network {
         match self {
             Ipv6Network(.., mask) => *mask,
         }
+    }
+
+    /// Returns the host mask of this IPv6 network: the inverse of the mask,
+    /// with a one in every host bit.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::Ipv6Network;
+    ///
+    /// let net = Ipv6Network::parse("2001:db8::/64").unwrap();
+    /// assert_eq!(
+    ///     Ipv6Addr::new(0, 0, 0, 0, 0xffff, 0xffff, 0xffff, 0xffff),
+    ///     net.hostmask()
+    /// );
+    ///
+    /// let net = Ipv6Network::parse("2001:db8::/ffff:ffff::ffff:0:0:0").unwrap();
+    /// assert_eq!(
+    ///     Ipv6Addr::new(0, 0, 0xffff, 0xffff, 0, 0xffff, 0xffff, 0xffff),
+    ///     net.hostmask()
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn hostmask(&self) -> Ipv6Addr {
+        Ipv6Addr::from_bits(!self.mask().to_bits())
     }
 
     /// Converts a pair of IPv6 address and mask represented as a pair of host
@@ -12596,6 +12685,119 @@ mod test {
         fn prop_ip_network_host_bits_matches_family(v4 in arb_ipv4_network(), v6 in arb_ipv6_network()) {
             prop_assert_eq!(v4.host_bits(), IpNetwork::V4(v4).host_bits());
             prop_assert_eq!(v6.host_bits(), IpNetwork::V6(v6).host_bits());
+        }
+    }
+
+    #[test]
+    fn ipv4_hostmask_edge_masks() {
+        assert_eq!(Ipv4Addr::BROADCAST, Ipv4Network::parse("0.0.0.0/0").unwrap().hostmask());
+        assert_eq!(
+            Ipv4Addr::new(127, 255, 255, 255),
+            Ipv4Network::parse("128.0.0.0/1").unwrap().hostmask()
+        );
+        assert_eq!(
+            Ipv4Addr::new(0, 0, 0, 255),
+            Ipv4Network::parse("192.168.1.0/24").unwrap().hostmask()
+        );
+        assert_eq!(
+            Ipv4Addr::UNSPECIFIED,
+            Ipv4Network::parse("10.0.0.1/32").unwrap().hostmask()
+        );
+        // Non-contiguous masks: the host bits need not be a trailing run.
+        assert_eq!(
+            Ipv4Addr::new(0, 255, 255, 0),
+            Ipv4Network::parse("10.0.0.1/255.0.0.255").unwrap().hostmask()
+        );
+        assert_eq!(
+            Ipv4Addr::new(128, 0, 0, 0),
+            Ipv4Network::parse("0.0.0.0/127.255.255.255").unwrap().hostmask()
+        );
+    }
+
+    #[test]
+    fn ipv6_hostmask_edge_masks() {
+        assert_eq!(
+            Ipv6Addr::from_bits(u128::MAX),
+            Ipv6Network::parse("::/0").unwrap().hostmask()
+        );
+        assert_eq!(
+            Ipv6Addr::new(0, 0, 0, 0, 0xffff, 0xffff, 0xffff, 0xffff),
+            Ipv6Network::parse("2001:db8::/64").unwrap().hostmask()
+        );
+        assert_eq!(
+            Ipv6Addr::UNSPECIFIED,
+            Ipv6Network::parse("2001:db8::1/128").unwrap().hostmask()
+        );
+        // Non-contiguous masks: the host bits need not be a trailing run.
+        assert_eq!(
+            Ipv6Addr::new(0, 0, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0),
+            Ipv6Network::parse("2001:db8::1/ffff:ffff::ffff").unwrap().hostmask()
+        );
+        assert_eq!(
+            Ipv6Addr::new(0x8000, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Network::parse("::/7fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")
+                .unwrap()
+                .hostmask()
+        );
+    }
+
+    #[test]
+    fn ip_network_hostmask_dispatches_by_family() {
+        assert_eq!(
+            IpAddr::V4(Ipv4Addr::new(0, 0, 0, 255)),
+            IpNetwork::parse("192.168.1.0/24").unwrap().hostmask()
+        );
+        assert_eq!(
+            IpAddr::V6(Ipv6Addr::new(0, 0, 0x00ff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff)),
+            IpNetwork::parse("2a02:6b8::/40").unwrap().hostmask()
+        );
+    }
+
+    // `access-list 10 permit 10.1.0.1 0.0.255.0` matches any third octet.
+    #[test]
+    fn ipv4_hostmask_reads_back_a_cisco_wildcard() {
+        let wildcard = Ipv4Addr::new(0, 0, 255, 0);
+        let net = Ipv4Network::new(Ipv4Addr::new(10, 1, 0, 1), !wildcard);
+
+        assert_eq!(wildcard, net.hostmask());
+        assert!(net.contains_addr(&Ipv4Addr::new(10, 1, 77, 1)));
+        assert!(!net.contains_addr(&Ipv4Addr::new(10, 1, 77, 2)));
+    }
+
+    proptest! {
+        // The host mask is the complement of the mask: the two never overlap
+        // and together cover the word. Its ones are the host bits, and setting
+        // them in the address gives the last member, for any mask.
+        #[test]
+        fn prop_ipv4_hostmask_complements_mask(net in arb_ipv4_network()) {
+            let (addr, mask) = net.to_bits();
+            let hostmask = net.hostmask().to_bits();
+            prop_assert_eq!(0, hostmask & mask);
+            prop_assert_eq!(u32::MAX, hostmask | mask);
+            prop_assert_eq!(net.host_bits(), hostmask.count_ones());
+            prop_assert_eq!(net.last_addr(), Ipv4Addr::from_bits(addr | hostmask));
+        }
+
+        #[test]
+        fn prop_ipv6_hostmask_complements_mask(net in arb_ipv6_network()) {
+            let (addr, mask) = net.to_bits();
+            let hostmask = net.hostmask().to_bits();
+            prop_assert_eq!(0, hostmask & mask);
+            prop_assert_eq!(u128::MAX, hostmask | mask);
+            prop_assert_eq!(net.host_bits(), hostmask.count_ones());
+            prop_assert_eq!(net.last_addr(), Ipv6Addr::from_bits(addr | hostmask));
+        }
+
+        #[test]
+        fn prop_ip_network_hostmask_matches_family(v4 in arb_ipv4_network(), v6 in arb_ipv6_network()) {
+            prop_assert_eq!(IpAddr::V4(v4.hostmask()), IpNetwork::V4(v4).hostmask());
+            prop_assert_eq!(IpAddr::V6(v6.hostmask()), IpNetwork::V6(v6).hostmask());
+        }
+
+        // A wildcard read back from a network rebuilds it.
+        #[test]
+        fn prop_ipv4_hostmask_rebuilds_network(net in arb_ipv4_network()) {
+            prop_assert_eq!(net, Ipv4Network::new(net.addr(), !net.hostmask()));
         }
     }
 
