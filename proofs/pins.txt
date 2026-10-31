@@ -218,6 +218,12 @@ Contiguous<Ipv6Network>::TryFrom<Ipv6Network>::try_from 3cd810206ea5d392  Netip/
 Contiguous<IpNetwork>::contains                     92ef22e47957de10  Netip/Impl/Contiguous.lean:Ipv4.contains_mask_iff_le Netip/Impl/Contiguous.lean:Ipv6.contains_mask_iff_le
 Contiguous<Ipv4Network>::contains                   b3e20cf338b6a39b  Netip/Impl/Contiguous.lean:Ipv4.contains_mask_iff_le
 Contiguous<Ipv6Network>::contains                   81feedc52acf7a59  Netip/Impl/Contiguous.lean:Ipv6.contains_mask_iff_le
+Contiguous<IpNetwork>::intersection                 0c0a2370f9123a26  Netip/Impl/Contiguous.lean:Ipv4.isContiguous_or Netip/Impl/Contiguous.lean:Ipv6.isContiguous_or
+Contiguous<Ipv4Network>::intersection               10443157acd08adc  Netip/Impl/Contiguous.lean:Ipv4.isContiguous_or
+Contiguous<Ipv6Network>::intersection               67d7f329e1a68d4a  Netip/Impl/Contiguous.lean:Ipv6.isContiguous_or
+Contiguous<IpNetwork>::merge_by_lowest_mask_bit     8761a03f0fb53872  Netip/Impl/Merge.lean:Ipv4.mergeByLowestMaskBit_contiguous Netip/Impl/Merge.lean:Ipv6.mergeByLowestMaskBit_contiguous
+Contiguous<Ipv4Network>::merge_by_lowest_mask_bit   3f98ea3e455a5188  Netip/Impl/Merge.lean:Ipv4.mergeByLowestMaskBit_contiguous
+Contiguous<Ipv6Network>::merge_by_lowest_mask_bit   8329f2a431f9d626  Netip/Impl/Merge.lean:Ipv6.mergeByLowestMaskBit_contiguous
 Contiguous<Ipv4Network>::addrs                      ea6d298092bf9cb4  Netip/Impl/AddrsRun.lean:Ipv4.caddrsInit Netip/Impl/Contiguous.lean:Ipv4.addrs_back
 Contiguous<Ipv6Network>::addrs                      20a434f7a30ae8fb  Netip/Impl/AddrsRun.lean:Ipv6.caddrsInit Netip/Impl/Contiguous.lean:Ipv6.addrs_back
 ContiguousIpv4NetworkAddrs                          2be3cc1e09c04d24  Netip/Impl/AddrsRun.lean:Cursor
@@ -248,6 +254,7 @@ BiContiguous<Ipv6Network>::lo_prefix                9d2b286cec1c98b7  Netip/Impl
 BiContiguous<Ipv6Network>::is_bicontiguous          a487d10e66043269  Netip/Impl/BiContiguous.lean:Ipv6.IsBiContiguous
 BiContiguous<Ipv6Network>::is_contiguous            f2ed265fe4ea4d4a  Netip/Impl/BiContiguous.lean
 BiContiguous<Ipv6Network>::intersection             cfa6a60916467773  Netip/Impl/BiContiguous.lean
+BiContiguous<Ipv6Network>::merge_by_lowest_mask_bit e366b4e85ae6baa7  Netip/Impl/Merge.lean:Ipv6.mergeByLowestMaskBit_biContiguous
 BiContiguous<Ipv6Network>::addrs                    7820c5a9d6892f0a  Netip/Impl/BiContiguousAddrs.lean:Ipv6.baddrsInit Netip/Impl/BiContiguousAddrs.lean:Ipv6.indexBack
 BiContiguous<Ipv6Network>::TryFrom<Ipv6Network>::try_from 9aa8e5c9acf65ac6  Netip/Impl/BiContiguous.lean:Ipv6.IsBiContiguous
 BiContiguous<Ipv6Network>::From<Contiguous<Ipv6Network>>::from 4f3ae7a663c33dfe  Netip/Impl/BiContiguous.lean
