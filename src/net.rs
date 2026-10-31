@@ -355,8 +355,8 @@ impl IpNetwork {
     #[must_use]
     pub const fn addr(&self) -> IpAddr {
         match self {
-            Self::V4(net) => IpAddr::V4(*net.addr()),
-            Self::V6(net) => IpAddr::V6(*net.addr()),
+            Self::V4(net) => IpAddr::V4(net.addr()),
+            Self::V6(net) => IpAddr::V6(net.addr()),
         }
     }
 
@@ -383,8 +383,8 @@ impl IpNetwork {
     #[must_use]
     pub const fn mask(&self) -> IpAddr {
         match self {
-            Self::V4(net) => IpAddr::V4(*net.mask()),
-            Self::V6(net) => IpAddr::V6(*net.mask()),
+            Self::V4(net) => IpAddr::V4(net.mask()),
+            Self::V6(net) => IpAddr::V6(net.mask()),
         }
     }
 
@@ -1338,8 +1338,8 @@ impl Ipv4Network {
     ///     Ipv4Addr::new(255, 255, 255, 0),
     /// );
     ///
-    /// assert_eq!(Ipv4Addr::new(192, 168, 1, 0), *net.addr());
-    /// assert_eq!(Ipv4Addr::new(255, 255, 255, 0), *net.mask());
+    /// assert_eq!(Ipv4Addr::new(192, 168, 1, 0), net.addr());
+    /// assert_eq!(Ipv4Addr::new(255, 255, 255, 0), net.mask());
     /// ```
     #[inline]
     #[must_use]
@@ -1444,20 +1444,42 @@ impl Ipv4Network {
     }
 
     /// Returns the IP address of this IPv4 network.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv4Addr;
+    ///
+    /// use netip::Ipv4Network;
+    ///
+    /// let net = Ipv4Network::parse("192.168.0.0/24").unwrap();
+    /// assert_eq!(Ipv4Addr::new(192, 168, 0, 0), net.addr());
+    /// ```
     #[inline]
     #[must_use]
-    pub const fn addr(&self) -> &Ipv4Addr {
+    pub const fn addr(&self) -> Ipv4Addr {
         match self {
-            Self(addr, ..) => addr,
+            Self(addr, ..) => *addr,
         }
     }
 
     /// Returns the IP mask of this IPv4 network.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv4Addr;
+    ///
+    /// use netip::Ipv4Network;
+    ///
+    /// let net = Ipv4Network::parse("10.0.0.0/255.0.255.0").unwrap();
+    /// assert_eq!(Ipv4Addr::new(255, 0, 255, 0), net.mask());
+    /// ```
     #[inline]
     #[must_use]
-    pub const fn mask(&self) -> &Ipv4Addr {
+    pub const fn mask(&self) -> Ipv4Addr {
         match self {
-            Self(.., mask) => mask,
+            Self(.., mask) => *mask,
         }
     }
 
@@ -3608,20 +3630,45 @@ impl Ipv6Network {
     }
 
     /// Returns the IP address of this IPv6 network.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::Ipv6Network;
+    ///
+    /// let net = Ipv6Network::parse("2001:db8::/32").unwrap();
+    /// assert_eq!(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), net.addr());
+    /// ```
     #[inline]
     #[must_use]
-    pub const fn addr(&self) -> &Ipv6Addr {
+    pub const fn addr(&self) -> Ipv6Addr {
         match self {
-            Ipv6Network(addr, ..) => addr,
+            Ipv6Network(addr, ..) => *addr,
         }
     }
 
     /// Returns the IP mask of this IPv6 network.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    ///
+    /// use netip::Ipv6Network;
+    ///
+    /// let net = Ipv6Network::parse("2001:db8::/ffff:ffff::ffff:0:0:0").unwrap();
+    /// assert_eq!(
+    ///     Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0xffff, 0, 0, 0),
+    ///     net.mask()
+    /// );
+    /// ```
     #[inline]
     #[must_use]
-    pub const fn mask(&self) -> &Ipv6Addr {
+    pub const fn mask(&self) -> Ipv6Addr {
         match self {
-            Ipv6Network(.., mask) => mask,
+            Ipv6Network(.., mask) => *mask,
         }
     }
 
@@ -6361,7 +6408,9 @@ impl BinarySplit for Ipv4Network {
 
     #[inline]
     fn mask(&self) -> &Self::Mask {
-        self.mask()
+        match self {
+            Self(.., mask) => mask,
+        }
     }
 
     #[inline]
@@ -6391,7 +6440,9 @@ impl BinarySplit for Ipv6Network {
 
     #[inline]
     fn mask(&self) -> &Self::Mask {
-        self.mask()
+        match self {
+            Self(.., mask) => mask,
+        }
     }
 
     #[inline]
@@ -6903,7 +6954,7 @@ mod test {
         sorted.dedup();
 
         assert_eq!(sorted.len(), addrs.len());
-        assert_eq!(addrs.first().copied(), Some(*net.addr()));
+        assert_eq!(addrs.first().copied(), Some(net.addr()));
         assert_eq!(addrs.last().copied(), Some(net.last_addr()));
     }
 
@@ -6976,7 +7027,7 @@ mod test {
         sorted.sort();
         sorted.dedup();
         assert_eq!(sorted.len(), addrs.len());
-        assert_eq!(addrs.first().copied(), Some(*net.addr()));
+        assert_eq!(addrs.first().copied(), Some(net.addr()));
         assert_eq!(addrs.last().copied(), Some(net.last_addr()));
     }
 
@@ -7341,7 +7392,7 @@ mod test {
         assert_eq!(Some(at(last - 1)), addrs.next_back());
         assert_eq!(Some(at(last - 2)), addrs.next_back());
         assert_eq!((usize::MAX, None), addrs.size_hint());
-        assert_eq!(*net.addr(), at(0));
+        assert_eq!(net.addr(), at(0));
         assert_eq!(net.last_addr(), at(last));
     }
 
@@ -7658,7 +7709,7 @@ mod test {
 
             let forward: Vec<_> = net.addrs().collect();
             prop_assert!(forward.windows(2).all(|w| w[0] < w[1]));
-            prop_assert_eq!(Some(net.addr()), forward.first());
+            prop_assert_eq!(Some(net.addr()), forward.first().copied());
             prop_assert_eq!(Some(&net.last_addr()), forward.last());
 
             let mut backward: Vec<_> = net.addrs().rev().collect();
@@ -7672,7 +7723,7 @@ mod test {
 
             let forward: Vec<_> = net.addrs().collect();
             prop_assert!(forward.windows(2).all(|w| w[0] < w[1]));
-            prop_assert_eq!(Some(net.addr()), forward.first());
+            prop_assert_eq!(Some(net.addr()), forward.first().copied());
             prop_assert_eq!(Some(&net.last_addr()), forward.last());
 
             let mut backward: Vec<_> = net.addrs().rev().collect();
@@ -8507,10 +8558,10 @@ mod test {
     fn test_ipv6_addr_as_u128() {
         assert_eq!(
             0x2a02_06b8_0c00_0000_0000_f800_0000_0000u128,
-            (*Ipv6Network::parse("2a02:6b8:c00::f800:0:0/ffff:ffff:ff00:0:ffff:f800::")
+            Ipv6Network::parse("2a02:6b8:c00::f800:0:0/ffff:ffff:ff00:0:ffff:f800::")
                 .unwrap()
-                .addr())
-            .into()
+                .addr()
+                .into()
         );
     }
 
@@ -12307,7 +12358,7 @@ mod test {
         #[cfg(target_pointer_width = "64")]
         assert_eq!(Some(expected), net.subnets_with_prefix(96).unwrap().nth(1 << 40));
         #[cfg(target_pointer_width = "64")]
-        assert_eq!(Some(*expected), net.subnets(*expected.mask()).unwrap().nth(1 << 40));
+        assert_eq!(Some(*expected), net.subnets(expected.mask()).unwrap().nth(1 << 40));
     }
 
     // An IPv4-mapped network is IPv6 until `to_canonical` collapses it.
@@ -12563,7 +12614,7 @@ mod test {
     fn ipv4_subnets_by_own_mask_yield_network() {
         for text in ["0.0.0.0/0", "10.0.0.0/8", "10.0.0.1/32", "10.0.0.1/255.0.0.255"] {
             let net = Ipv4Network::parse(text).unwrap();
-            assert_eq!(vec![net], net.subnets(*net.mask()).unwrap().collect::<Vec<_>>());
+            assert_eq!(vec![net], net.subnets(net.mask()).unwrap().collect::<Vec<_>>());
         }
     }
 
@@ -12693,7 +12744,7 @@ mod test {
         let hosts: Vec<_> = net
             .subnets_with_prefix(32)
             .unwrap()
-            .map(|subnet| *subnet.addr())
+            .map(|subnet| subnet.addr())
             .collect();
         assert_eq!(net.addrs().collect::<Vec<_>>(), hosts);
     }
@@ -12718,7 +12769,7 @@ mod test {
             "2001:db8::1/ffff:ffff::ffff",
         ] {
             let net = Ipv6Network::parse(text).unwrap();
-            assert_eq!(vec![net], net.subnets(*net.mask()).unwrap().collect::<Vec<_>>());
+            assert_eq!(vec![net], net.subnets(net.mask()).unwrap().collect::<Vec<_>>());
         }
     }
 
@@ -12930,12 +12981,12 @@ mod test {
 
         #[test]
         fn prop_ipv4_subnets_by_own_mask_yield_network(net in arb_ipv4_network()) {
-            prop_assert_eq!(vec![net], net.subnets(*net.mask()).unwrap().collect::<Vec<_>>());
+            prop_assert_eq!(vec![net], net.subnets(net.mask()).unwrap().collect::<Vec<_>>());
         }
 
         #[test]
         fn prop_ipv6_subnets_by_own_mask_yield_network(net in arb_ipv6_network()) {
-            prop_assert_eq!(vec![net], net.subnets(*net.mask()).unwrap().collect::<Vec<_>>());
+            prop_assert_eq!(vec![net], net.subnets(net.mask()).unwrap().collect::<Vec<_>>());
         }
 
         #[test]
@@ -13178,7 +13229,7 @@ mod test {
             prop_assert_eq!(hint, subnets.size_hint());
 
             let first = subnets.next();
-            prop_assert_eq!(Contiguous::<Ipv4Network>::from_prefix(*net.addr(), q), first);
+            prop_assert_eq!(Contiguous::<Ipv4Network>::from_prefix(net.addr(), q), first);
             let last = Contiguous::<Ipv4Network>::from_prefix(net.last_addr(), q);
             prop_assert_eq!(last, net.subnets_with_prefix(q).unwrap().next_back());
             if let (Some(first), Some(second)) = (first, subnets.next()) {
@@ -13202,7 +13253,7 @@ mod test {
             prop_assert_eq!(hint, subnets.size_hint());
 
             let first = subnets.next();
-            prop_assert_eq!(Contiguous::<Ipv6Network>::from_prefix(*net.addr(), q), first);
+            prop_assert_eq!(Contiguous::<Ipv6Network>::from_prefix(net.addr(), q), first);
             let last = Contiguous::<Ipv6Network>::from_prefix(net.last_addr(), q);
             prop_assert_eq!(last, net.subnets_with_prefix(q).unwrap().next_back());
             if let (Some(first), Some(second)) = (first, subnets.next()) {
@@ -13317,7 +13368,7 @@ mod test {
         fn prop_ipv4_prefix_some_iff_is_contiguous(net in arb_ipv4_network()) {
             prop_assert_eq!(net.is_contiguous(), net.prefix().is_some());
             if let Some(prefix) = net.prefix() {
-                prop_assert_eq!(Ok(*net.mask()), ipv4_mask_from_cidr(prefix));
+                prop_assert_eq!(Ok(net.mask()), ipv4_mask_from_cidr(prefix));
             }
         }
 
@@ -13325,7 +13376,7 @@ mod test {
         fn prop_ipv6_prefix_some_iff_is_contiguous(net in arb_ipv6_network()) {
             prop_assert_eq!(net.is_contiguous(), net.prefix().is_some());
             if let Some(prefix) = net.prefix() {
-                prop_assert_eq!(Ok(*net.mask()), ipv6_mask_from_cidr(prefix));
+                prop_assert_eq!(Ok(net.mask()), ipv6_mask_from_cidr(prefix));
             }
         }
 
@@ -14446,8 +14497,8 @@ mod test {
         #[test]
         fn ipnetwork_addr_mask_roundtrip_v4(net in arb_ipv4_network()) {
             let ip_net = IpNetwork::V4(net);
-            prop_assert_eq!(IpAddr::V4(*net.addr()), ip_net.addr());
-            prop_assert_eq!(IpAddr::V4(*net.mask()), ip_net.mask());
+            prop_assert_eq!(IpAddr::V4(net.addr()), ip_net.addr());
+            prop_assert_eq!(IpAddr::V4(net.mask()), ip_net.mask());
         }
 
         #[test]
