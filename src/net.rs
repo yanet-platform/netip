@@ -7636,10 +7636,8 @@ mod test {
 
         #[test]
         fn prop_difference_iterators_stay_exhausted(
-            a4 in arb_ipv4_network(),
-            b4 in arb_ipv4_network(),
-            a6 in arb_ipv6_network(),
-            b6 in arb_ipv6_network(),
+            (a4, b4) in arb_ipv4_network_pair(),
+            (a6, b6) in arb_ipv6_network_pair(),
             script in prop::collection::vec(any::<bool>(), 1..8),
         ) {
             assert_stays_exhausted(a4.difference(&b4), &script);
@@ -10932,7 +10930,7 @@ mod test {
         #![proptest_config(ProptestConfig::with_cases(2000))]
 
         #[test]
-        fn prop_ipv4_merge_matches_reference(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+        fn prop_ipv4_merge_matches_reference((a, b) in arb_ipv4_network_pair()) {
             prop_assert_eq!(ipv4_merge_reference(&a, &b), a.merge(&b), "mismatch: a={}, b={}", a, b);
         }
     }
@@ -10974,7 +10972,7 @@ mod test {
         #![proptest_config(ProptestConfig::with_cases(2000))]
 
         #[test]
-        fn prop_ipv6_merge_matches_reference(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+        fn prop_ipv6_merge_matches_reference((a, b) in arb_ipv6_network_pair()) {
             prop_assert_eq!(ipv6_merge_reference(&a, &b), a.merge(&b), "mismatch: a={}, b={}", a, b);
         }
     }
@@ -11116,8 +11114,7 @@ mod test {
 
         #[test]
         fn prop_ipv4_is_adjacent_by_lowest_mask_bit_matches_reference(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             prop_assert_eq!(
                 a.is_adjacent_by_lowest_mask_bit(&b),
@@ -11128,8 +11125,7 @@ mod test {
 
         #[test]
         fn prop_ipv4_is_adjacent_by_lowest_mask_bit_implies_is_adjacent(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             if a.is_adjacent_by_lowest_mask_bit(&b) {
                 prop_assert!(a.is_adjacent(&b));
@@ -11138,16 +11134,14 @@ mod test {
 
         #[test]
         fn prop_ipv4_is_adjacent_by_lowest_mask_bit_symmetry(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             prop_assert_eq!(a.is_adjacent_by_lowest_mask_bit(&b), b.is_adjacent_by_lowest_mask_bit(&a));
         }
 
         #[test]
         fn prop_ip_is_adjacent_by_lowest_mask_bit_matches_inner_v4(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             prop_assert_eq!(
                 IpNetwork::V4(a).is_adjacent_by_lowest_mask_bit(&IpNetwork::V4(b)),
@@ -11157,8 +11151,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_is_adjacent_by_lowest_mask_bit_matches_reference(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             prop_assert_eq!(
                 a.is_adjacent_by_lowest_mask_bit(&b),
@@ -11169,8 +11162,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_is_adjacent_by_lowest_mask_bit_implies_is_adjacent(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             if a.is_adjacent_by_lowest_mask_bit(&b) {
                 prop_assert!(a.is_adjacent(&b));
@@ -11179,16 +11171,14 @@ mod test {
 
         #[test]
         fn prop_ipv6_is_adjacent_by_lowest_mask_bit_symmetry(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             prop_assert_eq!(a.is_adjacent_by_lowest_mask_bit(&b), b.is_adjacent_by_lowest_mask_bit(&a));
         }
 
         #[test]
         fn prop_ip_is_adjacent_by_lowest_mask_bit_matches_inner_v6(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             prop_assert_eq!(
                 IpNetwork::V6(a).is_adjacent_by_lowest_mask_bit(&IpNetwork::V6(b)),
@@ -11198,8 +11188,7 @@ mod test {
 
         #[test]
         fn prop_ip_merge_by_lowest_mask_bit_matches_inner_v4(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             prop_assert_eq!(
                 IpNetwork::V4(a).merge_by_lowest_mask_bit(&IpNetwork::V4(b)),
@@ -11209,8 +11198,7 @@ mod test {
 
         #[test]
         fn prop_ip_merge_by_lowest_mask_bit_matches_inner_v6(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             prop_assert_eq!(
                 IpNetwork::V6(a).merge_by_lowest_mask_bit(&IpNetwork::V6(b)),
@@ -13553,6 +13541,66 @@ mod test {
         arb_ipv6_network().prop_map(|net| Contiguous(net.to_contiguous()))
     }
 
+    // Two networks in one of seven relations, a seventh of the pairs each, in
+    // either order. Two independent networks with masks this wide almost
+    // never meet, so the second is built from the first: unrelated, inside
+    // it, around one of its members or its own address under any mask, its
+    // sibling or inside the sibling, at another address under the same mask,
+    // or equal.
+    fn arb_ipv4_network_pair() -> impl Strategy<Value = (Ipv4Network, Ipv4Network)> {
+        (arb_ipv4_network(), any::<u32>(), any::<u32>(), 0u8..7, any::<u8>()).prop_map(
+            |(a, bits, extra, relation, flags)| {
+                let (addr, mask) = a.to_bits();
+                let b = match relation {
+                    0 => Ipv4Network::from_bits(bits, extra),
+                    // Inside `a`: more mask bits, `a`'s address on its own.
+                    1 => Ipv4Network::from_bits(addr | bits & !mask, mask | extra),
+                    // Around a member of `a`, any one, or its own address.
+                    2 => Ipv4Network::from_bits(addr | bits & !mask, extra),
+                    3 => Ipv4Network::from_bits(addr, extra),
+                    // A sibling of `a`, or inside it, at the mask bit at or
+                    // above a random position, or at the lowest one.
+                    4 => {
+                        let above = mask & (u32::MAX << (bits % 32));
+                        let bit = if flags & 2 == 0 || above == 0 { mask } else { above };
+                        let sibling = addr ^ (bit & bit.wrapping_neg());
+                        Ipv4Network::from_bits(sibling, if flags & 4 == 0 { mask } else { mask | extra })
+                    }
+                    5 => Ipv4Network::from_bits(addr ^ bits, mask),
+                    _ => a,
+                };
+                if flags & 1 == 0 { (a, b) } else { (b, a) }
+            },
+        )
+    }
+
+    fn arb_ipv6_network_pair() -> impl Strategy<Value = (Ipv6Network, Ipv6Network)> {
+        (arb_ipv6_network(), any::<u128>(), any::<u128>(), 0u8..7, any::<u8>()).prop_map(
+            |(a, bits, extra, relation, flags)| {
+                let (addr, mask) = a.to_bits();
+                let b = match relation {
+                    0 => Ipv6Network::from_bits(bits, extra),
+                    // Inside `a`: more mask bits, `a`'s address on its own.
+                    1 => Ipv6Network::from_bits(addr | bits & !mask, mask | extra),
+                    // Around a member of `a`, any one, or its own address.
+                    2 => Ipv6Network::from_bits(addr | bits & !mask, extra),
+                    3 => Ipv6Network::from_bits(addr, extra),
+                    // A sibling of `a`, or inside it, at the mask bit at or
+                    // above a random position, or at the lowest one.
+                    4 => {
+                        let above = mask & (u128::MAX << (bits % 128));
+                        let bit = if flags & 2 == 0 || above == 0 { mask } else { above };
+                        let sibling = addr ^ (bit & bit.wrapping_neg());
+                        Ipv6Network::from_bits(sibling, if flags & 4 == 0 { mask } else { mask | extra })
+                    }
+                    5 => Ipv6Network::from_bits(addr ^ bits, mask),
+                    _ => a,
+                };
+                if flags & 1 == 0 { (a, b) } else { (b, a) }
+            },
+        )
+    }
+
     // A pair of IPv4 networks guaranteed to be lowest-mask-bit siblings: a shared
     // non-zero (possibly non-contiguous) mask and addresses differing only in that
     // mask's lowest set bit. The function `merge_by_lowest_mask_bit` always fires
@@ -14036,24 +14084,21 @@ mod test {
 
         #[test]
         fn prop_ipv4_intersects_is_not_disjoint(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             prop_assert_eq!(a.intersects(&b), !a.is_disjoint(&b));
         }
 
         #[test]
         fn prop_ipv4_intersection_commutativity(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             prop_assert_eq!(a.intersection(&b), b.intersection(&a));
         }
 
         #[test]
         fn prop_ipv4_contains_implies_intersection_eq_inner(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             if a.contains(&b) {
                 prop_assert_eq!(a.intersection(&b), Some(b));
@@ -14062,8 +14107,7 @@ mod test {
 
         #[test]
         fn prop_ipv4_intersection_subset_of_both(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             if let Some(c) = a.intersection(&b) {
                 prop_assert!(a.contains(&c), "intersection not contained in a: a={a}, b={b}, c={c}");
@@ -14080,8 +14124,7 @@ mod test {
 
         #[test]
         fn prop_ipv4_intersection_is_normalized(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             if let Some(c) = a.intersection(&b) {
                 let (addr, mask) = c.to_bits();
@@ -14091,16 +14134,14 @@ mod test {
 
         #[test]
         fn prop_ipv4_merge_commutativity(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             prop_assert_eq!(a.merge(&b), b.merge(&a));
         }
 
         #[test]
         fn prop_ipv4_merge_by_lowest_mask_bit_matches_reference(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             prop_assert_eq!(
                 a.merge_by_lowest_mask_bit(&b),
@@ -14111,8 +14152,7 @@ mod test {
 
         #[test]
         fn prop_ipv4_merge_by_lowest_mask_bit_some_iff_predicate(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             // Fires exactly on containment (either direction) or a lowest-mask-bit
             // sibling pair.
@@ -14125,16 +14165,14 @@ mod test {
 
         #[test]
         fn prop_ipv4_merge_by_lowest_mask_bit_commutativity(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             prop_assert_eq!(a.merge_by_lowest_mask_bit(&b), b.merge_by_lowest_mask_bit(&a));
         }
 
         #[test]
         fn prop_ipv4_merge_by_lowest_mask_bit_agrees_with_merge(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             // `merge_by_lowest_mask_bit` is a restriction of `merge`: whenever it
             // fires, it returns exactly the same network.
@@ -14175,8 +14213,7 @@ mod test {
 
         #[test]
         fn prop_ipv4_merge_result_contains_both(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             if let Some(c) = a.merge(&b) {
                 prop_assert!(c.contains(&a), "merge result {c} must contain {a}");
@@ -14186,8 +14223,7 @@ mod test {
 
         #[test]
         fn prop_ipv4_merge_is_normalized(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             if let Some(c) = a.merge(&b) {
                 let (addr, mask) = c.to_bits();
@@ -14197,8 +14233,7 @@ mod test {
 
         #[test]
         fn prop_ipv4_merge_equals_supernet_when_some(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             if let Some(c) = a.merge(&b) {
                 let supernet = a.supernet_for(&[b]);
@@ -14208,16 +14243,14 @@ mod test {
 
         #[test]
         fn prop_ipv4_is_adjacent_commutativity(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             prop_assert_eq!(a.is_adjacent(&b), b.is_adjacent(&a));
         }
 
         #[test]
         fn prop_ipv4_adjacent_implies_merge_some(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             if a.is_adjacent(&b) {
                 prop_assert!(a.merge(&b).is_some(), "adjacent but merge returned None: a={a}, b={b}");
@@ -14226,8 +14259,7 @@ mod test {
 
         #[test]
         fn prop_ipv4_same_mask_not_adjacent_not_identical_implies_merge_none(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             let (_, m1) = a.to_bits();
             let (_, m2) = b.to_bits();
@@ -14238,24 +14270,21 @@ mod test {
 
         #[test]
         fn prop_ipv6_intersects_is_not_disjoint(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             prop_assert_eq!(a.intersects(&b), !a.is_disjoint(&b));
         }
 
         #[test]
         fn prop_ipv6_intersection_commutativity(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             prop_assert_eq!(a.intersection(&b), b.intersection(&a));
         }
 
         #[test]
         fn prop_ipv6_contains_implies_intersection_eq_inner(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             if a.contains(&b) {
                 prop_assert_eq!(a.intersection(&b), Some(b));
@@ -14264,8 +14293,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_intersection_subset_of_both(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             if let Some(c) = a.intersection(&b) {
                 prop_assert!(a.contains(&c), "intersection not contained in a: a={a}, b={b}, c={c}");
@@ -14282,8 +14310,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_intersection_is_normalized(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             if let Some(c) = a.intersection(&b) {
                 let (addr, mask) = c.to_bits();
@@ -14293,8 +14320,7 @@ mod test {
 
         #[test]
         fn prop_ipv4_difference_parts_in_source(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             for r in a.difference(&b) {
                 prop_assert!(a.contains(&r), "part {r} not in a={a}");
@@ -14303,8 +14329,7 @@ mod test {
 
         #[test]
         fn prop_ipv4_difference_parts_disjoint_from_other(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             for r in a.difference(&b) {
                 prop_assert!(b.is_disjoint(&r), "part {r} intersects b={b}");
@@ -14313,8 +14338,7 @@ mod test {
 
         #[test]
         fn prop_ipv4_difference_pairwise_disjoint(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             let parts: Vec<_> = a.difference(&b).collect();
             for i in 0..parts.len() {
@@ -14340,8 +14364,7 @@ mod test {
         /// union(parts) = A \ B.
         #[test]
         fn prop_ipv4_difference_completeness(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             let size = |n: &Ipv4Network| -> u64 {
                 let (.., m) = n.to_bits();
@@ -14361,8 +14384,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_difference_parts_in_source(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             for r in a.difference(&b) {
                 prop_assert!(a.contains(&r), "part {r} not in a={a}");
@@ -14371,8 +14393,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_difference_parts_disjoint_from_other(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             for r in a.difference(&b) {
                 prop_assert!(b.is_disjoint(&r), "part {r} intersects b={b}");
@@ -14381,8 +14402,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_difference_pairwise_disjoint(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             let parts: Vec<_> = a.difference(&b).collect();
             for i in 0..parts.len() {
@@ -14405,8 +14425,7 @@ mod test {
         /// Σ|part_i| + |A ∩ B| = |A|.
         #[test]
         fn prop_ipv6_difference_completeness(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             let size = |n: &Ipv6Network| -> u128 {
                 let (.., m) = n.to_bits();
@@ -14426,8 +14445,7 @@ mod test {
 
         #[test]
         fn prop_ipv4_supernet_for_contains_all(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             let supernet = a.supernet_for(&[b]);
 
@@ -14437,8 +14455,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_supernet_for_contains_all(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             let supernet = a.supernet_for(&[b]);
 
@@ -14448,8 +14465,7 @@ mod test {
 
         #[test]
         fn prop_ipv4_supernet_for_diff_intersection(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
         ) {
             let diff: Vec<_> = a.difference(&b).collect();
             let intersected = a.intersection(&b);
@@ -14469,8 +14485,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_supernet_for_diff_intersection(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             let diff: Vec<_> = a.difference(&b).collect();
             let intersected = a.intersection(&b);
@@ -14490,16 +14505,14 @@ mod test {
 
         #[test]
         fn prop_ipv6_merge_commutativity(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             prop_assert_eq!(a.merge(&b), b.merge(&a));
         }
 
         #[test]
         fn prop_ipv6_merge_by_lowest_mask_bit_matches_reference(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             prop_assert_eq!(
                 a.merge_by_lowest_mask_bit(&b),
@@ -14510,8 +14523,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_merge_by_lowest_mask_bit_some_iff_predicate(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             // Fires exactly on containment (either direction) or a lowest-mask-bit
             // sibling pair.
@@ -14524,16 +14536,14 @@ mod test {
 
         #[test]
         fn prop_ipv6_merge_by_lowest_mask_bit_commutativity(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             prop_assert_eq!(a.merge_by_lowest_mask_bit(&b), b.merge_by_lowest_mask_bit(&a));
         }
 
         #[test]
         fn prop_ipv6_merge_by_lowest_mask_bit_agrees_with_merge(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             // `merge_by_lowest_mask_bit` is a restriction of `merge`: whenever it
             // fires, it returns exactly the same network.
@@ -14587,8 +14597,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_merge_result_contains_both(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             if let Some(c) = a.merge(&b) {
                 prop_assert!(c.contains(&a), "merge result {c} must contain {a}");
@@ -14598,8 +14607,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_merge_is_normalized(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             if let Some(c) = a.merge(&b) {
                 let (addr, mask) = c.to_bits();
@@ -14609,8 +14617,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_merge_equals_supernet_when_some(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             if let Some(c) = a.merge(&b) {
                 let supernet = a.supernet_for(&[b]);
@@ -14620,16 +14627,14 @@ mod test {
 
         #[test]
         fn prop_ipv6_is_adjacent_commutativity(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             prop_assert_eq!(a.is_adjacent(&b), b.is_adjacent(&a));
         }
 
         #[test]
         fn prop_ipv6_adjacent_implies_merge_some(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             if a.is_adjacent(&b) {
                 prop_assert!(a.merge(&b).is_some(), "adjacent but merge returned None: a={a}, b={b}");
@@ -14638,8 +14643,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_same_mask_not_adjacent_not_identical_implies_merge_none(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
         ) {
             let (_, m1) = a.to_bits();
             let (_, m2) = b.to_bits();
@@ -14935,7 +14939,7 @@ mod test {
         // yielded network still satisfies the (addr, mask) invariant
         // `addr & mask == addr`.
         #[test]
-        fn prop_ipv4_difference_items_are_normalized(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+        fn prop_ipv4_difference_items_are_normalized((a, b) in arb_ipv4_network_pair()) {
             for net in a.difference(&b) {
                 let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
                 prop_assert_eq!(addr & mask, addr, "a={}, b={}, net={}", a, b, net);
@@ -14943,7 +14947,7 @@ mod test {
         }
 
         #[test]
-        fn prop_ipv6_difference_items_are_normalized(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+        fn prop_ipv6_difference_items_are_normalized((a, b) in arb_ipv6_network_pair()) {
             for net in a.difference(&b) {
                 let (addr, mask) = (net.addr().to_bits(), net.mask().to_bits());
                 prop_assert_eq!(addr & mask, addr, "a={}, b={}, net={}", a, b, net);
@@ -14955,7 +14959,7 @@ mod test {
         // both match manual iteration, over random pairs (contiguous and
         // non-contiguous).
         #[test]
-        fn prop_ipv4_difference_count_matches_len(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+        fn prop_ipv4_difference_count_matches_len((a, b) in arb_ipv4_network_pair()) {
             let diff = a.difference(&b);
             let len = diff.len();
             let manual = a.difference(&b).fold(0usize, |n, _| n + 1);
@@ -14965,7 +14969,7 @@ mod test {
         }
 
         #[test]
-        fn prop_ipv6_difference_count_matches_len(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+        fn prop_ipv6_difference_count_matches_len((a, b) in arb_ipv6_network_pair()) {
             let diff = a.difference(&b);
             let len = diff.len();
             let manual = a.difference(&b).fold(0usize, |n, _| n + 1);
@@ -14981,7 +14985,7 @@ mod test {
         // strictly growing subset of `d`, gaining exactly its next-highest
         // unset bit per step, until all of `d` is covered.
         #[test]
-        fn prop_ipv4_difference_masks_match_peel_order(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+        fn prop_ipv4_difference_masks_match_peel_order((a, b) in arb_ipv4_network_pair()) {
             let (.., source_mask) = a.to_bits();
 
             let d = match a.intersection(&b) {
@@ -15016,7 +15020,7 @@ mod test {
         }
 
         #[test]
-        fn prop_ipv6_difference_masks_match_peel_order(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+        fn prop_ipv6_difference_masks_match_peel_order((a, b) in arb_ipv6_network_pair()) {
             let (.., source_mask) = a.to_bits();
 
             let d = match a.intersection(&b) {
@@ -15053,7 +15057,7 @@ mod test {
         // `rev()` must yield exactly the forward sequence in reverse: the
         // per-bit item identity is fixed regardless of which end peels it.
         #[test]
-        fn prop_ipv4_difference_rev_matches_forward_reversed(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+        fn prop_ipv4_difference_rev_matches_forward_reversed((a, b) in arb_ipv4_network_pair()) {
             let mut forward_reversed: Vec<_> = a.difference(&b).collect();
             forward_reversed.reverse();
             let reversed: Vec<_> = a.difference(&b).rev().collect();
@@ -15061,7 +15065,7 @@ mod test {
         }
 
         #[test]
-        fn prop_ipv6_difference_rev_matches_forward_reversed(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+        fn prop_ipv6_difference_rev_matches_forward_reversed((a, b) in arb_ipv6_network_pair()) {
             let mut forward_reversed: Vec<_> = a.difference(&b).collect();
             forward_reversed.reverse();
             let reversed: Vec<_> = a.difference(&b).rev().collect();
@@ -15073,8 +15077,7 @@ mod test {
         // `VecDeque` popped with the same front/back pattern.
         #[test]
         fn prop_ipv4_difference_interleaved_consumption_matches_forward(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
             pattern in proptest::collection::vec(any::<bool>(), 0..40),
         ) {
             use std::collections::VecDeque;
@@ -15091,8 +15094,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_difference_interleaved_consumption_matches_forward(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
             pattern in proptest::collection::vec(any::<bool>(), 0..140),
         ) {
             use std::collections::VecDeque;
@@ -15111,8 +15113,7 @@ mod test {
         // either end, and stay at zero once exhausted.
         #[test]
         fn prop_ipv4_difference_len_decrements_with_mixed_consumption(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
             pattern in proptest::collection::vec(any::<bool>(), 0..40),
         ) {
             let mut diff = a.difference(&b);
@@ -15133,8 +15134,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_difference_len_decrements_with_mixed_consumption(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
             pattern in proptest::collection::vec(any::<bool>(), 0..140),
         ) {
             let mut diff = a.difference(&b);
@@ -15156,14 +15156,14 @@ mod test {
         // `last()` must match the forward-collected sequence's last element,
         // in O(1) instead of the default full walk.
         #[test]
-        fn prop_ipv4_difference_last_matches_forward_last(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+        fn prop_ipv4_difference_last_matches_forward_last((a, b) in arb_ipv4_network_pair()) {
             let forward: Vec<_> = a.difference(&b).collect();
             let last = a.difference(&b).last();
             prop_assert_eq!(last, forward.last().copied(), "a={}, b={}", a, b);
         }
 
         #[test]
-        fn prop_ipv6_difference_last_matches_forward_last(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+        fn prop_ipv6_difference_last_matches_forward_last((a, b) in arb_ipv6_network_pair()) {
             let forward: Vec<_> = a.difference(&b).collect();
             let last = a.difference(&b).last();
             prop_assert_eq!(last, forward.last().copied(), "a={}, b={}", a, b);
@@ -15173,8 +15173,7 @@ mod test {
         // last element of whatever remains.
         #[test]
         fn prop_ipv4_difference_last_after_partial_consumption_matches_forward(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
             steps in 0usize..40,
         ) {
             let forward: Vec<_> = a.difference(&b).collect();
@@ -15191,8 +15190,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_difference_last_after_partial_consumption_matches_forward(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
             steps in 0usize..140,
         ) {
             let forward: Vec<_> = a.difference(&b).collect();
@@ -15321,12 +15319,12 @@ mod test {
         // The motivating use case for `to_ipv6_mapped`: lifting IPv4 networks into
         // IPv6 space must preserve `contains`/`intersects` for dual-stack comparisons.
         #[test]
-        fn prop_ipv4_to_ipv6_mapped_preserves_contains(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+        fn prop_ipv4_to_ipv6_mapped_preserves_contains((a, b) in arb_ipv4_network_pair()) {
             prop_assert_eq!(a.contains(&b), a.to_ipv6_mapped().contains(&b.to_ipv6_mapped()));
         }
 
         #[test]
-        fn prop_ipv4_to_ipv6_mapped_preserves_intersects(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+        fn prop_ipv4_to_ipv6_mapped_preserves_intersects((a, b) in arb_ipv4_network_pair()) {
             prop_assert_eq!(a.intersects(&b), a.to_ipv6_mapped().intersects(&b.to_ipv6_mapped()));
         }
     }
@@ -15474,14 +15472,14 @@ mod test {
 
     proptest! {
         #[test]
-        fn prop_ipv4_difference_matches_reference_forward(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+        fn prop_ipv4_difference_matches_reference_forward((a, b) in arb_ipv4_network_pair()) {
             let actual: Vec<_> = a.difference(&b).collect();
             let expected: Vec<_> = Ipv4NetworkDiffReference::new(&a, &b).collect();
             prop_assert_eq!(actual, expected, "a={}, b={}", a, b);
         }
 
         #[test]
-        fn prop_ipv4_difference_matches_reference_backward(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+        fn prop_ipv4_difference_matches_reference_backward((a, b) in arb_ipv4_network_pair()) {
             let actual: Vec<_> = a.difference(&b).rev().collect();
             let expected: Vec<_> = Ipv4NetworkDiffReference::new(&a, &b).rev().collect();
             prop_assert_eq!(actual, expected, "a={}, b={}", a, b);
@@ -15489,8 +15487,7 @@ mod test {
 
         #[test]
         fn prop_ipv4_difference_matches_reference_interleaved(
-            a in arb_ipv4_network(),
-            b in arb_ipv4_network(),
+            (a, b) in arb_ipv4_network_pair(),
             pattern in proptest::collection::vec(any::<bool>(), 0..40),
         ) {
             let mut actual = a.difference(&b);
@@ -15504,14 +15501,14 @@ mod test {
         }
 
         #[test]
-        fn prop_ipv6_difference_matches_reference_forward(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+        fn prop_ipv6_difference_matches_reference_forward((a, b) in arb_ipv6_network_pair()) {
             let actual: Vec<_> = a.difference(&b).collect();
             let expected: Vec<_> = Ipv6NetworkDiffReference::new(&a, &b).collect();
             prop_assert_eq!(actual, expected, "a={}, b={}", a, b);
         }
 
         #[test]
-        fn prop_ipv6_difference_matches_reference_backward(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+        fn prop_ipv6_difference_matches_reference_backward((a, b) in arb_ipv6_network_pair()) {
             let actual: Vec<_> = a.difference(&b).rev().collect();
             let expected: Vec<_> = Ipv6NetworkDiffReference::new(&a, &b).rev().collect();
             prop_assert_eq!(actual, expected, "a={}, b={}", a, b);
@@ -15519,8 +15516,7 @@ mod test {
 
         #[test]
         fn prop_ipv6_difference_matches_reference_interleaved(
-            a in arb_ipv6_network(),
-            b in arb_ipv6_network(),
+            (a, b) in arb_ipv6_network_pair(),
             pattern in proptest::collection::vec(any::<bool>(), 0..140),
         ) {
             let mut actual = a.difference(&b);
@@ -15834,7 +15830,7 @@ mod test {
         #![proptest_config(ProptestConfig::with_cases(2000))]
 
         #[test]
-        fn prop_ipv4_network_ord_matches_addr_mask_tuple(a in arb_ipv4_network(), b in arb_ipv4_network()) {
+        fn prop_ipv4_network_ord_matches_addr_mask_tuple((a, b) in arb_ipv4_network_pair()) {
             let expected = (a.addr(), a.mask()).cmp(&(b.addr(), b.mask()));
             prop_assert_eq!(expected, a.cmp(&b));
             prop_assert_eq!(Some(a.cmp(&b)), a.partial_cmp(&b));
@@ -15842,7 +15838,7 @@ mod test {
         }
 
         #[test]
-        fn prop_ipv6_network_ord_matches_addr_mask_tuple(a in arb_ipv6_network(), b in arb_ipv6_network()) {
+        fn prop_ipv6_network_ord_matches_addr_mask_tuple((a, b) in arb_ipv6_network_pair()) {
             let expected = (a.addr(), a.mask()).cmp(&(b.addr(), b.mask()));
             prop_assert_eq!(expected, a.cmp(&b));
             prop_assert_eq!(Some(a.cmp(&b)), a.partial_cmp(&b));
