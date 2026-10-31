@@ -28,12 +28,13 @@ use core::{
 ///
 /// # Parsing
 ///
-/// Two formats are supported via [`FromStr`] and [`MacAddr::parse_ascii`]:
+/// Three formats are supported via [`FromStr`] and [`MacAddr::parse_ascii`]:
 ///
 /// | Format           | Example             |
 /// |------------------|---------------------|
 /// | Colon-separated  | `aa:bb:cc:dd:ee:ff` |
 /// | Hyphen-separated | `aa-bb-cc-dd-ee-ff` |
+/// | Cisco dotted     | `aabb.ccdd.eeff`    |
 ///
 /// Hex digits are case-insensitive.
 ///
@@ -114,6 +115,7 @@ impl MacAddr {
     /// |------------------|---------------------|
     /// | Colon-separated  | `xx:xx:xx:xx:xx:xx` |
     /// | Hyphen-separated | `xx-xx-xx-xx-xx-xx` |
+    /// | Cisco dotted     | `xxxx.xxxx.xxxx`    |
     ///
     /// ```
     /// use netip::MacAddr;
@@ -121,12 +123,14 @@ impl MacAddr {
     /// let mac = MacAddr::parse_ascii(b"3a:ac:26:9b:5b:f9").unwrap();
     ///
     /// assert_eq!(mac, MacAddr::parse_ascii(b"3a-ac-26-9b-5b-f9").unwrap());
+    /// assert_eq!(mac, MacAddr::parse_ascii(b"3aac.269b.5bf9").unwrap());
     /// ```
     #[inline]
     pub fn parse_ascii(b: &[u8]) -> Result<Self, MacAddrParseError> {
         match b.len() {
-            // The length check above guarantees this conversion never fails.
+            // The length checks above guarantee these conversions never fail.
             17 => parse_separated(b.try_into().unwrap()),
+            14 => parse_dotted(b.try_into().unwrap()),
             _ => Err(MacAddrParseError),
         }
     }
@@ -404,6 +408,27 @@ fn parse_separated(b: &[u8; 17]) -> Result<MacAddr, MacAddrParseError> {
     Ok(MacAddr::from(octets))
 }
 
+/// Parses Cisco's `xxxx.xxxx.xxxx` from a 14-byte array: three dot-separated
+/// groups of four hex digits, two octets each.
+///
+/// Takes a fixed-size array for the same reason as [`parse_separated`].
+#[inline]
+fn parse_dotted(b: &[u8; 14]) -> Result<MacAddr, MacAddrParseError> {
+    if b[4] != b'.' || b[9] != b'.' {
+        return Err(MacAddrParseError);
+    }
+
+    let mut octets = [0u8; 6];
+    for (i, octet) in octets.iter_mut().enumerate() {
+        // Octet `i` is hex digits `2i` and `2i + 1`, shifted right by the
+        // dots before them: one after every group of two octets.
+        let off = 2 * i + i / 2;
+        *octet = decode_hex_pair(b[off], b[off + 1])?;
+    }
+
+    Ok(MacAddr::from(octets))
+}
+
 /// Error returned when parsing a MAC address string fails, or when a [`u64`]
 /// with any of the upper 16 bits set is converted to a MAC address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -538,6 +563,38 @@ mod test {
     #[test]
     fn parse_hyphen() {
         assert_eq!(MAC, "3a-ac-26-9b-5b-f9".parse::<MacAddr>().unwrap());
+    }
+
+    #[test]
+    fn parse_cisco() {
+        assert_eq!(MAC, "3aac.269b.5bf9".parse::<MacAddr>().unwrap());
+        assert_eq!(MAC, "3AAC.269B.5BF9".parse::<MacAddr>().unwrap());
+        assert_eq!(MAC, "3aAC.269b.5Bf9".parse::<MacAddr>().unwrap());
+        assert_eq!(MacAddr::ZERO, "0000.0000.0000".parse::<MacAddr>().unwrap());
+        assert_eq!(MacAddr::BROADCAST, "ffff.ffff.ffff".parse::<MacAddr>().unwrap());
+    }
+
+    #[test]
+    fn parse_cisco_rejects_malformed() {
+        for s in [
+            // A dot out of place, missing, or replaced.
+            "3aa.c269b.5bf9",
+            "3aac.269b5.bf9",
+            "3aac2.69b.5bf9",
+            "3aac:269b:5bf9",
+            "3aac-269b-5bf9",
+            "3aac.269b:5bf9",
+            "3aac269b5bf9..",
+            // A bad digit in each group.
+            "3azc.269b.5bf9",
+            "3aac.26xb.5bf9",
+            "3aac.269b.5bg9",
+            // One digit short or long.
+            "3aac.269b.5bf",
+            "3aac.269b.5bf90",
+        ] {
+            assert_eq!(Err(MacAddrParseError), s.parse::<MacAddr>(), "{s}");
+        }
     }
 
     #[test]
@@ -683,8 +740,52 @@ mod test {
         ]
     }
 
+    // Reads `xxxx.xxxx.xxxx` the plain way, an oracle for `parse_dotted`.
+    fn parse_cisco_reference(s: &str) -> Option<MacAddr> {
+        let groups: std::vec::Vec<&str> = s.split('.').collect();
+        if groups.len() != 3 {
+            return None;
+        }
+
+        let mut bits = 0u64;
+        for group in groups {
+            if group.len() != 4 || !group.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
+            bits = bits << 16 | u64::from(u16::from_str_radix(group, 16).ok()?);
+        }
+
+        MacAddr::from_u64(bits)
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        // Every MAC reads back from its Cisco text, in either case.
+        #[test]
+        fn prop_parse_cisco_roundtrip(mac in arb_mac_addr()) {
+            let [a, b, c, d, e, f] = mac.octets();
+            let text = std::format!("{a:02x}{b:02x}.{c:02x}{d:02x}.{e:02x}{f:02x}");
+
+            prop_assert_eq!(Ok(mac), text.parse::<MacAddr>());
+            prop_assert_eq!(Ok(mac), text.to_uppercase().parse::<MacAddr>());
+        }
+
+        // A Cisco text with one character replaced, by a hex digit, a dot or
+        // a stray: the parser accepts exactly what the reference does.
+        #[test]
+        fn prop_parse_cisco_matches_reference(
+            mac in arb_mac_addr(),
+            position in 0usize..14,
+            byte in prop::sample::select(&b"0123456789abcdefABCDEF.:-xg"[..]),
+        ) {
+            let [a, b, c, d, e, f] = mac.octets();
+            let mut text = std::format!("{a:02x}{b:02x}.{c:02x}{d:02x}.{e:02x}{f:02x}").into_bytes();
+            text[position] = byte;
+            let text = std::string::String::from_utf8(text).unwrap();
+
+            prop_assert_eq!(parse_cisco_reference(&text).ok_or(MacAddrParseError), text.parse::<MacAddr>(), "{}", text);
+        }
 
         #[test]
         fn prop_from_u64_accepts_exactly_48_bit_values(bits in arb_u64_bits()) {
