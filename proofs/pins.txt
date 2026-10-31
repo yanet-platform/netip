@@ -96,7 +96,7 @@ Ipv4NetworkAddrs::Iterator::size_hint               5dc434b2f10c1ed5  Netip/Impl
 Ipv4NetworkAddrs::DoubleEndedIterator::next_back    ccbe7c8d86c738b9  Netip/Impl/AddrsRun.lean:addrsNextBack Netip/Impl/Addrs.lean:Ipv4.nextBack_step
 Ipv4NetworkAddrs::ExactSizeIterator::len            06983ad6261708ee  Netip/Impl/AddrsRun.lean:sizeHint
 Ipv4NetworkDiff                                     c255ed5146d419b6  Netip/Impl/Difference.lean:Ipv4.Inv
-Ipv4NetworkDiff::new                                c795fcf83540e441  Netip/Impl/Difference.lean:Ipv4.Inv Netip/Impl/DifferenceRun.lean
+Ipv4NetworkDiff::new                                79404bd5663e7e3d  Netip/Impl/Difference.lean:Ipv4.Inv Netip/Impl/DifferenceRun.lean
 Ipv4NetworkDiff::Iterator::next                     cda18a4275137df9  Netip/Impl/Difference.lean:Ipv4.ladder Netip/Impl/DifferenceRun.lean:Ipv4.diffStep
 Ipv4NetworkDiff::Iterator::count                    0d80add173eeaee3  Netip/Impl/DifferenceRun.lean
 Ipv4NetworkDiff::Iterator::size_hint                2e6271650c05826c  Netip/Impl/DifferenceRun.lean
@@ -150,7 +150,7 @@ Ipv6NetworkAddrs::Iterator::count                   96e397cb4e172561  Netip/Impl
 Ipv6NetworkAddrs::Iterator::size_hint               98f2e3f7a98e81c3  Netip/Impl/AddrsRun.lean:sizeHint
 Ipv6NetworkAddrs::DoubleEndedIterator::next_back    bc7c7115d6ca169d  Netip/Impl/AddrsRun.lean:addrsNextBack Netip/Impl/Addrs.lean:Ipv6.nextBack_step
 Ipv6NetworkDiff                                     79ccaaef696d46c4  Netip/Impl/Difference.lean:Ipv6.Inv
-Ipv6NetworkDiff::new                                0c2cfdb70efe0957  Netip/Impl/Difference.lean:Ipv6.Inv Netip/Impl/DifferenceRun.lean
+Ipv6NetworkDiff::new                                5ed2c32518b7befb  Netip/Impl/Difference.lean:Ipv6.Inv Netip/Impl/DifferenceRun.lean
 Ipv6NetworkDiff::Iterator::next                     0abe66e73286ca62  Netip/Impl/Difference.lean:Ipv6.ladder Netip/Impl/DifferenceRun.lean:Ipv6.diffStep
 Ipv6NetworkDiff::Iterator::count                    8096ed6d379b641d  Netip/Impl/DifferenceRun.lean
 Ipv6NetworkDiff::Iterator::size_hint                4caf82b31f44fa36  Netip/Impl/DifferenceRun.lean
