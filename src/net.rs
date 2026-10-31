@@ -1191,7 +1191,8 @@ impl FromStr for IpNetwork {
 ///
 /// Created by [`IpNetwork::addrs`]. Yields the addresses of
 /// [`Ipv4NetworkAddrs`] or [`Ipv6NetworkAddrs`], in ascending order for any
-/// mask.
+/// mask, and skips with [`nth`](Iterator::nth) and
+/// [`nth_back`](DoubleEndedIterator::nth_back) as fast as they do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IpNetworkAddrs(IpNetworkAddrsInner);
 
@@ -1229,6 +1230,14 @@ impl Iterator for IpNetworkAddrs {
         }
     }
 
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        match &mut self.0 {
+            IpNetworkAddrsInner::V4(addrs) => addrs.nth(n).map(IpAddr::V4),
+            IpNetworkAddrsInner::V6(addrs) => addrs.nth(n).map(IpAddr::V6),
+        }
+    }
+
     // The back end yields the last address in O(1), where the default
     // `last` drains the whole network.
     #[inline]
@@ -1243,6 +1252,14 @@ impl DoubleEndedIterator for IpNetworkAddrs {
         match &mut self.0 {
             IpNetworkAddrsInner::V4(addrs) => addrs.next_back().map(IpAddr::V4),
             IpNetworkAddrsInner::V6(addrs) => addrs.next_back().map(IpAddr::V6),
+        }
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        match &mut self.0 {
+            IpNetworkAddrsInner::V4(addrs) => addrs.nth_back(n).map(IpAddr::V4),
+            IpNetworkAddrsInner::V6(addrs) => addrs.nth_back(n).map(IpAddr::V6),
         }
     }
 }
@@ -2708,6 +2725,10 @@ impl AsRef<Ipv4Network> for Ipv4Network {
 /// from the least-significant host bit. This is ascending numeric order for any
 /// mask, see [`Ipv4Network::addrs`].
 ///
+/// [`nth`](Iterator::nth) and [`nth_back`](DoubleEndedIterator::nth_back) skip
+/// in O(1) for a contiguous mask and in O(log n) for any other, and leave the
+/// iterator as `n + 1` calls of `next` or `next_back` would.
+///
 /// When the iterator is exhausted (`remaining == 0`) every subsequent call to
 /// [`next`](Iterator::next) or [`next_back`](DoubleEndedIterator::next_back)
 /// returns [`None`].
@@ -2722,6 +2743,25 @@ pub struct Ipv4NetworkAddrs {
     /// Number of addresses not yet yielded, stored as `u64` so the /0
     /// network's `2^32` is represented exactly.
     remaining: u64,
+}
+
+/// Spreads the low bits of `bits` over the set bits of `host_mask`, lowest
+/// first: the host index `bits` placed in the host positions it fills.
+///
+/// Takes one step per bit of `bits` up to its highest set one, so skipping
+/// `n` addresses costs O(log n). Bits beyond the popcount of `host_mask` are
+/// dropped.
+#[inline]
+const fn ipv4_deposit(mut bits: u32, mut host_mask: u32) -> u32 {
+    let mut deposited = 0;
+    while bits != 0 && host_mask != 0 {
+        if bits & 1 != 0 {
+            deposited |= host_mask & host_mask.wrapping_neg();
+        }
+        host_mask &= host_mask.wrapping_sub(1);
+        bits >>= 1;
+    }
+    deposited
 }
 
 impl Iterator for Ipv4NetworkAddrs {
@@ -2774,6 +2814,39 @@ impl Iterator for Ipv4NetworkAddrs {
             Err(..) => (usize::MAX, None),
         }
     }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        // NOTE: lossless, `usize` is at most 64 bits wide.
+        let n = n as u64;
+        if n >= self.remaining {
+            // `n + 1` calls of `next` drain the iterator, the last item
+            // parking the front cursor on `base`; calls on a drained iterator
+            // change nothing.
+            if self.remaining != 0 {
+                self.remaining = 0;
+                self.front_addr = self.base;
+            }
+            return None;
+        }
+
+        // NOTE: lossless, `n < remaining <= 2^32`.
+        let n = n as u32;
+        let host_mask = !self.mask;
+        self.front_addr = if host_mask & host_mask.wrapping_add(1) == 0 {
+            // Contiguous mask: the host index is the low bits of the address,
+            // so skipping is a plain addition, kept inside the network by
+            // `n < remaining`.
+            self.front_addr.wrapping_add(n)
+        } else {
+            // Spread `n` over the host positions and add it the way `next`
+            // adds one: the carries ripple across the preset mask bits.
+            ((self.front_addr | self.mask).wrapping_add(ipv4_deposit(n, host_mask)) & host_mask) | self.base
+        };
+        self.remaining -= u64::from(n);
+
+        self.next()
+    }
 }
 
 impl DoubleEndedIterator for Ipv4NetworkAddrs {
@@ -2808,6 +2881,40 @@ impl DoubleEndedIterator for Ipv4NetworkAddrs {
         }
 
         Some(Ipv4Addr::from_bits(bits))
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        // NOTE: lossless, `usize` is at most 64 bits wide.
+        let n = n as u64;
+        if n >= self.remaining {
+            // `n + 1` calls of `next_back` drain the iterator, the last item
+            // parking both cursors on `base`; calls on a drained iterator
+            // change nothing.
+            if self.remaining != 0 {
+                self.remaining = 0;
+                self.front_addr = self.base;
+                self.back_addr = self.base;
+            }
+            return None;
+        }
+
+        // NOTE: lossless, `n < remaining <= 2^32`.
+        let n = n as u32;
+        let host_mask = !self.mask;
+        self.back_addr = if host_mask & host_mask.wrapping_add(1) == 0 {
+            // Contiguous mask: a plain subtraction, kept inside the network
+            // by `n < remaining`.
+            self.back_addr.wrapping_sub(n)
+        } else {
+            // Spread `n` over the host positions and subtract it the way
+            // `next_back` subtracts one: the borrows ripple across the cleared
+            // mask bits.
+            ((self.back_addr & host_mask).wrapping_sub(ipv4_deposit(n, host_mask)) & host_mask) | self.base
+        };
+        self.remaining -= u64::from(n);
+
+        self.next_back()
     }
 }
 
@@ -2864,6 +2971,12 @@ impl Iterator for Ipv4NetworkSubnets {
     }
 
     #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        // NOTE: the address is already normalized, see `Ipv4Network::subnets`.
+        self.addrs.nth(n).map(|addr| Ipv4Network(addr, self.mask))
+    }
+
+    #[inline]
     fn last(mut self) -> Option<Self::Item> {
         // The last item in forward order is the one at the back end, which
         // `next_back` reaches in O(1) instead of the default's full walk.
@@ -2876,6 +2989,12 @@ impl DoubleEndedIterator for Ipv4NetworkSubnets {
     fn next_back(&mut self) -> Option<Self::Item> {
         // NOTE: the address is already normalized, see `Ipv4Network::subnets`.
         self.addrs.next_back().map(|addr| Ipv4Network(addr, self.mask))
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        // NOTE: the address is already normalized, see `Ipv4Network::subnets`.
+        self.addrs.nth_back(n).map(|addr| Ipv4Network(addr, self.mask))
     }
 }
 
@@ -2925,6 +3044,11 @@ impl Iterator for Ipv4NetworkPrefixSubnets {
     }
 
     #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        self.subnets.nth(n).map(Contiguous)
+    }
+
+    #[inline]
     fn last(mut self) -> Option<Self::Item> {
         // O(1) through `next_back`, as for `Ipv4NetworkSubnets`.
         self.next_back()
@@ -2937,6 +3061,11 @@ impl DoubleEndedIterator for Ipv4NetworkPrefixSubnets {
         // The subnets share a mask of leading ones, see
         // `Ipv4Network::subnets_with_prefix`.
         self.subnets.next_back().map(Contiguous)
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        self.subnets.nth_back(n).map(Contiguous)
     }
 }
 
@@ -4850,6 +4979,10 @@ impl PartialOrd for Ipv6Network {
 /// from the least-significant host bit. This is ascending numeric order for any
 /// mask, see [`Ipv6Network::addrs`].
 ///
+/// [`nth`](Iterator::nth) and [`nth_back`](DoubleEndedIterator::nth_back) skip
+/// in O(1) for a contiguous mask and in O(log n) for any other, and leave the
+/// iterator as `n + 1` calls of `next` or `next_back` would.
+///
 /// When the iterator is exhausted (`remaining == 0`) every subsequent call to
 /// [`next`](Iterator::next) or [`next_back`](DoubleEndedIterator::next_back)
 /// returns [`None`].
@@ -4864,6 +4997,25 @@ pub struct Ipv6NetworkAddrs {
     /// Number of addresses not yet yielded, saturating to `u128::MAX` for the
     /// /0 network's `2^128`.
     remaining: u128,
+}
+
+/// Spreads the low bits of `bits` over the set bits of `host_mask`, lowest
+/// first: the host index `bits` placed in the host positions it fills.
+///
+/// Takes one step per bit of `bits` up to its highest set one, so skipping
+/// `n` addresses costs O(log n). Bits beyond the popcount of `host_mask` are
+/// dropped.
+#[inline]
+const fn ipv6_deposit(mut bits: u128, mut host_mask: u128) -> u128 {
+    let mut deposited = 0;
+    while bits != 0 && host_mask != 0 {
+        if bits & 1 != 0 {
+            deposited |= host_mask & host_mask.wrapping_neg();
+        }
+        host_mask &= host_mask.wrapping_sub(1);
+        bits >>= 1;
+    }
+    deposited
 }
 
 impl Iterator for Ipv6NetworkAddrs {
@@ -4916,6 +5068,37 @@ impl Iterator for Ipv6NetworkAddrs {
             Err(..) => (usize::MAX, None),
         }
     }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        // NOTE: lossless, `usize` is at most 64 bits wide.
+        let n = n as u128;
+        if n >= self.remaining {
+            // `n + 1` calls of `next` drain the iterator, the last item
+            // parking the front cursor on `base`; calls on a drained iterator
+            // change nothing.
+            if self.remaining != 0 {
+                self.remaining = 0;
+                self.front_addr = self.base;
+            }
+            return None;
+        }
+
+        let host_mask = !self.mask;
+        self.front_addr = if host_mask & host_mask.wrapping_add(1) == 0 {
+            // Contiguous mask: the host index is the low bits of the address,
+            // so skipping is a plain addition, kept inside the network by
+            // `n < remaining`.
+            self.front_addr.wrapping_add(n)
+        } else {
+            // Spread `n` over the host positions and add it the way `next`
+            // adds one: the carries ripple across the preset mask bits.
+            ((self.front_addr | self.mask).wrapping_add(ipv6_deposit(n, host_mask)) & host_mask) | self.base
+        };
+        self.remaining -= n;
+
+        self.next()
+    }
 }
 
 impl DoubleEndedIterator for Ipv6NetworkAddrs {
@@ -4950,6 +5133,38 @@ impl DoubleEndedIterator for Ipv6NetworkAddrs {
         }
 
         Some(Ipv6Addr::from_bits(bits))
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        // NOTE: lossless, `usize` is at most 64 bits wide.
+        let n = n as u128;
+        if n >= self.remaining {
+            // `n + 1` calls of `next_back` drain the iterator, the last item
+            // parking both cursors on `base`; calls on a drained iterator
+            // change nothing.
+            if self.remaining != 0 {
+                self.remaining = 0;
+                self.front_addr = self.base;
+                self.back_addr = self.base;
+            }
+            return None;
+        }
+
+        let host_mask = !self.mask;
+        self.back_addr = if host_mask & host_mask.wrapping_add(1) == 0 {
+            // Contiguous mask: a plain subtraction, kept inside the network
+            // by `n < remaining`.
+            self.back_addr.wrapping_sub(n)
+        } else {
+            // Spread `n` over the host positions and subtract it the way
+            // `next_back` subtracts one: the borrows ripple across the cleared
+            // mask bits.
+            ((self.back_addr & host_mask).wrapping_sub(ipv6_deposit(n, host_mask)) & host_mask) | self.base
+        };
+        self.remaining -= n;
+
+        self.next_back()
     }
 }
 
@@ -4991,6 +5206,12 @@ impl Iterator for Ipv6NetworkSubnets {
     }
 
     #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        // NOTE: the address is already normalized, see `Ipv6Network::subnets`.
+        self.addrs.nth(n).map(|addr| Ipv6Network(addr, self.mask))
+    }
+
+    #[inline]
     fn last(mut self) -> Option<Self::Item> {
         // The last item in forward order is the one at the back end, which
         // `next_back` reaches in O(1) instead of the default's full walk.
@@ -5003,6 +5224,12 @@ impl DoubleEndedIterator for Ipv6NetworkSubnets {
     fn next_back(&mut self) -> Option<Self::Item> {
         // NOTE: the address is already normalized, see `Ipv6Network::subnets`.
         self.addrs.next_back().map(|addr| Ipv6Network(addr, self.mask))
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        // NOTE: the address is already normalized, see `Ipv6Network::subnets`.
+        self.addrs.nth_back(n).map(|addr| Ipv6Network(addr, self.mask))
     }
 }
 
@@ -5042,6 +5269,11 @@ impl Iterator for Ipv6NetworkPrefixSubnets {
     }
 
     #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        self.subnets.nth(n).map(Contiguous)
+    }
+
+    #[inline]
     fn last(mut self) -> Option<Self::Item> {
         // O(1) through `next_back`, as for `Ipv6NetworkSubnets`.
         self.next_back()
@@ -5054,6 +5286,11 @@ impl DoubleEndedIterator for Ipv6NetworkPrefixSubnets {
         // The subnets share a mask of leading ones, see
         // `Ipv6Network::subnets_with_prefix`.
         self.subnets.next_back().map(Contiguous)
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        self.subnets.nth_back(n).map(Contiguous)
     }
 }
 
@@ -7145,6 +7382,28 @@ mod test {
         }
     }
 
+    // Drives two copies of `iter` by `script`: one calls `nth` (`true`) or
+    // `nth_back` (`false`) with the step, the other `next` or `next_back` one
+    // more time than the step. Each step must return the same item and leave
+    // equal states, a drained iterator included.
+    fn assert_nth_matches_stepping<I>(iter: I, script: &[(bool, usize)])
+    where
+        I: DoubleEndedIterator + Clone + PartialEq + core::fmt::Debug,
+        I::Item: PartialEq + core::fmt::Debug,
+    {
+        let mut skipping = iter.clone();
+        let mut stepping = iter;
+        for &(front, n) in script {
+            let mut expected = None;
+            for _ in 0..=n {
+                expected = if front { stepping.next() } else { stepping.next_back() };
+            }
+            let actual = if front { skipping.nth(n) } else { skipping.nth_back(n) };
+            assert_eq!(expected, actual, "front: {front}, n: {n}");
+            assert_eq!(stepping, skipping, "front: {front}, n: {n}");
+        }
+    }
+
     // A mask with at most five host bits, anywhere in the word, so that a test
     // can drain the network's members.
     fn arb_few_host_bits_u32() -> impl Strategy<Value = u32> {
@@ -7274,6 +7533,54 @@ mod test {
                 prop_assert_eq!(family.size_hint(), addrs.size_hint());
             }
             prop_assert_eq!(family.next_back().map(IpAddr::V6), addrs.last());
+        }
+    }
+
+    proptest! {
+        // `nth` and `nth_back` skip exactly as stepping does, item and state
+        // alike: on the address iterators, mostly with non-contiguous masks,
+        // and on the iterators that wrap them.
+        #[test]
+        fn prop_addrs_nth_matches_stepping(
+            a4 in any::<u32>(),
+            m4 in arb_few_host_bits_u32(),
+            a6 in any::<u128>(),
+            m6 in arb_few_host_bits_u128(),
+            script in prop::collection::vec((any::<bool>(), 0usize..12), 1..12),
+        ) {
+            let net4 = Ipv4Network::from_bits(a4, m4);
+            let net6 = Ipv6Network::from_bits(a6, m6);
+            assert_nth_matches_stepping(net4.addrs(), &script);
+            assert_nth_matches_stepping(net6.addrs(), &script);
+            assert_nth_matches_stepping(IpNetwork::V4(net4).addrs(), &script);
+            assert_nth_matches_stepping(IpNetwork::V6(net6).addrs(), &script);
+        }
+
+        // Contiguous masks take the plain-arithmetic branch.
+        #[test]
+        fn prop_addrs_nth_matches_stepping_contiguous(
+            a4 in any::<u32>(),
+            prefix4 in 27u8..=32,
+            a6 in any::<u128>(),
+            prefix6 in 123u8..=128,
+            script in prop::collection::vec((any::<bool>(), 0usize..12), 1..12),
+        ) {
+            let net4 = Ipv4Network::try_from((Ipv4Addr::from_bits(a4), prefix4)).unwrap();
+            let net6 = Ipv6Network::try_from((Ipv6Addr::from_bits(a6), prefix6)).unwrap();
+            assert_nth_matches_stepping(net4.addrs(), &script);
+            assert_nth_matches_stepping(net6.addrs(), &script);
+            assert_nth_matches_stepping(net4.subnets_with_prefix(32).unwrap(), &script);
+            assert_nth_matches_stepping(net6.subnets_with_prefix(128).unwrap(), &script);
+        }
+
+        #[test]
+        fn prop_subnets_nth_matches_stepping(
+            (net4, mask4) in arb_ipv4_few_subnets(),
+            (net6, mask6) in arb_ipv6_few_subnets(),
+            script in prop::collection::vec((any::<bool>(), 0usize..12), 1..12),
+        ) {
+            assert_nth_matches_stepping(net4.subnets(mask4).unwrap(), &script);
+            assert_nth_matches_stepping(net6.subnets(mask6).unwrap(), &script);
         }
     }
 
@@ -11842,6 +12149,63 @@ mod test {
         let net = IpNetwork::parse("::/0").unwrap();
         assert_eq!((usize::MAX, None), net.addrs().size_hint());
         assert_eq!(Some(net.last_addr()), net.addrs().last());
+    }
+
+    // Skips far past what stepping could reach: across all of IPv4, and
+    // through 2^62 addresses of an IPv6 `/64`.
+    #[test]
+    fn addrs_nth_skips_far() {
+        let net = Ipv4Network::parse("0.0.0.0/0").unwrap();
+        let mut addrs = net.addrs();
+        assert_eq!(Some(Ipv4Addr::new(0, 0, 0, 1)), addrs.nth(1));
+        assert_eq!(Some(Ipv4Addr::new(255, 255, 255, 254)), addrs.nth(0xffff_fffc));
+        assert_eq!(Some(Ipv4Addr::new(255, 255, 255, 255)), addrs.next());
+        assert_eq!(None, addrs.next_back());
+
+        assert_eq!(Some(Ipv4Addr::new(0, 0, 0, 0)), net.addrs().nth_back(0xffff_ffff));
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(None, net.addrs().nth(1 << 32));
+
+        let net = Ipv6Network::parse("2001:db8::/64").unwrap();
+        let expected = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0x4000, 0, 0, 0);
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(Some(expected), net.addrs().nth(1 << 62));
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(Some(expected), net.addrs().nth_back((3 << 62) - 1));
+    }
+
+    // With a non-contiguous mask, the skip lands on the address whose host
+    // bits spell the index: the low bits of `0x1234` fill the last octet, the
+    // high bits the second one.
+    #[test]
+    fn addrs_nth_spreads_the_index_over_the_host_bits() {
+        let net = Ipv4Network::parse("10.0.0.0/255.0.255.0").unwrap();
+        assert_eq!(Some(Ipv4Addr::new(10, 0x12, 0, 0x34)), net.addrs().nth(0x1234));
+        assert_eq!(Some(Ipv4Addr::new(10, 0xed, 0, 0xcb)), net.addrs().nth_back(0x1234));
+
+        // Host bits spread over all of IPv6: every other bit.
+        let mask = 0xaaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaau128;
+        let net = Ipv6Network::from_bits(0, mask);
+        let index = 0x0123_4567_89ab_cdefu64;
+        let expected = Ipv6Addr::from_bits(pdep_u128_reference(u128::from(index), !mask));
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(Some(expected), net.addrs().nth(index as usize));
+        assert_eq!(
+            Some(IpAddr::V6(expected)),
+            IpNetwork::V6(net).addrs().nth(index as usize)
+        );
+    }
+
+    // The wrappers skip through the address iterator: subnet `2^40` of a
+    // `/32` split into `/96`s.
+    #[test]
+    fn subnets_nth_skips_far() {
+        let net = Ipv6Network::parse("2001:db8::/32").unwrap();
+        let expected = Contiguous::<Ipv6Network>::parse("2001:db8:0:100::/96").unwrap();
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(Some(expected), net.subnets_with_prefix(96).unwrap().nth(1 << 40));
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(Some(*expected), net.subnets(*expected.mask()).unwrap().nth(1 << 40));
     }
 
     // An IPv4-mapped network is IPv6 until `to_canonical` collapses it.
