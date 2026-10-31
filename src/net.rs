@@ -12741,6 +12741,34 @@ pub(crate) mod test {
             prop_assert_eq!(v4.host_bits(), IpNetwork::V4(v4).host_bits());
             prop_assert_eq!(v6.host_bits(), IpNetwork::V6(v6).host_bits());
         }
+
+        // `to_contiguous` keeps the longest prefix that the mask covers,
+        // found here by trying each.
+        #[test]
+        fn prop_ipv4_to_contiguous_keeps_the_longest_covered_prefix(net in arb_ipv4_network()) {
+            let (addr, mask) = net.to_bits();
+            let longest = (0..=32)
+                .rev()
+                .map(|len| u32::MAX.checked_shl(32 - len).unwrap_or(0))
+                .find(|&prefix| mask & prefix == prefix)
+                .unwrap();
+            let expected = Ipv4Network::from_bits(addr, longest);
+            prop_assert_eq!(expected, net.to_contiguous());
+            prop_assert_eq!(IpNetwork::V4(expected), IpNetwork::V4(net).to_contiguous());
+        }
+
+        #[test]
+        fn prop_ipv6_to_contiguous_keeps_the_longest_covered_prefix(net in arb_ipv6_network()) {
+            let (addr, mask) = net.to_bits();
+            let longest = (0..=128)
+                .rev()
+                .map(|len| u128::MAX.checked_shl(128 - len).unwrap_or(0))
+                .find(|&prefix| mask & prefix == prefix)
+                .unwrap();
+            let expected = Ipv6Network::from_bits(addr, longest);
+            prop_assert_eq!(expected, net.to_contiguous());
+            prop_assert_eq!(IpNetwork::V6(expected), IpNetwork::V6(net).to_contiguous());
+        }
     }
 
     #[test]
@@ -13568,6 +13596,24 @@ pub(crate) mod test {
         (any::<u128>(), arb_ipv6_mask()).prop_map(|(a, m)| Ipv6Network::from_bits(a, m))
     }
 
+    // A network at the IPv4-mapped block: an IPv4 network mapped into it,
+    // the same with one bit flipped among the top 96 of its address or of
+    // its mask, or any network.
+    fn arb_ipv6_near_mapped_network() -> impl Strategy<Value = Ipv6Network> {
+        prop_oneof![
+            arb_ipv4_network().prop_map(|net| net.to_ipv6_mapped()),
+            (arb_ipv4_network(), 32u32..128, any::<bool>()).prop_map(|(net, bit, in_mask)| {
+                let (addr, mask) = net.to_ipv6_mapped().to_bits();
+                if in_mask {
+                    Ipv6Network::from_bits(addr, mask ^ 1 << bit)
+                } else {
+                    Ipv6Network::from_bits(addr ^ 1 << bit, mask)
+                }
+            }),
+            arb_ipv6_network(),
+        ]
+    }
+
     // Shared with both `net::contiguous`'s and `net::bicontiguous`'s test
     // modules (used by several `Contiguous`-only tests in the former, and by
     // `prop_bicontiguous_ipv6_from_contiguous_preserves_value` in the
@@ -13879,6 +13925,90 @@ pub(crate) mod test {
             .fold(0, |varying, &addr| varying | addr ^ first);
         let union = Ipv6Network::from_bits(first, !varying);
         ipv6_holds_exactly(&union, universe, |addr| ipv6_has(a, addr) || ipv6_has(b, addr)).then_some(union)
+    }
+
+    // Up to a dozen networks that differ only on the `free` bits, as the
+    // close pairs do, returned with them. Half the sets share one mask, so
+    // that siblings come up, and merges that expose new siblings.
+    fn arb_ipv4_close_networks() -> impl Strategy<Value = (Vec<Ipv4Network>, u32)> {
+        let nets = prop::collection::vec(any::<(u32, u32)>(), 1..=12);
+        (arb_ipv4_free_bits(), any::<u32>(), any::<u32>(), any::<bool>(), nets).prop_map(
+            |(free, base, shared, same_mask, nets)| {
+                let nets = nets
+                    .into_iter()
+                    .map(|(addr, mask)| {
+                        let mask = if same_mask { shared } else { mask };
+                        Ipv4Network::from_bits(base & !free | addr & free, !free | mask & free)
+                    })
+                    .collect();
+                (nets, free)
+            },
+        )
+    }
+
+    fn arb_ipv6_close_networks() -> impl Strategy<Value = (Vec<Ipv6Network>, u128)> {
+        let nets = prop::collection::vec(any::<(u128, u128)>(), 1..=12);
+        (arb_ipv6_free_bits(), any::<u128>(), any::<u128>(), any::<bool>(), nets).prop_map(
+            |(free, base, shared, same_mask, nets)| {
+                let nets = nets
+                    .into_iter()
+                    .map(|(addr, mask)| {
+                        let mask = if same_mask { shared } else { mask };
+                        Ipv6Network::from_bits(base & !free | addr & free, !free | mask & free)
+                    })
+                    .collect();
+                (nets, free)
+            },
+        )
+    }
+
+    // Aggregation keeps the members of the networks it is given, adds no
+    // address outside them, and leaves no two networks that `merge` would
+    // still combine.
+    proptest! {
+        #[test]
+        fn prop_ipv4_aggregate_matches_members((mut nets, free) in arb_ipv4_close_networks()) {
+            let universe = ipv4_universe(&nets[0], free);
+            let base = universe[0] & !free;
+            let before: Vec<bool> = universe.iter().map(|&addr| nets.iter().any(|net| ipv4_has(net, addr))).collect();
+
+            let result = ipv4_aggregate(&mut nets);
+            let after: Vec<bool> = universe.iter().map(|&addr| result.iter().any(|net| ipv4_has(net, addr))).collect();
+            prop_assert_eq!(before, after);
+            for net in result.iter() {
+                // Off the `free` bits the network is still fixed to `base`,
+                // so all its members lie in the universe.
+                let (addr, mask) = net.to_bits();
+                prop_assert_eq!((base, !free), (addr & !free, mask & !free), "{}", net);
+            }
+            for (i, a) in result.iter().enumerate() {
+                for b in &result[i + 1..] {
+                    prop_assert_eq!(None, a.merge(b), "{} and {} still merge", a, b);
+                }
+            }
+        }
+
+        #[test]
+        fn prop_ipv6_aggregate_matches_members((mut nets, free) in arb_ipv6_close_networks()) {
+            let universe = ipv6_universe(&nets[0], free);
+            let base = universe[0] & !free;
+            let before: Vec<bool> = universe.iter().map(|&addr| nets.iter().any(|net| ipv6_has(net, addr))).collect();
+
+            let result = ipv6_aggregate(&mut nets);
+            let after: Vec<bool> = universe.iter().map(|&addr| result.iter().any(|net| ipv6_has(net, addr))).collect();
+            prop_assert_eq!(before, after);
+            for net in result.iter() {
+                // Off the `free` bits the network is still fixed to `base`,
+                // so all its members lie in the universe.
+                let (addr, mask) = net.to_bits();
+                prop_assert_eq!((base, !free), (addr & !free, mask & !free), "{}", net);
+            }
+            for (i, a) in result.iter().enumerate() {
+                for b in &result[i + 1..] {
+                    prop_assert_eq!(None, a.merge(b), "{} and {} still merge", a, b);
+                }
+            }
+        }
     }
 
     // Each relation and each set operation on a pair, checked against the
@@ -14771,45 +14901,6 @@ pub(crate) mod test {
         }
 
         #[test]
-        fn ipv4_aggregate_non_contiguous_preserves_addresses(
-            raw_nets in prop::collection::vec(
-                (0u32..=0xFF, 0u32..=0xFF),
-                1..=8,
-            )
-        ) {
-            let mut nets: Vec<Ipv4Network> = raw_nets
-                .iter()
-                .map(|&(addr_low, mask_low)| {
-                    let addr = (10 << 24) | addr_low;
-                    let mask = 0xFFFFFF00 | mask_low;
-                    Ipv4Network::from_bits(addr, mask)
-                })
-                .collect();
-
-            let mut before_addrs: Vec<u32> = Vec::new();
-            for net in &nets {
-                for addr in (*net).addrs() {
-                    before_addrs.push(addr.to_bits());
-                }
-            }
-            before_addrs.sort_unstable();
-            before_addrs.dedup();
-
-            let result = ipv4_aggregate(&mut nets);
-
-            let mut after_addrs: Vec<u32> = Vec::new();
-            for net in result.iter() {
-                for addr in (*net).addrs() {
-                    after_addrs.push(addr.to_bits());
-                }
-            }
-            after_addrs.sort_unstable();
-            after_addrs.dedup();
-
-            prop_assert_eq!(before_addrs, after_addrs);
-        }
-
-        #[test]
         fn ipv6_aggregate_preserves_addresses(
             raw_nets in prop::collection::vec(
                 (0u128..=255, 120u8..=124),
@@ -14888,45 +14979,6 @@ pub(crate) mod test {
                     prop_assert!(result[i].merge(&result[j]).is_none());
                 }
             }
-        }
-
-        #[test]
-        fn ipv6_aggregate_non_contiguous_preserves_addresses(
-            raw_nets in prop::collection::vec(
-                (0u128..=0xFF, 0u128..=0xFF),
-                1..=8,
-            )
-        ) {
-            let mut nets: Vec<Ipv6Network> = raw_nets
-                .iter()
-                .map(|&(addr_low, mask_low)| {
-                    let addr = 0x2001_0db8_0000_0000_0000_0000_0000_0000u128 | addr_low;
-                    let mask = !0xFFu128 | mask_low;
-                    Ipv6Network::from_bits(addr, mask)
-                })
-                .collect();
-
-            let mut before_addrs: Vec<u128> = Vec::new();
-            for net in &nets {
-                for addr in (*net).addrs() {
-                    before_addrs.push(addr.to_bits());
-                }
-            }
-            before_addrs.sort_unstable();
-            before_addrs.dedup();
-
-            let result = ipv6_aggregate(&mut nets);
-
-            let mut after_addrs: Vec<u128> = Vec::new();
-            for net in result.iter() {
-                for addr in (*net).addrs() {
-                    after_addrs.push(addr.to_bits());
-                }
-            }
-            after_addrs.sort_unstable();
-            after_addrs.dedup();
-
-            prop_assert_eq!(before_addrs, after_addrs);
         }
 
         #[test]
@@ -15254,6 +15306,21 @@ pub(crate) mod test {
             let recovered = recovered.unwrap();
             let (addr, mask) = (recovered.addr().to_bits(), recovered.mask().to_bits());
             prop_assert_eq!(addr & mask, addr, "net4={}, mapped={}", net4, mapped);
+        }
+
+        // A network is IPv4-mapped when it lies in `::ffff:0:0/96`: the top
+        // 96 bits of its mask are set, and those of its address read
+        // `::ffff`. Its IPv4 network is then the low 32 bits of both, and
+        // `to_canonical` narrows to it.
+        #[test]
+        fn prop_ipv6_ipv4_mapped_matches_definition(net in arb_ipv6_near_mapped_network()) {
+            let (addr, mask) = net.to_bits();
+            let mapped = mask >> 32 == u128::MAX >> 32 && addr >> 32 == 0xffff;
+            let expected = mapped.then(|| Ipv4Network::from_bits(addr as u32, mask as u32));
+
+            prop_assert_eq!(mapped, net.is_ipv4_mapped_ipv6());
+            prop_assert_eq!(expected, net.to_ipv4_mapped());
+            prop_assert_eq!(expected.map_or(IpNetwork::V6(net), IpNetwork::V4), IpNetwork::V6(net).to_canonical());
         }
 
         // Exactly one of the two holds, and it agrees with the address, and
