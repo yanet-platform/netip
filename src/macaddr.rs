@@ -1161,22 +1161,69 @@ mod test {
         ]
     }
 
-    // Reads `xxxx.xxxx.xxxx` the plain way, an oracle for `parse_dotted`.
-    fn parse_cisco_reference(s: &str) -> Option<MacAddr> {
-        let groups: std::vec::Vec<&str> = s.split('.').collect();
-        if groups.len() != 3 {
-            return None;
-        }
-
-        let mut bits = 0u64;
-        for group in groups {
-            if group.len() != 4 || !group.bytes().all(|b| b.is_ascii_hexdigit()) {
-                return None;
+    // Reads the three forms the plain way, an oracle for `parse_ascii`: six
+    // groups of two hex digits split by `:` or by `-`, or three groups of four
+    // split by `.`. The groups together are the 12 digits of the address.
+    fn parse_reference(s: &str) -> Option<MacAddr> {
+        for (separator, count) in [(':', 6), ('-', 6), ('.', 3)] {
+            let groups: std::vec::Vec<&str> = s.split(separator).collect();
+            let is_group = |group: &&str| group.len() == 12 / count && group.bytes().all(|b| b.is_ascii_hexdigit());
+            if groups.len() == count && groups.iter().all(is_group) {
+                return MacAddr::from_u64(u64::from_str_radix(&groups.concat(), 16).unwrap());
             }
-            bits = bits << 16 | u64::from(u16::from_str_radix(group, 16).ok()?);
         }
+        None
+    }
 
-        MacAddr::from_u64(bits)
+    // Text around the accept boundary: an address in one of the three forms,
+    // each digit in either case, with up to two near misses. A near miss
+    // replaces, removes, inserts or swaps a character, replaces every
+    // separator, or adds a character before or after the text. The
+    // characters are hex digits of either case, the letters past them, `+`,
+    // which `from_str_radix` reads as a sign, the separators, a space and a
+    // two-byte character.
+    fn arb_mac_text() -> impl Strategy<Value = std::string::String> {
+        let chars: std::vec::Vec<char> = "09afAFgGx+:-. é".chars().collect();
+        let near_miss = (0u8..6, any::<prop::sample::Index>(), prop::sample::select(chars));
+        (
+            arb_mac_addr(),
+            prop::sample::select(&[(2usize, ':'), (2, '-'), (4, '.')][..]),
+            any::<u16>(),
+            prop::collection::vec(near_miss, 0..=2),
+        )
+            .prop_map(|(mac, (group, separator), upper, near_misses)| {
+                let mut text = std::vec::Vec::new();
+                for (i, digit) in std::format!("{:012x}", mac.as_u64()).chars().enumerate() {
+                    if i > 0 && i % group == 0 {
+                        text.push(separator);
+                    }
+                    text.push(if upper >> i & 1 == 1 {
+                        digit.to_ascii_uppercase()
+                    } else {
+                        digit
+                    });
+                }
+
+                // The text keeps at least 12 characters through two near misses.
+                for (kind, at, ch) in near_misses {
+                    let len = text.len();
+                    match kind {
+                        0 => text[at.index(len)] = ch,
+                        1 => {
+                            text.remove(at.index(len));
+                        }
+                        2 => text.insert(at.index(len + 1), ch),
+                        3 => {
+                            let at = at.index(len - 1);
+                            text.swap(at, at + 1);
+                        }
+                        4 => text.iter_mut().filter(|c| !c.is_ascii_hexdigit()).for_each(|c| *c = ch),
+                        _ if at.index(2) == 0 => text.insert(0, ch),
+                        _ => text.push(ch),
+                    }
+                }
+                text.into_iter().collect()
+            })
     }
 
     proptest! {
@@ -1190,22 +1237,6 @@ mod test {
 
             prop_assert_eq!(Ok(mac), text.parse::<MacAddr>());
             prop_assert_eq!(Ok(mac), text.to_uppercase().parse::<MacAddr>());
-        }
-
-        // A Cisco text with one character replaced, by a hex digit, a dot or
-        // a stray: the parser accepts exactly what the reference does.
-        #[test]
-        fn prop_parse_cisco_matches_reference(
-            mac in arb_mac_addr(),
-            position in 0usize..14,
-            byte in prop::sample::select(&b"0123456789abcdefABCDEF.:-xg"[..]),
-        ) {
-            let [a, b, c, d, e, f] = mac.octets();
-            let mut text = std::format!("{a:02x}{b:02x}.{c:02x}{d:02x}.{e:02x}{f:02x}").into_bytes();
-            text[position] = byte;
-            let text = std::string::String::from_utf8(text).unwrap();
-
-            prop_assert_eq!(parse_cisco_reference(&text).ok_or(MacAddrParseError), text.parse::<MacAddr>(), "{}", text);
         }
 
         // The identifier is the octets laid out as RFC 4291 lays them out,
@@ -1317,6 +1348,19 @@ mod test {
                 MacAddr::parse_ascii(formatted.as_bytes()),
                 "FromStr/parse_ascii mismatch for {}", formatted
             );
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(8192))]
+
+        // `parse_ascii` and `FromStr` accept exactly the texts the reference
+        // reads, as the same address.
+        #[test]
+        fn prop_parse_matches_reference(text in arb_mac_text()) {
+            let expected = parse_reference(&text).ok_or(MacAddrParseError);
+            prop_assert_eq!(expected, MacAddr::parse_ascii(text.as_bytes()), "{}", text);
+            prop_assert_eq!(expected, text.parse::<MacAddr>(), "{}", text);
         }
     }
 }
