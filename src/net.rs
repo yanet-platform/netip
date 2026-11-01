@@ -6597,11 +6597,19 @@ impl BinarySplit for Ipv6Network {
 }
 
 /// Aggregates IPv4 networks in place: removes duplicates, eliminates networks
-/// contained in others, and merges adjacent siblings.
+/// contained in others, and merges adjacent networks.
 ///
 /// Returns the aggregated subslice. The union of addresses in the result
 /// equals the union of addresses in the input — no addresses are added or
 /// removed.
+///
+/// Two networks merge as in [`Ipv4Network::merge`]: when they share a mask
+/// and their addresses differ in a single masked bit, whichever bit it is.
+/// So the result can hold non-contiguous masks even when every input is
+/// contiguous: `10.0.0.0/24` and `10.0.2.0/24` differ in a bit above the
+/// lowest one of their mask and merge into `10.0.0.0/255.255.253.0`. To keep
+/// CIDR input in CIDR, use
+/// [`ipv4_aggregate_contiguous`](crate::ipv4_aggregate_contiguous).
 ///
 /// Works correctly with both contiguous (CIDR) and non-contiguous masks.
 /// Zero allocations — the algorithm operates entirely within the input slice.
@@ -6623,17 +6631,46 @@ impl BinarySplit for Ipv6Network {
 /// assert_eq!(result[0], Ipv4Network::parse("10.0.0.0/8").unwrap());
 /// assert_eq!(result[1], Ipv4Network::parse("192.168.0.0/23").unwrap());
 /// ```
+///
+/// Two `/24` networks that are not buddies merge into a non-contiguous
+/// network, while the contiguous aggregate keeps them apart:
+///
+/// ```
+/// use netip::{Contiguous, Ipv4Network, ipv4_aggregate, ipv4_aggregate_contiguous};
+///
+/// let mut nets = [
+///     Ipv4Network::parse("10.0.0.0/24").unwrap(),
+///     Ipv4Network::parse("10.0.2.0/24").unwrap(),
+/// ];
+/// let result = ipv4_aggregate(&mut nets);
+/// let merged = Ipv4Network::parse("10.0.0.0/255.255.253.0").unwrap();
+/// assert_eq!(result, [merged]);
+///
+/// let mut nets = [
+///     Contiguous::<Ipv4Network>::parse("10.0.0.0/24").unwrap(),
+///     Contiguous::<Ipv4Network>::parse("10.0.2.0/24").unwrap(),
+/// ];
+/// assert_eq!(ipv4_aggregate_contiguous(&mut nets).len(), 2);
+/// ```
 pub fn ipv4_aggregate(nets: &mut [Ipv4Network]) -> &mut [Ipv4Network] {
     let len = ip_aggregate(nets);
     &mut nets[..len]
 }
 
 /// Aggregates IPv6 networks in place: removes duplicates, eliminates networks
-/// contained in others, and merges adjacent siblings.
+/// contained in others, and merges adjacent networks.
 ///
 /// Returns the aggregated subslice. The union of addresses in the result
 /// equals the union of addresses in the input — no addresses are added or
 /// removed.
+///
+/// Two networks merge as in [`Ipv6Network::merge`]: when they share a mask
+/// and their addresses differ in a single masked bit, whichever bit it is.
+/// So the result can hold non-contiguous masks even when every input is
+/// contiguous: `2001:db8::/48` and `2001:db8:2::/48` differ in a bit above
+/// the lowest one of their mask and merge into `2001:db8::/ffff:ffff:fffd::`.
+/// To keep CIDR input in CIDR, use
+/// [`ipv6_aggregate_contiguous`](crate::ipv6_aggregate_contiguous).
 ///
 /// Works correctly with both contiguous (CIDR) and non-contiguous masks.
 /// Zero allocations — the algorithm operates entirely within the input slice.
@@ -6654,6 +6691,27 @@ pub fn ipv4_aggregate(nets: &mut [Ipv4Network]) -> &mut [Ipv4Network] {
 /// assert_eq!(result.len(), 2);
 /// assert_eq!(result[0], Ipv6Network::parse("2001:db8::/47").unwrap());
 /// assert_eq!(result[1], Ipv6Network::parse("fe80::/10").unwrap());
+/// ```
+///
+/// Two `/48` networks that are not buddies merge into a non-contiguous
+/// network, while the contiguous aggregate keeps them apart:
+///
+/// ```
+/// use netip::{Contiguous, Ipv6Network, ipv6_aggregate, ipv6_aggregate_contiguous};
+///
+/// let mut nets = [
+///     Ipv6Network::parse("2001:db8::/48").unwrap(),
+///     Ipv6Network::parse("2001:db8:2::/48").unwrap(),
+/// ];
+/// let result = ipv6_aggregate(&mut nets);
+/// let merged = Ipv6Network::parse("2001:db8::/ffff:ffff:fffd::").unwrap();
+/// assert_eq!(result, [merged]);
+///
+/// let mut nets = [
+///     Contiguous::<Ipv6Network>::parse("2001:db8::/48").unwrap(),
+///     Contiguous::<Ipv6Network>::parse("2001:db8:2::/48").unwrap(),
+/// ];
+/// assert_eq!(ipv6_aggregate_contiguous(&mut nets).len(), 2);
 /// ```
 pub fn ipv6_aggregate(nets: &mut [Ipv6Network]) -> &mut [Ipv6Network] {
     let len = ip_aggregate(nets);
