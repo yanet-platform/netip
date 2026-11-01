@@ -618,12 +618,10 @@ impl IpNetwork {
         }
     }
 
-    /// Returns the last address in this IP network.
+    /// Returns the last address in this IP network, its greatest member.
     ///
-    /// For contiguous networks, this is the broadcast address.
-    ///
-    /// For non-contiguous networks, this is the highest address within the
-    /// network range defined by the mask.
+    /// This is the network address with every host bit set, for any mask.
+    /// See [`Ipv4Network::last_addr`] and [`Ipv6Network::last_addr`].
     ///
     /// # Examples
     ///
@@ -1291,35 +1289,34 @@ impl DoubleEndedIterator for IpNetworkAddrs {
 // Both iterators it wraps are fused.
 impl core::iter::FusedIterator for IpNetworkAddrs {}
 
-/// Represents the network range in which IP addresses are IPv4.
+/// An IPv4 network: an address and a mask, where the mask may be any bit
+/// pattern.
 ///
-/// IPv4 networks are defined as pair of two [`Ipv4Addr`]. One for IP address
-/// and the second one - for mask.
+/// The network is the set of addresses that agree with its address on every
+/// bit the mask sets: `x` belongs to it when `x & mask == addr`. A contiguous
+/// mask, a run of ones followed by zeros, makes the network a CIDR block, a
+/// range of addresses. A non-contiguous mask leaves gaps between the members:
+/// `10.0.0.0/255.0.255.0` holds the addresses `10.*.0.*`, a pattern that
+/// packet classifiers match and that no range expresses.
+///
+/// The address is kept normalized, `addr & mask == addr`: constructors and
+/// parsers clear the host bits, the bits the mask leaves zero, wherever they
+/// are. Containment, intersection, difference, merging, iteration and
+/// aggregation treat the network as its set of addresses and work for any
+/// mask. [`Contiguous`] carries the guarantee of a CIDR mask when one is
+/// needed.
 ///
 /// See [`IpNetwork`] for a type encompassing both IPv4 and IPv6 networks.
 ///
-/// # Note
+/// # Text form
 ///
-/// An IPv4 network represents a range of IPv4 addresses. The most common way to
-/// represent an IP network is through CIDR notation. See [IETF RFC 4632] for
-/// CIDR notation.
-///
-/// An example of such notation is `77.152.124.0/24`.
-///
-/// In CIDR notation, a prefix is shown as a 4-octet quantity, just like a
-/// traditional IPv4 address or network number, followed by the "/" (slash)
-/// character, followed by a decimal value between 0 and 32 that describes the
-/// number of significant bits.
-///
-/// Here, the "/24" indicates that the mask to extract the network portion of
-/// the prefix is a 32-bit value where the most significant 24 bits are
-/// ones and the least significant 8 bits are zeros.
-///
-/// The other way to represent the network above is to use explicit notation,
-/// such as `77.152.124.0/255.255.255.0`.
-///
-/// However, this struct supports non-contiguous masks, i.e. masks with
-/// non-contiguous bits set to one, like `77.152.0.55/255.255.0.255`.
+/// A network is written as an address, a slash, and a prefix length or a
+/// mask. The CIDR notation of [IETF RFC 4632], `77.152.124.0/24`, gives the
+/// number of leading ones in the mask, from 0 to 32. The mask notation,
+/// `77.152.124.0/255.255.255.0`, writes the mask as an address, and only it
+/// can write a non-contiguous mask, as in `77.152.0.55/255.255.0.255`.
+/// [`Display`](core::fmt::Display) prints the CIDR notation for a contiguous
+/// mask and the mask notation otherwise.
 ///
 /// [IETF RFC 4632]: https://tools.ietf.org/html/rfc4632
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -1345,9 +1342,10 @@ impl Ipv4Network {
 
     /// Initializes a new [`Ipv4Network`] using specified address and mask.
     ///
-    /// During construction the address is normalized using mask, i.e. in case
-    /// of `192.168.1.1/255.255.255.0` the result will be transformed
-    /// to `192.168.1.0/255.255.255.0`.
+    /// Every mask is accepted, contiguous or not. The address is normalized
+    /// to `addr & mask`, which clears the host bits wherever they are:
+    /// `192.168.1.1` under `255.255.255.0` becomes `192.168.1.0`, and
+    /// `10.1.2.3` under `255.0.255.0` becomes `10.0.2.0`.
     ///
     /// # Examples
     ///
@@ -1363,6 +1361,11 @@ impl Ipv4Network {
     ///
     /// assert_eq!(Ipv4Addr::new(192, 168, 1, 0), net.addr());
     /// assert_eq!(Ipv4Addr::new(255, 255, 255, 0), net.mask());
+    ///
+    /// // A non-contiguous mask clears the second and the fourth octets.
+    /// let net = Ipv4Network::new(Ipv4Addr::new(10, 1, 2, 3), Ipv4Addr::new(255, 0, 255, 0));
+    /// assert_eq!(Ipv4Addr::new(10, 0, 2, 0), net.addr());
+    /// assert_eq!("10.0.2.0/255.0.255.0", net.to_string());
     /// ```
     ///
     /// An [`IpNetwork`] comes from the result through `From`. A pair of
@@ -1564,7 +1567,9 @@ impl Ipv4Network {
     ///
     /// # Note
     ///
-    /// During conversion, the address is normalized using mask.
+    /// As in [`new`](Self::new), every mask is accepted and the address is
+    /// normalized to `addr & mask`, so `from_bits(addr, mask).to_bits()` is
+    /// `(addr & mask, mask)`.
     ///
     /// # Examples
     ///
@@ -1579,6 +1584,10 @@ impl Ipv4Network {
     /// );
     ///
     /// assert_eq!(expected, Ipv4Network::from_bits(3232235776, 4294967040));
+    ///
+    /// // A non-contiguous mask, `255.0.255.0`.
+    /// let net = Ipv4Network::from_bits(0x0a01_0203, 0xff00_ff00);
+    /// assert_eq!((0x0a00_0200, 0xff00_ff00), net.to_bits());
     /// ```
     #[inline]
     #[must_use]
@@ -2419,12 +2428,12 @@ impl Ipv4Network {
         }
     }
 
-    /// Returns the last address in this IPv4 network.
+    /// Returns the last address in this IPv4 network, its greatest member.
     ///
-    /// For contiguous networks, this is the broadcast address.
-    ///
-    /// For non-contiguous networks, this is the highest address within the
-    /// network range defined by the mask.
+    /// This is the network address with every host bit set, `addr | !mask`,
+    /// for any mask. For a contiguous network it is the broadcast address. A
+    /// non-contiguous mask can leave host bits anywhere: the last address of
+    /// `192.168.0.1/255.255.0.255` is `192.168.255.1`.
     ///
     /// # Examples
     ///
@@ -3539,38 +3548,38 @@ impl Iterator for Ipv4RangeNetworks {
 
 impl core::iter::FusedIterator for Ipv4RangeNetworks {}
 
-/// Represents the network range in which IP addresses are IPv6.
+/// An IPv6 network: an address and a mask, where the mask may be any bit
+/// pattern.
 ///
-/// IPv6 networks are defined as pair of two [`Ipv6Addr`]. One for IP address
-/// and the second one - for mask.
+/// The network is the set of addresses that agree with its address on every
+/// bit the mask sets: `x` belongs to it when `x & mask == addr`. A contiguous
+/// mask, a run of ones followed by zeros, makes the network a CIDR block, a
+/// range of addresses. A non-contiguous mask leaves gaps between the members:
+/// `2a02:6b8:c00::1234:0:0/ffff:ffff:ff00::ffff:ffff:0:0` holds the addresses
+/// of `2a02:6b8:c00::/40` whose low 64 bits start with `0:1234`, a pattern
+/// that packet classifiers match and that no range expresses.
+///
+/// The address is kept normalized, `addr & mask == addr`: constructors and
+/// parsers clear the host bits, the bits the mask leaves zero, wherever they
+/// are. Containment, intersection, difference, merging, iteration and
+/// aggregation treat the network as its set of addresses and work for any
+/// mask. [`Contiguous`] carries the guarantee of a CIDR mask when one is
+/// needed, and [`BiContiguous`] that of a mask made of one run per 64-bit
+/// half, like the one above.
 ///
 /// See [`IpNetwork`] for a type encompassing both IPv4 and IPv6 networks.
 ///
-/// # Note
+/// # Text form
 ///
-/// An IPv6 network represents a range of IPv6 addresses. The most common way to
-/// represent an IP network is through CIDR notation. See [IETF RFC 4632] for
-/// CIDR notation.
+/// A network is written as an address, a slash, and a prefix length or a
+/// mask. The prefix notation of [IETF RFC 4291 section 2.3],
+/// `2a02:6b8:c00::/40`, gives the number of leading ones in the mask, from 0
+/// to 128. The mask notation, `2a02:6b8:c00::/ffff:ffff:ff00::`, writes the
+/// mask as an address, and only it can write a non-contiguous mask.
+/// [`Display`](core::fmt::Display) prints the prefix notation for a
+/// contiguous mask and the mask notation otherwise.
 ///
-/// An example of such notation is `2a02:6b8:c00::/40`.
-///
-/// In CIDR notation, a prefix is shown as a 8-hextet quantity, just like a
-/// traditional IPv6 address or network number, followed by the "/" (slash)
-/// character, followed by a decimal value between 0 and 128 that describes the
-/// number of significant bits.
-///
-/// Here, the "/40" indicates that the mask to extract the network portion of
-/// the prefix is a 128-bit value where the most significant 40 bits are
-/// ones and the least significant 88 bits are zeros.
-///
-/// The other way to represent the network above is to use explicit notation,
-/// such as `2a02:6b8:c00::/ffff:ffff:ff00::`.
-///
-/// However, this struct supports non-contiguous masks, i.e. masks with
-/// non-contiguous bits set to one, such as
-/// `2a02:6b8:c00::1234:0:0/ffff:ffff:ff00::ffff:ffff:0:0`.
-///
-/// [IETF RFC 4632]: https://tools.ietf.org/html/rfc4632
+/// [IETF RFC 4291 section 2.3]: https://tools.ietf.org/html/rfc4291#section-2.3
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Ipv6Network(Ipv6Addr, Ipv6Addr);
 
@@ -3597,7 +3606,8 @@ impl Ipv6Network {
 
     /// Initializes a new [`Ipv6Network`] using specified address and mask.
     ///
-    /// During construction, the address is normalized using mask.
+    /// Every mask is accepted, contiguous or not. The address is normalized
+    /// to `addr & mask`, which clears the host bits wherever they are.
     ///
     /// An [`IpNetwork`] comes from the result through `From`. A pair of
     /// addresses has no `From` into a network, for the reasons given at
@@ -3614,6 +3624,12 @@ impl Ipv6Network {
     /// let mask = Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0);
     /// let net: IpNetwork = Ipv6Network::new(addr, mask).into();
     /// assert_eq!("2001:db8::/32", net.to_string());
+    ///
+    /// // A non-contiguous mask keeps the first two groups and the fifth one.
+    /// let addr = Ipv6Addr::new(0x2001, 0xdb8, 1, 2, 3, 4, 5, 6);
+    /// let mask = Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0xffff, 0, 0, 0);
+    /// let net = Ipv6Network::new(addr, mask);
+    /// assert_eq!(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 3, 0, 0, 0), net.addr());
     /// ```
     ///
     /// ```compile_fail
@@ -3837,7 +3853,9 @@ impl Ipv6Network {
     ///
     /// # Note
     ///
-    /// During conversion, the address is normalized using mask.
+    /// As in [`new`](Self::new), every mask is accepted and the address is
+    /// normalized to `addr & mask`, so `from_bits(addr, mask).to_bits()` is
+    /// `(addr & mask, mask)`.
     ///
     /// # Examples
     ///
@@ -4875,12 +4893,13 @@ impl Ipv6Network {
         Some(Self(Ipv6Addr::from_bits(addr & mask), Ipv6Addr::from_bits(mask)))
     }
 
-    /// Returns the last address in this IPv6 network.
+    /// Returns the last address in this IPv6 network, its greatest member.
     ///
-    /// For contiguous networks, this is the broadcast address.
-    ///
-    /// For non-contiguous networks, this is the highest address within the
-    /// network range defined by the mask.
+    /// This is the network address with every host bit set, `addr | !mask`,
+    /// for any mask. IPv6 has no broadcast address, so for a contiguous
+    /// network it is just the top of the range: `2001:db8::/32` ends at
+    /// `2001:db8:ffff:ffff:ffff:ffff:ffff:ffff`. A non-contiguous mask can
+    /// leave host bits anywhere, as the last case below shows.
     ///
     /// # Examples
     ///
