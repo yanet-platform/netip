@@ -536,6 +536,10 @@ impl IpNetwork {
     /// Converts this network to a contiguous network by clearing mask bits
     /// set to one after the first zero bit.
     ///
+    /// The result is the smallest contiguous network that contains this one:
+    /// its prefix length is the number of leading ones in the mask. A
+    /// contiguous network comes back unchanged.
+    ///
     /// # Examples
     ///
     /// ```
@@ -558,8 +562,24 @@ impl IpNetwork {
         }
     }
 
-    /// Checks whether this network is a contiguous, i.e. contains mask with
-    /// only leading bits set to one contiguously.
+    /// Returns `true` if the mask is contiguous: ones from the top bit down,
+    /// then only zeros, as in CIDR.
+    ///
+    /// Such a mask is the mask of a prefix length, so
+    /// [`prefix`](Self::prefix) returns `Some` exactly when this returns
+    /// `true`. The zero mask of `/0` and the full mask of a host network are
+    /// contiguous.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::IpNetwork;
+    ///
+    /// assert!(IpNetwork::parse("192.168.0.0/16").unwrap().is_contiguous());
+    /// assert!(IpNetwork::parse("2001:db8::/32").unwrap().is_contiguous());
+    /// let net = IpNetwork::parse("192.168.0.1/255.255.0.255").unwrap();
+    /// assert!(!net.is_contiguous());
+    /// ```
     #[inline]
     #[must_use]
     pub const fn is_contiguous(&self) -> bool {
@@ -569,8 +589,8 @@ impl IpNetwork {
         }
     }
 
-    /// Returns the mask prefix, i.e. the number of leading bits set, if this
-    /// network is a contiguous one, `None` otherwise.
+    /// Returns the prefix length, the number of leading ones in the mask, if
+    /// the mask is contiguous, and [`None`] otherwise.
     ///
     /// # Examples
     ///
@@ -587,6 +607,9 @@ impl IpNetwork {
     ///     IpNetwork::parse("2a02:6b8::/40").unwrap().prefix()
     /// );
     /// assert_eq!(Some(128), IpNetwork::parse("2a02:6b8::1").unwrap().prefix());
+    ///
+    /// let net = IpNetwork::parse("192.168.0.1/255.255.0.255").unwrap();
+    /// assert_eq!(None, net.prefix());
     /// ```
     #[inline]
     #[must_use]
@@ -1611,8 +1634,8 @@ impl Ipv4Network {
         Self::new(Ipv4Addr::from_bits(addr), Ipv4Addr::from_bits(mask))
     }
 
-    /// Converts this IPv4 network's address and mask into pair of host byte
-    /// order `u32`.
+    /// Converts this IPv4 network's address and mask into a pair of host
+    /// byte order `u32`.
     ///
     /// # Examples
     ///
@@ -1861,8 +1884,13 @@ impl Ipv4Network {
         Ipv4NetworkDiff::new(self, other)
     }
 
-    /// Checks whether this network is a contiguous, i.e. contains mask with
-    /// only leading bits set to one contiguously.
+    /// Returns `true` if the mask is contiguous: ones from the top bit down,
+    /// then only zeros, as in CIDR.
+    ///
+    /// Such a mask is the mask of a prefix length, so
+    /// [`prefix`](Self::prefix) returns `Some` exactly when this returns
+    /// `true`. The zero mask of `/0` and the full mask of a host network are
+    /// contiguous.
     ///
     /// # Examples
     ///
@@ -1889,8 +1917,8 @@ impl Ipv4Network {
         mask | mask.wrapping_sub(1) == u32::MAX
     }
 
-    /// Returns the mask prefix, i.e. the number of leading bits set, if this
-    /// network is a contiguous one, `None` otherwise.
+    /// Returns the prefix length, the number of leading ones in the mask, if
+    /// the mask is contiguous, and [`None`] otherwise.
     ///
     /// # Examples
     ///
@@ -1969,6 +1997,10 @@ impl Ipv4Network {
     /// Converts this network to a contiguous network by clearing mask bits set
     /// to one after the first zero bit.
     ///
+    /// The result is the smallest contiguous network that contains this one:
+    /// its prefix length is the number of leading ones in the mask. A
+    /// contiguous network comes back unchanged.
+    ///
     /// # Examples
     ///
     /// ```
@@ -1997,9 +2029,12 @@ impl Ipv4Network {
         }
     }
 
-    /// Calculates and returns the [`Ipv4Network`], which will be a supernet,
-    /// i.e. the shortest common network both for this network and the
-    /// specified ones.
+    /// Returns the smallest network that contains this network and every
+    /// network in `nets`.
+    ///
+    /// Its mask keeps the bits that every input's mask sets and on which every
+    /// input's address agrees with this one, so any network that contains all
+    /// the inputs contains it. With `nets` empty, it is this network.
     ///
     /// # Note
     ///
@@ -2010,8 +2045,8 @@ impl Ipv4Network {
     /// contiguous (CIDR). This happens when the addresses differ in bits
     /// that are not at the boundary of their masks.
     ///
-    /// Use [`Ipv4Network::to_contiguous`] method if you need to convert the
-    /// output network.
+    /// Its [`to_contiguous`](Self::to_contiguous) is the smallest contiguous
+    /// network that contains all the inputs.
     ///
     /// # Examples
     ///
@@ -2035,6 +2070,12 @@ impl Ipv4Network {
     /// assert_eq!(
     ///     Ipv4Network::parse("10.0.0.0/255.254.255.0").unwrap(),
     ///     a.supernet_for(&[b])
+    /// );
+    ///
+    /// // The smallest contiguous network that holds both.
+    /// assert_eq!(
+    ///     Ipv4Network::parse("10.0.0.0/15").unwrap(),
+    ///     a.supernet_for(&[b]).to_contiguous()
     /// );
     /// ```
     #[inline]
@@ -3911,8 +3952,8 @@ impl Ipv6Network {
         Self::new(Ipv6Addr::from_bits(addr), Ipv6Addr::from_bits(mask))
     }
 
-    /// Converts this IPv6 network's address and mask into pair of host byte
-    /// order `u128`.
+    /// Converts this IPv6 network's address and mask into a pair of host
+    /// byte order `u128`.
     ///
     /// # Examples
     ///
@@ -4182,8 +4223,13 @@ impl Ipv6Network {
         Ipv6NetworkDiff::new(self, other)
     }
 
-    /// Checks whether this network is a contiguous, i.e. contains mask with
-    /// only leading bits set to one contiguously.
+    /// Returns `true` if the mask is contiguous: ones from the top bit down,
+    /// then only zeros, as in CIDR.
+    ///
+    /// Such a mask is the mask of a prefix length, so
+    /// [`prefix`](Self::prefix) returns `Some` exactly when this returns
+    /// `true`. The zero mask of `/0` and the full mask of a host network are
+    /// contiguous.
     ///
     /// # Examples
     ///
@@ -4294,6 +4340,10 @@ impl Ipv6Network {
     /// Converts this network to a contiguous network by clearing mask bits set
     /// to one after the first zero bit.
     ///
+    /// The result is the smallest contiguous network that contains this one:
+    /// its prefix length is the number of leading ones in the mask. A
+    /// contiguous network comes back unchanged.
+    ///
     /// # Examples
     ///
     /// ```
@@ -4380,8 +4430,8 @@ impl Ipv6Network {
         }
     }
 
-    /// Returns the mask prefix, i.e. the number of leading bits set, if this
-    /// network is a contiguous one, `None` otherwise.
+    /// Returns the prefix length, the number of leading ones in the mask, if
+    /// the mask is contiguous, and [`None`] otherwise.
     ///
     /// # Examples
     ///
@@ -4456,9 +4506,12 @@ impl Ipv6Network {
         (!self.mask().to_bits()).count_ones()
     }
 
-    /// Calculates and returns the `Ipv6Network`, which will be a supernet, i.e.
-    /// the shortest common network both for this network and the specified
-    /// ones.
+    /// Returns the smallest network that contains this network and every
+    /// network in `nets`.
+    ///
+    /// Its mask keeps the bits that every input's mask sets and on which every
+    /// input's address agrees with this one, so any network that contains all
+    /// the inputs contains it. With `nets` empty, it is this network.
     ///
     /// # Note
     ///
@@ -4469,8 +4522,8 @@ impl Ipv6Network {
     /// contiguous (CIDR). This happens when the addresses differ in bits
     /// that are not at the boundary of their masks.
     ///
-    /// Use [`Ipv6Network::to_contiguous`] method if you need to convert the
-    /// output network.
+    /// Its [`to_contiguous`](Self::to_contiguous) is the smallest contiguous
+    /// network that contains all the inputs.
     ///
     /// # Examples
     ///
@@ -4505,6 +4558,12 @@ impl Ipv6Network {
     /// assert_eq!(
     ///     Ipv6Network::parse("2001:db8::/ffff:ffff:feff::").unwrap(),
     ///     a.supernet_for(&[b])
+    /// );
+    ///
+    /// // The smallest contiguous network that holds both.
+    /// assert_eq!(
+    ///     Ipv6Network::parse("2001:db8::/39").unwrap(),
+    ///     a.supernet_for(&[b]).to_contiguous()
     /// );
     /// ```
     #[inline]
