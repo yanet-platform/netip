@@ -70,6 +70,28 @@ pub struct Contiguous<T>(pub(crate) T);
 
 impl Contiguous<IpNetwork> {
     /// Parses an IP network from a string and returns a contiguous network.
+    ///
+    /// The text is parsed as by [`IpNetwork::parse`], the mask notation
+    /// included, and the mask must then be contiguous: a non-contiguous one
+    /// fails with [`ContiguousIpNetParseError::NonContiguousNetwork`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, ContiguousIpNetParseError, IpNetwork};
+    ///
+    /// let net = Contiguous::<IpNetwork>::parse("2001:db8::/32").unwrap();
+    /// assert_eq!(32, net.prefix());
+    ///
+    /// // A contiguous mask can be written out, too.
+    /// let net = Contiguous::<IpNetwork>::parse("2001:db8::/ffff:ffff::").unwrap();
+    /// assert_eq!(32, net.prefix());
+    ///
+    /// assert_eq!(
+    ///     Err(ContiguousIpNetParseError::NonContiguousNetwork),
+    ///     Contiguous::<IpNetwork>::parse("192.168.0.0/255.0.255.0"),
+    /// );
+    /// ```
     pub fn parse(buf: &str) -> Result<Self, ContiguousIpNetParseError> {
         Self::try_from(IpNetwork::parse(buf)?)
     }
@@ -329,6 +351,28 @@ impl Contiguous<IpNetwork> {
 
 impl Contiguous<Ipv4Network> {
     /// Parses an IPv4 network from a string and returns a contiguous network.
+    ///
+    /// The text is parsed as by [`Ipv4Network::parse`], the mask notation
+    /// included, and the mask must then be contiguous: a non-contiguous one
+    /// fails with [`ContiguousIpNetParseError::NonContiguousNetwork`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, ContiguousIpNetParseError, Ipv4Network};
+    ///
+    /// let net = Contiguous::<Ipv4Network>::parse("192.168.0.0/16").unwrap();
+    /// assert_eq!(16, net.prefix());
+    ///
+    /// // A contiguous mask can be written out, too.
+    /// let net = Contiguous::<Ipv4Network>::parse("192.168.0.0/255.255.0.0").unwrap();
+    /// assert_eq!(16, net.prefix());
+    ///
+    /// assert_eq!(
+    ///     Err(ContiguousIpNetParseError::NonContiguousNetwork),
+    ///     Contiguous::<Ipv4Network>::parse("192.168.0.0/255.0.255.0"),
+    /// );
+    /// ```
     pub fn parse(buf: &str) -> Result<Self, ContiguousIpNetParseError> {
         Self::try_from(Ipv4Network::parse(buf)?)
     }
@@ -797,6 +841,28 @@ impl core::iter::FusedIterator for ContiguousIpv4NetworkAddrs {}
 
 impl Contiguous<Ipv6Network> {
     /// Parses an IPv6 network from a string and returns a contiguous network.
+    ///
+    /// The text is parsed as by [`Ipv6Network::parse`], the mask notation
+    /// included, and the mask must then be contiguous: a non-contiguous one
+    /// fails with [`ContiguousIpNetParseError::NonContiguousNetwork`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, ContiguousIpNetParseError, Ipv6Network};
+    ///
+    /// let net = Contiguous::<Ipv6Network>::parse("2001:db8::/32").unwrap();
+    /// assert_eq!(32, net.prefix());
+    ///
+    /// // A contiguous mask can be written out, too.
+    /// let net = Contiguous::<Ipv6Network>::parse("2001:db8::/ffff:ffff::").unwrap();
+    /// assert_eq!(32, net.prefix());
+    ///
+    /// assert_eq!(
+    ///     Err(ContiguousIpNetParseError::NonContiguousNetwork),
+    ///     Contiguous::<Ipv6Network>::parse("2001:db8::/ffff:ffff::ffff"),
+    /// );
+    /// ```
     pub fn parse(buf: &str) -> Result<Self, ContiguousIpNetParseError> {
         Self::try_from(Ipv6Network::parse(buf)?)
     }

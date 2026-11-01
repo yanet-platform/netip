@@ -158,7 +158,7 @@ pub enum IpNetwork {
 }
 
 impl IpNetwork {
-    /// Parses specified buffer into an extended IP network.
+    /// Parses the specified buffer into an IP network of either family.
     ///
     /// The following formats are supported:
     ///
@@ -173,8 +173,10 @@ impl IpNetwork {
     ///
     /// # Note
     ///
-    /// During construction, the address is normalized using mask, for example
-    /// the network `77.88.55.242/16` becomes `77.88.0.0/16`.
+    /// The mask may be any bit pattern, and the address is normalized to
+    /// `addr & mask` as in [`Ipv4Network::new`] and [`Ipv6Network::new`]:
+    /// the network `77.88.55.242/16` becomes `77.88.0.0/16`, and
+    /// `77.88.55.242/255.0.255.0` becomes `77.0.55.0/255.0.255.0`.
     ///
     /// # Examples
     ///
@@ -1403,9 +1405,18 @@ impl Ipv4Network {
     /// Parses the specified buffer into an IPv4 network.
     ///
     /// The following formats are supported:
-    /// - IPv4
-    /// - IPv4/CIDR
-    /// - IPv4/IPv4
+    ///
+    /// | Format                   | Example                           |
+    /// |--------------------------|-----------------------------------|
+    /// | IPv4                     | `77.88.55.242`                    |
+    /// | IPv4/CIDR                | `77.88.0.0/16`                    |
+    /// | IPv4/IPv4                | `77.88.0.0/255.255.0.0`           |
+    ///
+    /// A bare address is the host network, `/32`. The mask of the IPv4/IPv4
+    /// form may be any bit pattern, contiguous or not. The address is
+    /// normalized to `addr & mask` as in [`new`](Self::new), so host bits
+    /// are cleared, not rejected: `10.1.2.3/255.0.255.0` parses to
+    /// `10.0.2.0/255.0.255.0`.
     ///
     /// # Examples
     ///
@@ -1425,6 +1436,11 @@ impl Ipv4Network {
     ///     expected,
     ///     Ipv4Network::parse("192.168.1.1/255.255.255.255").unwrap()
     /// );
+    ///
+    /// // A non-contiguous mask, with the host bits cleared.
+    /// let net = Ipv4Network::parse("10.1.2.3/255.0.255.0").unwrap();
+    /// assert_eq!(Ipv4Addr::new(10, 0, 2, 0), net.addr());
+    /// assert_eq!("10.0.2.0/255.0.255.0", net.to_string());
     /// ```
     #[inline]
     pub fn parse(buf: &str) -> Result<Self, IpNetParseError> {
@@ -3660,6 +3676,11 @@ impl Ipv6Network {
     /// | IPv6/CIDR                | `2a02:6b8:c00::/40`               |
     /// | IPv6/IPv6                | `2a02:6b8:c00::/ffff:ffff:ff00::` |
     ///
+    /// A bare address is the host network, `/128`. The mask of the IPv6/IPv6
+    /// form may be any bit pattern, contiguous or not. The address is
+    /// normalized to `addr & mask` as in [`new`](Self::new), so host bits
+    /// are cleared, not rejected.
+    ///
     /// # Examples
     ///
     /// ```
@@ -3709,6 +3730,12 @@ impl Ipv6Network {
     ///     ),
     ///     // The same network as above, but specified explicitly.
     ///     Ipv6Network::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap(),
+    /// );
+    ///
+    /// // Host bits under the non-contiguous mask are cleared.
+    /// assert_eq!(
+    ///     Ipv6Network::parse("2a02:6b8:c00::1234:0:0/ffff:ffff:ff00::ffff:ffff:0:0").unwrap(),
+    ///     Ipv6Network::parse("2a02:6b8:c12::1234:5678:9/ffff:ffff:ff00::ffff:ffff:0:0").unwrap(),
     /// );
     /// ```
     #[inline]
