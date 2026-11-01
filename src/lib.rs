@@ -1,10 +1,69 @@
-//! IPv4/IPv6 network primitives.
+//! IPv4 and IPv6 networks with any mask, and MAC addresses.
 //!
-//! This library provides types for IP networks by extending the standard
-//! library.
+//! A network is an address and a mask, and the mask may be any bit pattern.
+//! The network is the set of addresses that agree with its address on every
+//! bit the mask sets: `10.0.0.0/255.0.255.0` holds the addresses `10.*.0.*`, a
+//! pattern that packet classifiers match and that no range expresses. A
+//! contiguous mask, a run of ones followed by zeros, makes the network a CIDR
+//! block. Containment, intersection, difference, merging, iteration and
+//! aggregation work for any mask.
 //!
-//! Unlike most open-source libraries, this library is designed to support
-//! non-contiguous masks.
+//! netip is `no_std` and never allocates. It has no dependencies and no unsafe
+//! code, and most of its methods are `const fn`.
+//!
+//! # Overview
+//!
+//! - [`Ipv4Network`] and [`Ipv6Network`] are networks of one family, and
+//!   [`IpNetwork`] holds one of either. They parse the prefix and the mask
+//!   notations from a `&str`, from bytes with `parse_ascii`, or off the front
+//!   of a longer text with `parse_next_ascii`. They test whether a network
+//!   contains another network or an address, intersect and merge networks, and
+//!   iterate over their addresses in ascending order. The per-family types also
+//!   subtract one network from another and split a network into subnets.
+//! - [`Contiguous<T>`] holds a network whose mask is contiguous, and
+//!   [`BiContiguous<Ipv6Network>`] an IPv6 network whose mask is a prefix in
+//!   each 64-bit half. Both dereference to the network, and specialize the
+//!   methods that the shape makes faster or whose result keeps the shape.
+//! - [`ipv4_aggregate`] and [`ipv6_aggregate`] aggregate a slice of networks in
+//!   place, keeping its union of addresses. [`ipv4_aggregate_contiguous`] and
+//!   [`ipv6_aggregate_contiguous`] return the minimal CIDR cover of a slice of
+//!   [`Contiguous`] networks, and [`ipv6_aggregate_bicontiguous`] aggregates
+//!   [`BiContiguous`] ones. [`ipv4_range_to_networks`] and
+//!   [`ipv6_range_to_networks`] cover an address range with the fewest CIDR
+//!   blocks. [`ipv4_binary_split`] and [`ipv6_binary_split`] find a common
+//!   supernet of at least half of the networks in a sorted slice and gather
+//!   those it contains, to split a node of a radix tree.
+//! - [`MacAddr`] is a MAC (EUI-48) address. It parses the colon, hyphen and
+//!   Cisco dot forms, converts to and from the modified EUI-64 interface
+//!   identifier of an IPv6 address, and gives the MAC address of an IP
+//!   multicast group.
+//! - [`fmt`] holds other text forms: [`fmt::Compact`] prints a host route
+//!   (`/32` or `/128`) as a bare address, and [`fmt::MacHyphens`] and
+//!   [`fmt::MacDots`] print a MAC address with hyphens or Cisco dots.
+//!
+//! # Example
+//!
+//! ```
+//! use core::net::Ipv4Addr;
+//!
+//! use netip::{Contiguous, Ipv4Network};
+//!
+//! // The addresses 10.*.0.*.
+//! let net = Ipv4Network::parse("10.0.0.0/255.0.255.0").unwrap();
+//! assert!(!net.is_contiguous());
+//! assert!(net.contains_addr(&Ipv4Addr::new(10, 42, 0, 7)));
+//! assert!(!net.contains_addr(&Ipv4Addr::new(10, 42, 1, 7)));
+//!
+//! // Those of them in 10.42.0.0/16 form a CIDR block.
+//! let block = Ipv4Network::parse("10.42.0.0/16").unwrap();
+//! let common = net.intersection(&block).unwrap();
+//! assert_eq!(common.to_string(), "10.42.0.0/24");
+//!
+//! // `Contiguous` takes CIDR blocks only, and its `prefix` is a plain `u8`.
+//! assert!(Contiguous::<Ipv4Network>::try_from(net).is_err());
+//! let common = Contiguous::<Ipv4Network>::try_from(common).unwrap();
+//! assert_eq!(common.prefix(), 24);
+//! ```
 //!
 //! # Stable forms
 //!
