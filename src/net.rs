@@ -4308,6 +4308,12 @@ impl Ipv6Network {
 
     /// Checks whether this network is an IPv4-mapped IPv6 network.
     ///
+    /// That is, every address of the network is IPv4-mapped, so the network
+    /// lies inside `::ffff:0:0/96`: the mask sets all of the top 96 bits and
+    /// the address starts with `::ffff:`. The low 32 bits of the mask may be
+    /// any IPv4 mask, contiguous or not. A network that also holds addresses
+    /// outside `::ffff:0:0/96`, such as `::ffff:0:0/80`, is not IPv4-mapped.
+    ///
     /// # Examples
     ///
     /// ```
@@ -4325,6 +4331,15 @@ impl Ipv6Network {
     ///         .unwrap()
     ///         .is_ipv4_mapped_ipv6()
     /// );
+    ///
+    /// // A non-contiguous IPv4 mask in the low 32 bits.
+    /// let net =
+    ///     Ipv6Network::parse("::ffff:10.0.0.0/ffff:ffff:ffff:ffff:ffff:ffff:ff00:ff00").unwrap();
+    /// assert!(net.is_ipv4_mapped_ipv6());
+    ///
+    /// // Also holds addresses that are not IPv4-mapped.
+    /// let net = Ipv6Network::parse("::ffff:0:0/80").unwrap();
+    /// assert!(!net.is_ipv4_mapped_ipv6());
     /// ```
     #[inline]
     #[must_use]
@@ -4379,9 +4394,15 @@ impl Ipv6Network {
     /// network, as defined in [IETF RFC 4291 section 2.5.5.2], otherwise
     /// returns [`None`].
     ///
-    /// The mapped network `::ffff:a.b.c.d/N` becomes `a.b.c.d/M`, where
-    /// `M = N - 96`. All networks with their addresses *not* starting with
-    /// `::ffff` will return `None`.
+    /// The network qualifies when [`is_ipv4_mapped_ipv6`] holds, and its low
+    /// 32 bits of the address and of the mask become the IPv4 network. So the
+    /// mapped network `::ffff:a.b.c.d/N` becomes `a.b.c.d/M`, where
+    /// `M = N - 96`, and a non-contiguous IPv4 mask carries over unchanged.
+    /// A network whose address does not start with `::ffff:` returns
+    /// [`None`], and so does one whose mask leaves any of the top 96 bits
+    /// clear, such as `::ffff:0:0/80`.
+    ///
+    /// [`is_ipv4_mapped_ipv6`]: Self::is_ipv4_mapped_ipv6
     ///
     /// [`IPv4` network]: Ipv4Network
     /// [IETF RFC 4291 section 2.5.5.2]: https://tools.ietf.org/html/rfc4291#section-2.5.5.2
@@ -4405,13 +4426,23 @@ impl Ipv6Network {
     /// );
     /// assert_eq!(Some(expected), net.to_ipv4_mapped());
     ///
-    /// // This networks is IPv4-compatible, but not the IPv4-mapped one.
+    /// // This network is IPv4-compatible, but not IPv4-mapped.
     /// let net = Ipv6Network::new(
     ///     Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0xc00a, 0x2ff),
     ///     Ipv6Addr::new(
     ///         0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xff00,
     ///     ),
     /// );
+    /// assert_eq!(None, net.to_ipv4_mapped());
+    ///
+    /// // A non-contiguous IPv4 mask carries over.
+    /// let net =
+    ///     Ipv6Network::parse("::ffff:10.0.0.0/ffff:ffff:ffff:ffff:ffff:ffff:ff00:ff00").unwrap();
+    /// let expected = Ipv4Network::parse("10.0.0.0/255.0.255.0").unwrap();
+    /// assert_eq!(Some(expected), net.to_ipv4_mapped());
+    ///
+    /// // The mask leaves some of the top 96 bits free.
+    /// let net = Ipv6Network::parse("::ffff:0:0/80").unwrap();
     /// assert_eq!(None, net.to_ipv4_mapped());
     /// ```
     #[inline]
