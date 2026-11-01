@@ -1344,7 +1344,7 @@ mod test {
     use super::*;
     use crate::{
         ipv6_binary_split,
-        net::test::{arb_contiguous_ipv6_network, arb_ipv6_network},
+        net::test::{arb_contiguous_ipv6_network, arb_ipv6_network, arb_network_text, reference_parse_ipv6},
     };
 
     // The two motivating masks from the `BiContiguous` design (one hi/lo pair
@@ -1890,6 +1890,45 @@ mod test {
         }
 
         is_contiguous_u64((mask >> 64) as u64) && is_contiguous_u64(mask as u64)
+    }
+
+    // What `BiContiguous::parse` promises, on top of the `core`-built network
+    // reference: its network if the mask is bi-contiguous, else
+    // `NonBiContiguousNetwork`, and its error wrapped.
+    fn reference_parse_bicontiguous(buf: &[u8]) -> Result<BiContiguous<Ipv6Network>, BiContiguousIpNetParseError> {
+        match reference_parse_ipv6(buf) {
+            Ok(net) if reference_is_bicontiguous(net.to_bits().1) => Ok(BiContiguous(net)),
+            Ok(..) => Err(BiContiguousIpNetParseError::NonBiContiguousNetwork),
+            Err(err) => Err(BiContiguousIpNetParseError::IpNetParseError(err)),
+        }
+    }
+
+    // Text at the edge of the bi-contiguous class: a network whose mask is a
+    // prefix in each 64-bit half, with at most one bit flipped anywhere,
+    // written as `Display` writes it or as any address and the mask in
+    // address form.
+    fn arb_near_bicontiguous_ipv6_text() -> impl Strategy<Value = String> {
+        let half = || (0u32..=64).prop_map(|prefix| u64::MAX.checked_shl(64 - prefix).unwrap_or(0));
+        let mask = (half(), half()).prop_map(|(hi, lo)| u128::from(hi) << 64 | u128::from(lo));
+        (any::<u128>(), mask, prop::option::of(0u32..128), any::<bool>()).prop_map(|(addr, mask, flip, raw)| {
+            let mask = mask ^ flip.map_or(0, |bit| 1 << bit);
+            if raw {
+                std::format!("{}/{}", Ipv6Addr::from_bits(addr), Ipv6Addr::from_bits(mask))
+            } else {
+                Ipv6Network::from_bits(addr, mask).to_string()
+            }
+        })
+    }
+
+    // Texts at the edge of the class; an address with a CIDR length up to
+    // 256, half the time past 128; and the texts around the network grammar's
+    // accept boundary, with the bytes that are not UTF-8 replaced.
+    fn arb_bicontiguous_text() -> impl Strategy<Value = String> {
+        prop_oneof![
+            arb_near_bicontiguous_ipv6_text(),
+            (any::<u128>(), 0u16..=256).prop_map(|(addr, len)| std::format!("{}/{len}", Ipv6Addr::from_bits(addr))),
+            arb_network_text().prop_map(|buf| String::from_utf8_lossy(&buf).into_owned()),
+        ]
     }
 
     // Same construction as `arb_bicontiguous_ipv6_network`, but each half's
@@ -2891,6 +2930,19 @@ mod test {
             let mut work = nets.clone();
             let out = ipv6_aggregate_bicontiguous(&mut work);
             prop_assert!(out.windows(2).all(|pair| bicontiguous_sort_key(&pair[0]) <= bicontiguous_sort_key(&pair[1])));
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4096))]
+
+        // `parse` and `FromStr` agree with the reference on every text, errors
+        // included.
+        #[test]
+        fn prop_bicontiguous_parse_matches_reference(text in arb_bicontiguous_text()) {
+            let expected = reference_parse_bicontiguous(text.as_bytes());
+            prop_assert_eq!(&expected, &BiContiguous::<Ipv6Network>::parse(&text));
+            prop_assert_eq!(&expected, &text.parse::<BiContiguous<Ipv6Network>>());
         }
     }
 }
