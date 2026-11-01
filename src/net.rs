@@ -469,7 +469,9 @@ impl IpNetwork {
 
     /// Returns `true` if this IP network fully contains the specified one.
     ///
-    /// Returns `false` for networks of different address families.
+    /// Returns `false` for networks of different address families. See
+    /// [`Ipv4Network::contains`] and [`Ipv6Network::contains`] for the rule,
+    /// which holds for any mask.
     ///
     /// # Examples
     ///
@@ -1609,6 +1611,34 @@ impl Ipv4Network {
     }
 
     /// Returns `true` if this IPv4 network fully contains the specified one.
+    ///
+    /// A network contains another when every address of the other belongs to
+    /// it. For networks `(a1, m1)` and `(a2, m2)`, the other fixes every bit
+    /// this one fixes, `m2 & m1 == m1`, to the same value, `a2 & m1 == a1`,
+    /// for any masks, contiguous or not. The bits that only the other fixes
+    /// may take any value. Every network contains itself.
+    ///
+    /// So a contiguous network can lie inside a non-contiguous one and the
+    /// other way round: `10.0.0.0/255.0.255.0`, the addresses `10.*.0.*`,
+    /// contains `10.42.0.0/24`, but not `10.0.0.0/16`, whose third octet
+    /// varies, and `10.0.0.0/8` contains it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv4Network;
+    ///
+    /// let net = Ipv4Network::parse("10.0.0.0/8").unwrap();
+    /// assert!(net.contains(&Ipv4Network::parse("10.1.0.0/16").unwrap()));
+    /// assert!(net.contains(&net));
+    /// assert!(!net.contains(&Ipv4Network::parse("0.0.0.0/0").unwrap()));
+    ///
+    /// // A non-contiguous network: `10.*.0.*`.
+    /// let pattern = Ipv4Network::parse("10.0.0.0/255.0.255.0").unwrap();
+    /// assert!(pattern.contains(&Ipv4Network::parse("10.42.0.0/24").unwrap()));
+    /// assert!(!pattern.contains(&Ipv4Network::parse("10.0.0.0/16").unwrap()));
+    /// assert!(net.contains(&pattern));
+    /// ```
     #[inline]
     #[must_use]
     pub const fn contains(&self, other: &Ipv4Network) -> bool {
@@ -3871,6 +3901,35 @@ impl Ipv6Network {
     }
 
     /// Returns `true` if this IPv6 network fully contains the specified one.
+    ///
+    /// A network contains another when every address of the other belongs to
+    /// it. For networks `(a1, m1)` and `(a2, m2)`, the other fixes every bit
+    /// this one fixes, `m2 & m1 == m1`, to the same value, `a2 & m1 == a1`,
+    /// for any masks, contiguous or not. The bits that only the other fixes
+    /// may take any value. Every network contains itself.
+    ///
+    /// So a contiguous network can lie inside a non-contiguous one and the
+    /// other way round: `2001:db8::1:0:0:0/ffff:ffff::ffff:0:0:0`, the
+    /// addresses `2001:db8:*:*:1:*:*:*`, contains `2001:db8:7:7:1::/80`, but
+    /// not `2001:db8::/48`, whose fifth group varies, and `2001:db8::/32`
+    /// contains it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::Ipv6Network;
+    ///
+    /// let net = Ipv6Network::parse("2001:db8::/32").unwrap();
+    /// assert!(net.contains(&Ipv6Network::parse("2001:db8:1::/48").unwrap()));
+    /// assert!(net.contains(&net));
+    /// assert!(!net.contains(&Ipv6Network::parse("::/0").unwrap()));
+    ///
+    /// // A non-contiguous network: `2001:db8:*:*:1:*:*:*`.
+    /// let pattern = Ipv6Network::parse("2001:db8::1:0:0:0/ffff:ffff::ffff:0:0:0").unwrap();
+    /// assert!(pattern.contains(&Ipv6Network::parse("2001:db8:7:7:1::/80").unwrap()));
+    /// assert!(!pattern.contains(&Ipv6Network::parse("2001:db8::/48").unwrap()));
+    /// assert!(net.contains(&pattern));
+    /// ```
     #[inline]
     #[must_use]
     pub const fn contains(&self, other: &Ipv6Network) -> bool {
@@ -3914,6 +3973,10 @@ impl Ipv6Network {
 
     /// Returns `true` if this IPv6 network and the specified one share at
     /// least one common address.
+    ///
+    /// Two networks `(a1, m1)` and `(a2, m2)` intersect when they agree on
+    /// every bit position that both masks constrain, meaning
+    /// `a1 & m2 == a2 & m1`.
     ///
     /// Works correctly with non-contiguous masks.
     ///
