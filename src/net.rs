@@ -6989,13 +6989,20 @@ pub(crate) mod test {
         fn prop_ipv4_contains_addr_rejects_masked_bit_flips(
             net in arb_ipv4_network(),
             host in any::<u32>(),
-            bit in 0u32..32,
+            seed in any::<u32>(),
         ) {
             let (addr, mask) = net.to_bits();
-            prop_assume!(mask & (1 << bit) != 0);
+            prop_assume!(mask != 0);
+
+            // The `seed`-th set bit of the mask, counting from the lowest.
+            let mut bits = mask;
+            for _ in 0..seed % mask.count_ones() {
+                bits &= bits - 1;
+            }
+            let bit = bits & bits.wrapping_neg();
 
             let member = addr | (host & !mask);
-            prop_assert!(!net.contains_addr(&Ipv4Addr::from_bits(member ^ (1 << bit))));
+            prop_assert!(!net.contains_addr(&Ipv4Addr::from_bits(member ^ bit)));
         }
 
         #[test]
@@ -7014,13 +7021,20 @@ pub(crate) mod test {
         fn prop_ipv6_contains_addr_rejects_masked_bit_flips(
             net in arb_ipv6_network(),
             host in any::<u128>(),
-            bit in 0u32..128,
+            seed in any::<u32>(),
         ) {
             let (addr, mask) = net.to_bits();
-            prop_assume!(mask & (1 << bit) != 0);
+            prop_assume!(mask != 0);
+
+            // The `seed`-th set bit of the mask, counting from the lowest.
+            let mut bits = mask;
+            for _ in 0..seed % mask.count_ones() {
+                bits &= bits - 1;
+            }
+            let bit = bits & bits.wrapping_neg();
 
             let member = addr | (host & !mask);
-            prop_assert!(!net.contains_addr(&Ipv6Addr::from_bits(member ^ (1 << bit))));
+            prop_assert!(!net.contains_addr(&Ipv6Addr::from_bits(member ^ bit)));
         }
 
         #[test]
