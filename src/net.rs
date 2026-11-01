@@ -8320,7 +8320,8 @@ pub(crate) mod test {
     // The documented semantics of the network parsers, built from `core`'s
     // parsers alone: the address up to the first `/`, then a CIDR suffix as
     // `u8::from_str` reads it, or else a mask address. The parsers under test
-    // must agree with it on every input, errors included.
+    // must agree with it on every input, errors included. The `Contiguous`
+    // and `BiContiguous` test modules check their parsers on top of it.
 
     fn reference_split(buf: &[u8]) -> (&[u8], Option<&[u8]>) {
         match buf.iter().position(|&byte| byte == b'/') {
@@ -8343,7 +8344,7 @@ pub(crate) mod test {
         core::str::from_utf8(bytes).ok()?.parse().ok()
     }
 
-    fn reference_parse_ipv4(buf: &[u8]) -> Result<Ipv4Network, IpNetParseError> {
+    pub(crate) fn reference_parse_ipv4(buf: &[u8]) -> Result<Ipv4Network, IpNetParseError> {
         let (addr, mask) = reference_split(buf);
         let addr = reference_ipv4_addr(addr)?;
         match mask {
@@ -8355,7 +8356,7 @@ pub(crate) mod test {
         }
     }
 
-    fn reference_parse_ipv6(buf: &[u8]) -> Result<Ipv6Network, IpNetParseError> {
+    pub(crate) fn reference_parse_ipv6(buf: &[u8]) -> Result<Ipv6Network, IpNetParseError> {
         let (addr, mask) = reference_split(buf);
         let addr = reference_ipv6_addr(addr)?;
         match mask {
@@ -8369,7 +8370,7 @@ pub(crate) mod test {
 
     // A `:` rules out IPv4. Otherwise IPv4 is tried first, and only an
     // address-shaped error falls through to IPv6.
-    fn reference_parse_ip(buf: &[u8]) -> Result<IpNetwork, IpNetParseError> {
+    pub(crate) fn reference_parse_ip(buf: &[u8]) -> Result<IpNetwork, IpNetParseError> {
         if !buf.contains(&b':') {
             match reference_parse_ipv4(buf) {
                 Ok(net) => return Ok(IpNetwork::V4(net)),
@@ -8443,8 +8444,8 @@ pub(crate) mod test {
     // Inputs around the accept boundary: an address text with an optional
     // CIDR or mask suffix and a rest; a displayed network with one byte
     // replaced or removed and a rest; runs of grammar fragments; arbitrary
-    // bytes.
-    fn arb_network_text() -> impl Strategy<Value = Vec<u8>> {
+    // bytes. Shared with the `Contiguous` and `BiContiguous` test modules.
+    pub(crate) fn arb_network_text() -> impl Strategy<Value = Vec<u8>> {
         const PIECES: &[&str] = &[
             "0", "1", "9", "25", "255", "256", "00", "01", "1234", "12345", "ffff", "FfFf", "a", "e", ".", ":", "::",
             "/", "+", "-", " ", "x", "32", "33", "128", "129", "1.2.3.4", "::ffff:", "/24", "/ffff::",

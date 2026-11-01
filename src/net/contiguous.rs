@@ -1766,7 +1766,10 @@ mod test {
     use super::*;
     use crate::{
         ipv4_binary_split, ipv6_binary_split,
-        net::test::{arb_contiguous_ipv6_network, arb_ipv4_network, arb_ipv6_network},
+        net::test::{
+            arb_contiguous_ipv6_network, arb_ipv4_network, arb_ipv6_network, arb_network_text, reference_parse_ip,
+            reference_parse_ipv4, reference_parse_ipv6,
+        },
     };
 
     #[test]
@@ -3076,6 +3079,72 @@ mod test {
         ]
     }
 
+    // What the `Contiguous` parsers promise, on top of the `core`-built
+    // network reference: its network if the mask is a prefix, else
+    // `NonContiguousNetwork`, and its error wrapped.
+    fn reference_parse_contiguous<T>(
+        net: Result<T, IpNetParseError>,
+        is_prefix: impl FnOnce(&T) -> bool,
+    ) -> Result<Contiguous<T>, ContiguousIpNetParseError> {
+        match net {
+            Ok(net) if is_prefix(&net) => Ok(Contiguous(net)),
+            Ok(..) => Err(ContiguousIpNetParseError::NonContiguousNetwork),
+            Err(err) => Err(ContiguousIpNetParseError::IpNetParseError(err)),
+        }
+    }
+
+    // A mask is a prefix when all its one bits lead. `is_contiguous` tests
+    // `mask | (mask - 1)` for all ones; these count the bits instead.
+    fn ipv4_mask_is_prefix(net: &Ipv4Network) -> bool {
+        let (.., mask) = net.to_bits();
+        mask.leading_ones() == mask.count_ones()
+    }
+
+    fn ipv6_mask_is_prefix(net: &Ipv6Network) -> bool {
+        let (.., mask) = net.to_bits();
+        mask.leading_ones() == mask.count_ones()
+    }
+
+    // Text at the edge of the contiguous class: a network whose mask is a
+    // prefix with at most one bit flipped, written as `Display` writes it or
+    // as any address and the mask in address form. Flipping the last bit of
+    // the prefix or the one past it moves its end, and any other bit leaves a
+    // hole or a stray one.
+    fn arb_near_contiguous_ipv4_text() -> impl Strategy<Value = String> {
+        (any::<u32>(), 0u32..=32, prop::option::of(0u32..32), any::<bool>()).prop_map(|(addr, prefix, flip, raw)| {
+            let mask = u32::MAX.checked_shl(32 - prefix).unwrap_or(0) ^ flip.map_or(0, |bit| 1 << bit);
+            if raw {
+                std::format!("{}/{}", Ipv4Addr::from_bits(addr), Ipv4Addr::from_bits(mask))
+            } else {
+                Ipv4Network::from_bits(addr, mask).to_string()
+            }
+        })
+    }
+
+    fn arb_near_contiguous_ipv6_text() -> impl Strategy<Value = String> {
+        (any::<u128>(), 0u32..=128, prop::option::of(0u32..128), any::<bool>()).prop_map(|(addr, prefix, flip, raw)| {
+            let mask = u128::MAX.checked_shl(128 - prefix).unwrap_or(0) ^ flip.map_or(0, |bit| 1 << bit);
+            if raw {
+                std::format!("{}/{}", Ipv6Addr::from_bits(addr), Ipv6Addr::from_bits(mask))
+            } else {
+                Ipv6Network::from_bits(addr, mask).to_string()
+            }
+        })
+    }
+
+    // Texts at the edge of the class, of either family; an address with a
+    // CIDR length up to 256, often past the family's bound; and the texts
+    // around the network grammar's accept boundary, with the bytes that are
+    // not UTF-8 replaced.
+    fn arb_contiguous_text() -> impl Strategy<Value = String> {
+        prop_oneof![
+            arb_near_contiguous_ipv4_text(),
+            arb_near_contiguous_ipv6_text(),
+            (arb_ip_addr(), 0u16..=256).prop_map(|(addr, len)| std::format!("{addr}/{len}")),
+            arb_network_text().prop_map(|buf| String::from_utf8_lossy(&buf).into_owned()),
+        ]
+    }
+
     // Contiguous networks of both families with a uniform prefix length,
     // unlike `arb_contiguous_ip_network`, whose prefixes are mostly short.
     fn arb_prefixed_contiguous_ip_network() -> impl Strategy<Value = Contiguous<IpNetwork>> {
@@ -3787,6 +3856,32 @@ mod test {
             prop_assert_eq!(Ok(v4), v4.to_string().parse::<Contiguous<Ipv4Network>>());
             prop_assert_eq!(Ok(v6), v6.to_string().parse::<Contiguous<Ipv6Network>>());
             prop_assert_eq!(Ok(ip), ip.to_string().parse::<Contiguous<IpNetwork>>());
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4096))]
+
+        // Each parser and its `FromStr` agree with the reference on every
+        // text, errors included.
+        #[test]
+        fn prop_contiguous_parse_matches_reference(text in arb_contiguous_text()) {
+            let buf = text.as_bytes();
+
+            let expected = reference_parse_contiguous(reference_parse_ipv4(buf), ipv4_mask_is_prefix);
+            prop_assert_eq!(&expected, &Contiguous::<Ipv4Network>::parse(&text));
+            prop_assert_eq!(&expected, &text.parse::<Contiguous<Ipv4Network>>());
+
+            let expected = reference_parse_contiguous(reference_parse_ipv6(buf), ipv6_mask_is_prefix);
+            prop_assert_eq!(&expected, &Contiguous::<Ipv6Network>::parse(&text));
+            prop_assert_eq!(&expected, &text.parse::<Contiguous<Ipv6Network>>());
+
+            let expected = reference_parse_contiguous(reference_parse_ip(buf), |net| match net {
+                IpNetwork::V4(net) => ipv4_mask_is_prefix(net),
+                IpNetwork::V6(net) => ipv6_mask_is_prefix(net),
+            });
+            prop_assert_eq!(&expected, &Contiguous::<IpNetwork>::parse(&text));
+            prop_assert_eq!(&expected, &text.parse::<Contiguous<IpNetwork>>());
         }
     }
 }
