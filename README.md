@@ -5,7 +5,9 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.88-blue.svg)](#minimum-supported-rust-version)
 [![License](https://img.shields.io/crates/l/netip.svg)](LICENSE)
 
-**Zero-dependency** Rust library for IPv4/IPv6 networks and MAC addresses — with first-class support for **non-contiguous subnet masks**.
+**Zero-dependency** Rust library for IPv4/IPv6 networks and MAC addresses — with first-class support for **arbitrary masks**.
+
+For Go, see [xnetip](https://github.com/yanet-platform/xnetip), which provides IPv4/IPv6 set operations with arbitrary masks.
 
 ## Why netip?
 
