@@ -144,6 +144,26 @@ def IsCidrNet : IpNet → Prop
   | .v4 a m => IsContiguous m ∧ a &&& m = a
   | .v6 a m => IsContiguous m ∧ a &&& m = a
 
+/-- `Contiguous::<IpNetwork>::to_canonical`: canonicalization keeps the mask
+contiguous, so the result needs no re-validation. -/
+theorem toCanonical_contiguous (n : IpNet) (h : n.isContiguous = true) :
+    n.toCanonical.isContiguous = true := by
+  cases n with
+  | v4 a m => exact h
+  | v6 a m =>
+    simp only [toCanonical]
+    split
+    · rename_i a' m' hs
+      unfold Ipv6.toIpv4Mapped at hs
+      split at hs
+      · simp only [Option.some.injEq, Prod.mk.injEq] at hs
+        obtain ⟨rfl, rfl⟩ := hs
+        simp only [isContiguous, decide_eq_true_eq] at h ⊢
+        unfold IsContiguous at *
+        bv_decide
+      · simp at hs
+    · exact h
+
 theorem mem_addr {n : IpNet} (h : n.Normalized) : Mem n.addr n := by
   cases n with
   | v4 a m => exact h
