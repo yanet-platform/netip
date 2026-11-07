@@ -213,6 +213,7 @@ Contiguous<IpNetwork>::from_prefix                  06362f38ba164039  Netip/Impl
 Contiguous<Ipv4Network>::from_prefix                84a1d02366a2f8df  Netip/Impl/IsContiguous.lean:Ipv4.isContiguous_maskFromCidr
 Contiguous<Ipv6Network>::from_prefix                bb809c9cef98f7df  Netip/Impl/IsContiguous.lean:Ipv6.isContiguous_maskFromCidr
 Contiguous<IpNetwork>::TryFrom<IpNetwork>::try_from 6eee4391af684786  Netip/Impl/IpNetwork.lean:IpNet.isContiguous
+Contiguous<IpNetwork>::to_canonical                 06f1a2d37666f034  Netip/Impl/Conversions.lean:IpNet.toCanonical Netip/Impl/IpNetwork.lean:IpNet.toCanonical_contiguous
 Contiguous<Ipv4Network>::TryFrom<Ipv4Network>::try_from 7c07992264b51064  Netip/Impl/Basic.lean:IsContiguous
 Contiguous<Ipv6Network>::TryFrom<Ipv6Network>::try_from 3cd810206ea5d392  Netip/Impl/Basic.lean:IsContiguous
 Contiguous<IpNetwork>::contains                     92ef22e47957de10  Netip/Impl/Contiguous.lean:Ipv4.contains_mask_iff_le Netip/Impl/Contiguous.lean:Ipv6.contains_mask_iff_le

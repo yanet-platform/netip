@@ -198,6 +198,35 @@ impl Contiguous<IpNetwork> {
         }
     }
 
+    /// Converts this network to its canonical form, keeping the
+    /// [`Contiguous`] wrapper.
+    ///
+    /// Uses [`IpNetwork::to_canonical`]: IPv4-mapped IPv6 networks collapse
+    /// to IPv4, and other networks are returned unchanged. A mapped network
+    /// fixes the first 96 bits of its mask; keeping the low 32 bits preserves
+    /// contiguity, so the result needs no re-validation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use netip::{Contiguous, IpNetwork};
+    ///
+    /// let net = Contiguous::<IpNetwork>::parse("::ffff:192.168.1.0/120").unwrap();
+    /// let canonical: Contiguous<IpNetwork> = net.to_canonical();
+    /// assert_eq!(
+    ///     Contiguous::<IpNetwork>::parse("192.168.1.0/24").unwrap(),
+    ///     canonical,
+    /// );
+    /// assert_eq!(24, canonical.prefix());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn to_canonical(&self) -> Self {
+        match self {
+            Self(net) => Self(net.to_canonical()),
+        }
+    }
+
     /// Returns `true` if this IP network fully contains the specified one.
     ///
     /// Returns `false` for networks of different address families. Both
@@ -2055,6 +2084,46 @@ mod test {
         assert_eq!("2001:db8::/64", ip.to_string());
     }
 
+    #[test]
+    fn contiguous_ip_to_canonical_mapped_prefixes() {
+        let addr = Ipv4Addr::new(192, 168, 1, 255);
+        for prefix in 0..=32 {
+            let net = Contiguous::<IpNetwork>::from_prefix(IpAddr::V6(addr.to_ipv6_mapped()), 96 + prefix).unwrap();
+            let expected = Contiguous::<IpNetwork>::from_prefix(IpAddr::V4(addr), prefix).unwrap();
+            let canonical: Contiguous<IpNetwork> = net.to_canonical();
+            assert_eq!(expected, canonical, "prefix {prefix}");
+            assert_eq!(prefix, canonical.prefix());
+            assert!((*canonical).is_contiguous());
+        }
+    }
+
+    #[test]
+    fn contiguous_ip_to_canonical_unmapped_unchanged() {
+        for input in [
+            "0.0.0.0/0",
+            "192.168.1.0/24",
+            "255.255.255.255/32",
+            "::/0",
+            "::1/128",
+            "2001:db8::/32",
+            "::192.0.2.1/128",
+            "::ffff:192.0.2.1/95",
+        ] {
+            let net = Contiguous::<IpNetwork>::parse(input).unwrap();
+            let canonical: Contiguous<IpNetwork> = net.to_canonical();
+            assert_eq!(net, canonical, "{input}");
+        }
+    }
+
+    #[test]
+    fn contiguous_ip_to_canonical_in_const() {
+        const NET: Contiguous<IpNetwork> =
+            Contiguous::<IpNetwork>::from_prefix(IpAddr::V6(Ipv4Addr::new(192, 168, 1, 255).to_ipv6_mapped()), 120)
+                .expect("120 is at most 128");
+        const CANONICAL: Contiguous<IpNetwork> = NET.to_canonical();
+        assert_eq!(Contiguous::<IpNetwork>::parse("192.168.1.0/24").unwrap(), CANONICAL);
+    }
+
     // The following `contiguous_*_is_contiguous_override_*` and
     // `contiguous_*_to_contiguous_override_*` tests pin down that the
     // constant-time `Contiguous<T>` overrides return exactly what the
@@ -3508,6 +3577,22 @@ mod test {
         fn prop_contiguous_ip_to_contiguous_is_identity(net in arb_contiguous_ip_network()) {
             prop_assert_eq!(net.to_contiguous(), *net);
             prop_assert_eq!(net.to_contiguous(), (*net).to_contiguous());
+        }
+
+        #[test]
+        fn prop_contiguous_ip_to_canonical_preserves_invariant(
+            net in prop_oneof![
+                arb_contiguous_ip_network(),
+                arb_contiguous_ipv4_network().prop_map(|net| {
+                    Contiguous::<IpNetwork>::try_from(IpNetwork::V6(net.to_ipv6_mapped())).unwrap()
+                }),
+            ],
+        ) {
+            let canonical: Contiguous<IpNetwork> = net.to_canonical();
+            prop_assert_eq!((*net).to_canonical(), *canonical);
+            prop_assert!((*canonical).is_contiguous());
+            prop_assert_eq!(canonical, canonical.to_canonical());
+            prop_assert_eq!(net.to_ipv6_mapped(), canonical.to_ipv6_mapped());
         }
 
         #[test]
