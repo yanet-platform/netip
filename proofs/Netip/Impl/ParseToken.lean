@@ -826,7 +826,7 @@ theorem parseIpNetworkNextAscii_eq (buf : Bytes) :
   unfold parseIpNetworkNextAscii
   cases hf : ipv4NetworkNextFused true buf with
   | some r =>
-    obtain ⟨h1, herr, hcolon⟩ := ipv4NetworkNextFused_ref true hf
+    obtain ⟨h1, -, hcolon⟩ := ipv4NetworkNextFused_ref true hf
     simp only [alphabet, ↓reduceIte] at h1 hcolon
     have hcc : containsColon (buf.takeWhile isIpv6TokenByte) = false := by
       cases h : containsColon (buf.takeWhile isIpv6TokenByte) with
@@ -848,7 +848,6 @@ theorem parseIpNetworkNextAscii_eq (buf : Bytes) :
       | error err => rw [hr] at h1; simp at h1
     | error err =>
       simp only [fusedResult] at h1
-      obtain ⟨cidr, w, rfl⟩ := herr err rfl
       cases hr : refIpv4Network (buf.takeWhile isIpv6TokenByte) with
       | ok v => rw [hr] at h1; simp at h1
       | error err' =>

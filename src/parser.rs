@@ -80,15 +80,11 @@ pub fn parse_ip_network(buf: &str) -> Result<IpNetwork, IpNetParseError> {
 /// address families.
 ///
 /// A `:` anywhere in the input can never appear in a valid IPv4 network, so
-/// such input goes straight to the IPv6 parser. Everything else tries IPv4
-/// first and falls through to IPv6 only on an address-shaped error.
+/// such input goes straight to the IPv6 parser. Without a `:`, the input
+/// cannot be IPv6, so the IPv4 parser owns both the result and the error.
 pub fn parse_ip_network_ascii(buf: &[u8]) -> Result<IpNetwork, IpNetParseError> {
     if !contains_colon(buf) {
-        match parse_ipv4_network_ascii(buf) {
-            Ok(net) => return Ok(IpNetwork::V4(net)),
-            Err(IpNetParseError::AddrParseError(..)) => {}
-            Err(err) => return Err(err),
-        }
+        return Ok(IpNetwork::V4(parse_ipv4_network_ascii(buf)?));
     }
 
     Ok(IpNetwork::V6(parse_ipv6_network_ascii(buf)?))

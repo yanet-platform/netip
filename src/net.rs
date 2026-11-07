@@ -8588,6 +8588,98 @@ pub(crate) mod test {
         ));
     }
 
+    fn assert_ip_network_parse_error(input: &str, expected: IpNetParseError) {
+        assert_eq!(expected, IpNetwork::parse(input).unwrap_err(), "{input:?}");
+        assert_eq!(
+            expected,
+            IpNetwork::parse_ascii(input.as_bytes()).unwrap_err(),
+            "{input:?}"
+        );
+        assert_eq!(expected, input.parse::<IpNetwork>().unwrap_err(), "{input:?}");
+
+        // A colon in the remainder must not change the token's error family.
+        for rest in ["", " rest", " rest:with:colons"] {
+            let text = std::format!("{input}{rest}");
+            assert_eq!(
+                expected,
+                IpNetwork::parse_next_ascii(text.as_bytes()).unwrap_err(),
+                "{text:?}"
+            );
+        }
+
+        let expected = ContiguousIpNetParseError::from(expected);
+        assert_eq!(
+            expected,
+            Contiguous::<IpNetwork>::parse(input).unwrap_err(),
+            "{input:?}"
+        );
+        assert_eq!(
+            expected,
+            input.parse::<Contiguous<IpNetwork>>().unwrap_err(),
+            "{input:?}"
+        );
+    }
+
+    #[test]
+    fn parse_ip_network_preserves_ipv4_errors() {
+        for input in [
+            "10.0.0.0/eight",
+            "10.0.0.256/24",
+            "10.0.0.0/",
+            "/8",
+            "10.0.0.0/300",
+            "10.0.0.0/255.255.256.0",
+            "10.0.0.0/33",
+            "10.0.0.0/255",
+            "",
+            "garbage",
+        ] {
+            assert_ip_network_parse_error(input, Ipv4Network::parse(input).unwrap_err());
+        }
+    }
+
+    #[test]
+    fn parse_ip_network_preserves_ipv6_errors() {
+        for input in [
+            "2001:db8::/eight",
+            "1::2::3/64",
+            "::/",
+            ":/8",
+            "::/300",
+            "::/129",
+            "10.0.0.0/ffff::",
+            "2001:db8::/255.255.255.0",
+            "10.0.0.0/33:",
+            "10.0.0.0:80",
+        ] {
+            assert_ip_network_parse_error(input, Ipv6Network::parse(input).unwrap_err());
+        }
+    }
+
+    #[test]
+    fn parse_ip_network_error_family_uses_only_the_parsed_input() {
+        let ipv4_error = IpNetParseError::from("".parse::<Ipv4Addr>().unwrap_err());
+        let ipv6_error = IpNetParseError::from("".parse::<Ipv6Addr>().unwrap_err());
+        for input in [b"\xff\xfe".as_slice(), b"10.0.0.0/\xff", b"10.0.0.0/eight rest:"] {
+            assert_eq!(ipv4_error, IpNetwork::parse_next_ascii(input).unwrap_err(), "{input:?}");
+            let expected = if input.contains(&b':') {
+                &ipv6_error
+            } else {
+                &ipv4_error
+            };
+            assert_eq!(*expected, IpNetwork::parse_ascii(input).unwrap_err(), "{input:?}");
+        }
+        assert_eq!(ipv6_error, IpNetwork::parse_ascii(b"::/\xff").unwrap_err());
+        assert_eq!(ipv6_error, IpNetwork::parse_next_ascii(b"::/\xff").unwrap_err());
+
+        let input = b"10.0.0.0/8 rest:with:colons";
+        let expected = (
+            IpNetwork::V4(Ipv4Network::parse("10.0.0.0/8").unwrap()),
+            b" rest:with:colons".as_slice(),
+        );
+        assert_eq!(expected, IpNetwork::parse_next_ascii(input).unwrap());
+    }
+
     // The documented semantics of the network parsers, built from `core`'s
     // parsers alone: the address up to the first `/`, then a CIDR suffix as
     // `u8::from_str` reads it, or else a mask address. The parsers under test
@@ -8639,17 +8731,13 @@ pub(crate) mod test {
         }
     }
 
-    // A `:` rules out IPv4. Otherwise IPv4 is tried first, and only an
-    // address-shaped error falls through to IPv6.
+    // A `:` selects IPv6; without one the input is IPv4, errors included.
     pub(crate) fn reference_parse_ip(buf: &[u8]) -> Result<IpNetwork, IpNetParseError> {
-        if !buf.contains(&b':') {
-            match reference_parse_ipv4(buf) {
-                Ok(net) => return Ok(IpNetwork::V4(net)),
-                Err(IpNetParseError::AddrParseError(..)) => {}
-                Err(err) => return Err(err),
-            }
+        if buf.contains(&b':') {
+            reference_parse_ipv6(buf).map(IpNetwork::V6)
+        } else {
+            reference_parse_ipv4(buf).map(IpNetwork::V4)
         }
-        Ok(IpNetwork::V6(reference_parse_ipv6(buf)?))
     }
 
     // The end of the maximal leading run of token bytes: `[0-9./+]` for the
