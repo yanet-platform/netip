@@ -286,7 +286,7 @@ IpNetParseError                                     741452bb44e95b03  Netip/Impl
 IpNetParseError::From<AddrParseError>::from         d5307ea49bbc2be4  Netip/Impl/ParseNet.lean:Parse.NetError
 IpNetParseError::From<CidrOverflowError>::from      15d3483902bfffac  Netip/Impl/ParseNet.lean:Parse.NetError
 parse_ip_network                                    22fa59b88f56d5d6  Netip/Impl/ParseNet.lean:Parse.parseIpNetworkAscii
-parse_ip_network_ascii                              a335a601715ac667  Netip/Impl/ParseNet.lean:Parse.parseIpNetworkAscii
+parse_ip_network_ascii                              621c29bed944907d  Netip/Impl/ParseNet.lean:Parse.parseIpNetworkAscii
 parse_ip_network_next_ascii                         f657d15d76596004  Netip/Impl/ParseToken.lean:Parse.parseIpNetworkNextAscii
 parse_ip_network_next_fallback                      679eed7dc1c31d33  Netip/Impl/ParseToken.lean:Parse.parseIpNetworkNextAscii
 token_ends_at                                       1089b23b4870cf2a  Netip/Impl/ParseToken.lean:Parse.tokenEndsAt

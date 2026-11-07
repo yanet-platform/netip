@@ -11,7 +11,7 @@ fallback, `split_slash` and the split-first fallbacks. The token variants are in
 The reference is the documented semantics on `core`'s parsing alone
 (`refIpv4Network`, `refIpv6Network`, `refIpNetwork`): the address up to the first
 `/`, then a CIDR suffix as `u8::from_str` reads it, or else a mask address; a `:`
-selects IPv6, and otherwise only an address error falls through from IPv4 to IPv6.
+selects IPv6, and input without a `:` is parsed as IPv4, errors included.
 
 Proved, for every byte slice, errors included (`parseIpv4NetworkAscii_eq`,
 `parseIpv6NetworkAscii_eq`, `parseIpNetworkAscii_eq`): the parsers are the reference.
@@ -179,19 +179,17 @@ def parseIpv6NetworkAscii (buf : Bytes) : Except NetError (Net 128) :=
 /-- `contains_colon`. -/
 def containsColon (buf : Bytes) : Bool := buf.any (· == 58)
 
-/-- `parse_ip_network_ascii`: input with a `:` is IPv6; other input is tried as IPv4,
-and only an address error falls through to IPv6. -/
+/-- `parse_ip_network_ascii`: input with a `:` is IPv6; other input is IPv4,
+errors included. -/
 def parseIpNetworkAscii (buf : Bytes) : Except NetError IpNet :=
-  let v6 : Except NetError IpNet :=
-    match parseIpv6NetworkAscii buf with
-    | .ok net => .ok (.v6 net)
-    | .error e => .error e
   if !containsColon buf then
     match parseIpv4NetworkAscii buf with
     | .ok net => .ok (.v4 net)
-    | .error (.addrParse _) => v6
     | .error e => .error e
-  else v6
+  else
+    match parseIpv6NetworkAscii buf with
+    | .ok net => .ok (.v6 net)
+    | .error e => .error e
 
 /-! ## The reference -/
 
@@ -227,16 +225,14 @@ def refIpv6Network (buf : Bytes) : Except NetError (Net 128) :=
 
 /-- The documented family dispatch over the references. -/
 def refIpNetwork (buf : Bytes) : Except NetError IpNet :=
-  let v6 : Except NetError IpNet :=
-    match refIpv6Network buf with
-    | .ok net => .ok (.v6 net)
-    | .error e => .error e
   if !containsColon buf then
     match refIpv4Network buf with
     | .ok net => .ok (.v4 net)
-    | .error (.addrParse _) => v6
     | .error e => .error e
-  else v6
+  else
+    match refIpv6Network buf with
+    | .ok net => .ok (.v6 net)
+    | .error e => .error e
 
 /-! ## What `core` accepts -/
 
